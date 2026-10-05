@@ -266,8 +266,9 @@ void ps3_system_init(void)
 	log_init();
 	ps3_log_printf("[ps3] netInitialize=%d, log to " PS3_LOG_IP ":%d\n", net_result, PS3_LOG_PORT);
 
-	/* priority 1500: below the main thread (1001); lower numbers run first */
-	if (sysThreadCreate(&monitor_thread, monitor_main, NULL, 1500, 0x10000, THREAD_JOINABLE, monitor_name) == 0)
+	/* priority 1000: above the game threads (1001), which can keep both PPE threads busy; lower
+	numbers run first, and it sleeps 100 ms per pass */
+	if (sysThreadCreate(&monitor_thread, monitor_main, NULL, 1000, 0x10000, THREAD_JOINABLE, monitor_name) == 0)
 		monitor_running = 1;
 	else
 		ps3_log_printf("[ps3] cannot start the monitor thread: no XMB exit while busy\n");

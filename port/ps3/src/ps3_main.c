@@ -21,13 +21,21 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 int halo_xbox_main(void);
 void platform_kernel_initialize(void);
 int platform_memory_initialize(void);
+int platform_heartbeat(void);
+void ps3_host_report_blocked(void);
 
 static volatile int game_status = _ps3_host_status_running;
+/* main()'s frame and the game thread's stack, logged at the start */
+static uint64_t main_frame;
+static uint64_t main_stack_low;
+static uint64_t main_stack_high;
 static volatile int display_quit;
 /* 0 while the RSX starts, then 1, or -1 if it failed */
 static volatile int display_state;
 static sys_ppu_thread_t display_thread;
 static int display_running;
+/* the game's thread, for the stall report */
+static sys_ppu_thread_t main_thread_id;
 
 void ps3_host_set_status(int status)
 {
@@ -52,6 +60,20 @@ static unsigned status_color(unsigned frame)
 	}
 }
 
+/* once, at the first stall: whether lv2 still has the main thread (an alignment fault ends it) */
+static void main_thread_report(void)
+{
+	static int reported;
+	s32 priority = -1;
+	s32 result;
+
+	if (reported)
+		return;
+	reported = 1;
+	result = sysThreadGetPriority(main_thread_id, &priority);
+	ps3_log_printf("[ps3] main thread: priority %d (0x%08x)\n", (int)priority, (unsigned)result);
+}
+
 static void display_main(void *argument)
 {
 	unsigned frame = 0;
@@ -74,6 +96,9 @@ static void display_main(void *argument)
 		if (ps3_time_seconds() >= next_heartbeat)
 		{
 			ps3_log_printf("[hb] t=%.0fs display frames %u\n", ps3_time_seconds(), frame);
+			if (platform_heartbeat())
+				main_thread_report();
+			ps3_host_report_blocked();
 			next_heartbeat += HEARTBEAT_SECONDS;
 		}
 	}
@@ -164,8 +189,21 @@ int main(int argc, char *argv[])
 	display_start();
 	ps3_memory_report("after the RSX init");
 	platform_kernel_initialize();
+	sysThreadGetId(&main_thread_id);
 
 	ps3_log_printf("[ps3] starting the game\n");
+	{
+		sys_ppu_thread_stack_t stack;
+
+		if (sysThreadGetStackInformation(&stack) == 0)
+		{
+			main_stack_low = (uint64_t)stack.addr;
+			main_stack_high = main_stack_low + stack.size;
+		}
+		main_frame = (uint64_t)__builtin_frame_address(0);
+		ps3_log_printf("[ps3] main thread stack %08llx..%08llx, main() frame %08llx\n",
+			(unsigned long long)main_stack_low, (unsigned long long)main_stack_high, (unsigned long long)main_frame);
+	}
 	result = halo_xbox_main();
 	ps3_log_printf("[ps3] the game returned %d\n", result);
 
