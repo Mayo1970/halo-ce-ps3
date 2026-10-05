@@ -67,5 +67,7 @@ void ps3_input_init(void);
 void ps3_input_shutdown(void);
 void ps3_input_poll(void);
 const struct ps3_pad *ps3_input_pad(int port);
+/* large 0 to 255; the DS3's small motor is only on or off */
+void ps3_input_rumble(int port, int large, int small);
 
 #endif
