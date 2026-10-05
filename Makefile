@@ -7,13 +7,13 @@ PSL1GHT ?= $(PS3DEV)
 .DEFAULT_GOAL := all
 
 TARGET     := halo_ps3
-TITLE      := Halo CE PS3
+TITLE      := Halo: Combat Evolved
 TITLE_ID   := HALOCE000
 CONTENT_ID := UP0001-$(TITLE_ID)_00-0000000000000000
 BUILD      ?= build/ps3
 LOG_IP     ?= 192.168.178.99
-# XMB icon, 320x176 PNG; the PSL1GHT default until port/ps3/icon/ICON0.PNG exists
-ICON0      ?= $(firstword $(wildcard port/ps3/icon/ICON0.PNG) $(PS3DEV)/bin/ICON0.PNG)
+# XMB icon, 320x176 PNG
+ICON0      ?= ICON/ICON0.PNG
 
 PREFIX          := $(PS3DEV)/ppu/bin/ppu-
 CC              := $(PREFIX)gcc

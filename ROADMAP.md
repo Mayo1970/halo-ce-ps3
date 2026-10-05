@@ -61,6 +61,13 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   (hardware SUCCESS, Matt): DirectSound on the PS3 audio port
   (`port/ps3/xbox/dsound_ps3.c`), in the menu and in a10, with 0 underruns.
   See GOALS.md ("G6 progress").
+- The vertex cache (Matt, 2026-10-06, for the low frame rate in a10):
+  hardware SUCCESS (Matt: "Everything looks fine"). a10 runs at 24 to 30
+  frames per second, from 9 to 10. `d3d8_rsx.c` converts the map's vertex
+  buffers (models, the BSP: the tag cache) once into a 48 MB RSX block,
+  which each map or BSP load empties (`cache_files.c` calls
+  `d3d8_tag_cache_loaded`). Other vertex data is converted at each draw, as
+  before. See "Found for later goals" (G7, a10).
 - Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
@@ -121,7 +128,8 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   clear of 1.0 wrote 0 (1.0 * 16777215 + 0.5 is 2^24 in a float). Both are
   fixed; run 5: SUCCESS.
 - Not yet: visibility tests (0), render targets sampled by mip level (level
-  0 only), point sprites, a cache of converted vertex buffers.
+  0 only), point sprites. The cache of converted vertex buffers came on
+  2026-10-06 (see "Now").
 
 ## G3 summary
 
@@ -218,6 +226,39 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     the PC's.
   - Winsock: `XNetGetTitleXnAddr` gives `XNET_GET_XNADDR_NONE`, so
     `transport_initialize` fails, and a `telnet_console = true` asserts.
+- G7, a10 at 9 to 10 frames per second (investigation 2026-10-05: code,
+  disassembly and `a10.map` data; no timers on the PS3 yet):
+  - Most likely main cost: `d3d8_rsx.c` `setup_vertices`. Each draw
+    converts its vertices on the CPU into the RSX scratch, again for each
+    pass and each frame (no cache), over the whole index range of an
+    indexed draw. Each packed normal and normalized short component is a
+    load-hit-store (`std`/`lfd`) and an `fdivs`: up to 14 a vertex in the
+    lightmap pass. `a10a` has 67329 vertices in 181 materials. Estimate:
+    20 to 40 ms a frame. `port/linux/src/d3d8_gl.c` uploads each page once.
+  - Then: `texture_get` hashes the texels of each bound texture once a
+    frame (the `a10a` shaders: 25 bitmaps, 5.0 MB); `prepare_draw` converts
+    19 colours a draw (76 conversions and divides).
+  - Above 33 ms a frame, `main_update_time` gives up to 2 ticks a frame,
+    so the render cost also adds tick cost.
+  - To confirm: per-phase timers, or the `[gpu] frame` scratch peak and the
+    `Direct3D: frame` texture uploads of an a10 log.
+  - 2026-10-06 (Matt): the vertex cache for the first cost is built (see
+    "Now"). Its log line: `Direct3D: frame N: vertex elements converted:
+    ... into the cache, ... at draws; vertex cache ... arrays, ... of
+    49152 KB, ... refused`. The texture hash and the colour conversions
+    are not changed.
+  - Hardware run 2026-10-06 (a10, 5400 frames): 238 to 298 frames each
+    10 s; the cache held 635 arrays, 10394 KB, 0 refused; after the warm-up
+    0 elements a window went into it, and about 2300 a frame were converted
+    at draws. At 30 frames per second the game thread waits in
+    `main_rasterizer_throttle`. In the slower windows it never reaches that
+    wait: the frame is over 33 ms (more draws, 427 to 483 a frame). The
+    heartbeat then shows `_sound_cache_sound_request` as the last wait, but
+    only with 2 to 6 yields in 5 to 45 s: it is not the cost. The sound
+    mixer uses 69 to 136 us of each 5333 us chunk (1 to 3%).
+  - Next, not measured yet: the rest of the frame (game ticks, the game's
+    render code, the texture hash, the colour conversions). Timers per
+    phase would show it.
 
 ## Decisions
 
@@ -550,3 +591,14 @@ then `./build.sh pkg LOG_IP=<address>`.
 - 2026-10-05: G6 run 1: the sound works (Matt). Menu, a10, menu: 0 silent
   and 0 partial port blocks; the mixer used 40 to 114 us a 5333 us chunk
   (at most 249 us), with up to 3 streams.
+- 2026-10-05: Investigation of the low frame rate in a10 (Matt). No code
+  change. Results: "Found for later goals" (G7, a10).
+- 2026-10-06: The vertex cache (Matt: "Let's go with the Vertex cache
+  fix"): `d3d8_rsx.c`, `ps3_gpu.c` (`ps3_gpu_wait_idle` on backend label
+  66, the RSX vertex cache flushed after new copies), `cache_files.c`.
+  `check` passes (0 `r2off`, `.got` 0x2c20). Waiting for the hardware
+  test in a10.
+- 2026-10-06: Vertex cache hardware SUCCESS (Matt, PKG of 00:26): a10 at
+  24 to 30 frames per second, no visible errors. The listener on UDP 18194
+  is stopped. Matt asked about the sound on an SPE (flycastPS3's way); the
+  log shows the sound is not the cost (see "Found for later goals").

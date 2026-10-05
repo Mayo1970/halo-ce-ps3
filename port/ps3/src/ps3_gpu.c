@@ -13,8 +13,9 @@ ps3gl. Only the game's thread calls it, once it has taken the RSX from the displ
 
 /* one half per frame in flight; a half is reused when the RSX has finished its last frame */
 #define SCRATCH_HALF_SIZE (16 * 1024 * 1024)
-/* labels below 64 are the system's */
+/* labels below 64 are the system's; 66 as ioQuake3-PS3's second ring label */
 #define FRAME_LABEL 64
+#define IDLE_LABEL 66
 #define FENCE_TIMEOUT_SECONDS 2.0
 #define DEFERRED_FREE_COUNT 4096
 #define TEXTURE_UNITS 4
@@ -39,6 +40,9 @@ static volatile uint32_t *frame_label;
 static uint32_t frame_index = 1;
 static uint32_t finish_reference = 0x80000000u;
 static int fence_timeouts;
+/* written by the RSX at ps3_gpu_wait_idle's mark */
+static volatile uint32_t *idle_label;
+static uint32_t idle_reference;
 
 static struct
 {
@@ -65,6 +69,7 @@ static struct ps3_gpu_texture textures[TEXTURE_UNITS];
 /* 0 unknown, 1 off, 2 on */
 static uint8_t texture_states[TEXTURE_UNITS];
 static int texture_cache_dirty;
+static int vertex_cache_dirty;
 static uint8_t attribute_enabled[ATTRIBUTE_COUNT];
 
 static uint32_t fragment_staging[RSX_FP_MAXIMUM_INSTRUCTIONS * 8];
@@ -491,12 +496,22 @@ void ps3_gpu_set_attribute(uint32_t index, uint32_t offset, uint32_t stride, uin
 	attribute_enabled[index] = 1;
 }
 
+void ps3_gpu_vertices_written(void)
+{
+	vertex_cache_dirty = 1;
+}
+
 static void draw_begin(void)
 {
 	if (texture_cache_dirty)
 	{
 		rsxInvalidateTextureCache(context, GCM_INVALIDATE_TEXTURE);
 		texture_cache_dirty = 0;
+	}
+	if (vertex_cache_dirty)
+	{
+		rsxInvalidateVertexCache(context);
+		vertex_cache_dirty = 0;
 	}
 	statistics.draws++;
 }
@@ -700,6 +715,27 @@ static void frame_begin(void)
 	caches_invalidate();
 }
 
+void ps3_gpu_wait_idle(void)
+{
+	double start;
+
+	if (!ready)
+		return;
+	rsxSetWriteBackendLabel(context, IDLE_LABEL, ++idle_reference);
+	rsxFlushBuffer(context);
+	start = ps3_time_seconds();
+	while (*idle_label != idle_reference)
+	{
+		if (ps3_time_seconds() - start > FENCE_TIMEOUT_SECONDS)
+		{
+			ps3_log_printf("[gpu] the RSX did not drain (label %u of %u)\n", (unsigned)*idle_label,
+				(unsigned)idle_reference);
+			break;
+		}
+		usleep(20);
+	}
+}
+
 void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height)
 {
 	if (!ready)
@@ -744,6 +780,9 @@ int ps3_gpu_initialize(void)
 	frame_label = (volatile uint32_t *)gcmGetLabelAddress(FRAME_LABEL);
 	*frame_label = 0;
 	frame_index = 1;
+	idle_label = (volatile uint32_t *)gcmGetLabelAddress(IDLE_LABEL);
+	*idle_label = 0;
+	idle_reference = 0;
 	caches_invalidate();
 	ready = 1;
 	ps3_log_printf("[gpu] ready: scratch 2 x %u KB at 0x%08x\n", (unsigned)(SCRATCH_HALF_SIZE / 1024),

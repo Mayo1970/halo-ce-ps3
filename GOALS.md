@@ -313,8 +313,8 @@ key (blocker 4). The encoders follow PSL1GHT's cgcomp
     so the RSX's winding is Direct3D's: the front face passes through.
   - The vertical blank emulation and the flip counter stay as in G2.
 - Not yet: visibility tests (always 0, so lens flares stay hidden), render
-  targets sampled by mip level, point sprites, a cache of converted vertex
-  buffers.
+  targets sampled by mip level, point sprites. The cache of converted
+  vertex buffers came on 2026-10-06 (ROADMAP.md, "Now").
 - Hardware runs (2026-10-05):
   - Runs 1 and 2: a black picture at 30 frames per second, 0 skipped draws,
     no hang.

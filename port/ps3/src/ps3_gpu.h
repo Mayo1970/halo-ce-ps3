@@ -16,6 +16,8 @@ int ps3_gpu_initialize(void);
 /* draws a colour surface 4:3 in the middle of the display, flips at the next vsync and starts the
 next frame (its scratch, after the RSX has finished the frame before last) */
 void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height);
+/* returns when the RSX has done every command so far (a backend label, written once its pipeline drains) */
+void ps3_gpu_wait_idle(void);
 
 /* ---------- memory */
 
@@ -131,6 +133,9 @@ void ps3_gpu_textures_written(void);
 /* attribute index reads elements floats at offset, stride bytes apart (0: one value for every
 vertex); elements 0 turns it off */
 void ps3_gpu_set_attribute(uint32_t index, uint32_t offset, uint32_t stride, uint32_t elements);
+/* vertices were written outside the scratch (the vertex cache): the RSX's vertex cache is flushed before
+the next draw */
+void ps3_gpu_vertices_written(void);
 /* primitive: GCM_TYPE_*, which are D3DPT_*'s */
 void ps3_gpu_draw(uint32_t primitive, uint32_t first, uint32_t count);
 /* 16-bit indices at offset */

@@ -691,8 +691,11 @@ long scenario_tags_load(
 			/* port: the map's tag data is little-endian (port/ps3/xbox/xbox_tag_swap.c) */
 			{
 				extern void cache_files_swap_tag_data(void *tag_data, long size);
+				extern void d3d8_tag_cache_loaded(void const *address, unsigned long size);
 
 				cache_files_swap_tag_data(tag_cache_base_address, cache_file_globals.header.tag_data_size);
+				/* port: the RSX copies of vertices go; the next draws make them again (port/ps3/xbox/d3d8_rsx.c) */
+				d3d8_tag_cache_loaded(tag_cache_base_address, 0x01600000);
 			}
 #endif
 
@@ -775,8 +778,12 @@ boolean scenario_structure_bsp_load(
 	/* port: the map's structure BSPs are little-endian (port/ps3/xbox/xbox_tag_swap.c) */
 	{
 		extern void cache_files_swap_structure_bsp(void *structure_bsp, long size);
+		extern void d3d8_tag_cache_loaded(void const *address, unsigned long size);
 
 		cache_files_swap_structure_bsp(reference->base_address, reference->file_size);
+		/* port: the RSX copies of vertices go; the next draws make them again (port/ps3/xbox/d3d8_rsx.c) */
+		d3d8_tag_cache_loaded(tag_cache_base_address + cache_file_globals.header.tag_data_size,
+			0x01600000 - cache_file_globals.header.tag_data_size);
 	}
 #endif
 
