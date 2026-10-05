@@ -1,5 +1,5 @@
-/* PS3 entry point: the platform layer, then the game's main() (halo_xbox_main). Until G4 draws, a
-thread keeps the display flipping for the XMB: blue running, green at the end of G2, red failed. */
+/* PS3 entry point: the platform layer, then the game's main() (halo_xbox_main). Until the game draws, a
+thread keeps the display flipping for the XMB: blue running, green stopped, red failed. */
 
 #include "ps3_host.h"
 #include "ps3_system.h"
@@ -34,6 +34,9 @@ static volatile int display_quit;
 static volatile int display_state;
 static sys_ppu_thread_t display_thread;
 static int display_running;
+/* the game draws (ps3_gpu.c): the display thread keeps only the heartbeat */
+static volatile int display_paused;
+static volatile int display_idle;
 /* the game's thread, for the stall report */
 static sys_ppu_thread_t main_thread_id;
 
@@ -89,10 +92,21 @@ static void display_main(void *argument)
 	display_state = 1;
 	while (!display_quit)
 	{
-		ps3_video_begin_frame();
-		ps3_video_clear(status_color(frame));
-		ps3_video_end_frame();
-		frame++;
+		if (display_paused)
+		{
+			/* the commands so far reach the game's thread before it writes more */
+			__sync_synchronize();
+			display_idle = 1;
+			usleep(50 * 1000);
+		}
+		else
+		{
+			display_idle = 0;
+			ps3_video_begin_frame();
+			ps3_video_clear(status_color(frame));
+			ps3_video_end_frame();
+			frame++;
+		}
 		if (ps3_time_seconds() >= next_heartbeat)
 		{
 			ps3_log_printf("[hb] t=%.0fs display frames %u\n", ps3_time_seconds(), frame);
@@ -120,6 +134,20 @@ static void display_start(void)
 	/* the RSX init allocates: no memory probe may run beside it */
 	while (!display_state)
 		usleep(10 * 1000);
+}
+
+void ps3_display_acquire(void)
+{
+	display_paused = 1;
+	while (display_running && display_state > 0 && !display_idle)
+		usleep(1000);
+	__sync_synchronize();
+}
+
+void ps3_display_release(void)
+{
+	__sync_synchronize();
+	display_paused = 0;
 }
 
 static void display_stop(void)
@@ -150,11 +178,12 @@ static void wait_for_exit(void)
 		usleep(100 * 1000);
 }
 
-/* the game's halt_and_catch_fire (main.c): its halt screen needs the renderer (G4), and without
-it the halt asserts again and exits; here the red screen waits for the XMB exit */
+/* the game's halt_and_catch_fire (main.c): the display thread takes the RSX back for the red screen,
+which waits for the XMB exit */
 void ps3_host_game_halted(void)
 {
 	ps3_host_set_status(_ps3_host_status_failed);
+	ps3_display_release();
 	ps3_log_printf("[ps3] the game halted: PS button > Quit Game\n");
 	wait_for_exit();
 	ps3_host_exit(1);

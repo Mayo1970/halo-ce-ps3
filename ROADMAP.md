@@ -17,8 +17,11 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 - Upstream: `E:\Users\Matteo\Desktop\Halo\halo-ce-universal`. It is the
   read-only reference. Do not change it.
 - Git: on 2026-10-05 at 00:42, something other than Claude replaced `.git`
-  with an empty `git init`. There are no commits. To see the PS3 changes,
-  compare with upstream and ignore CRLF (upstream is CRLF, this copy is LF):
+  with an empty `git init`. Matt then committed G1 to G3 (`4b4874c`,
+  `68a0df9`). The `.gitignore` rule `xbox/` (upstream's, for the Xbox SDK)
+  also ignores `port/ps3/xbox/`: those files are in no commit. To see the
+  PS3 changes, compare with upstream and ignore CRLF (upstream is CRLF, this
+  copy is LF):
   `diff -rq --strip-trailing-cr -x .git -x build -x __pycache__ ../halo-ce-universal .`
   (Git Bash, approximately 25 s).
 - The other documents:
@@ -42,37 +45,18 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-05, end of session)
 
-- G0, G1 (in G2) and G2 are done: hardware SUCCESS. G2 ran the game headless
-  to the open of `d:\maps\ui.map`. The Xbox window is at 0x80000000 (game
-  state 0x81A00000, tag cache 0x803A6000, as on the Xbox), so the map
-  pointers stay valid. Free memory: 179 MB after the RSX init, 94 MB after
-  the game's start-up.
-- G3 is done: hardware SUCCESS on run 9 (2026-10-05). The swap works on the
-  PS3. `ui.map` swaps with the counts of the PC check and 0 errors (982
-  tags, 16026 structs, 4833 blocks, 5032 references with 2 stale, 726392
-  bytes; its BSP 64 structs). See "G3 summary".
-- Runs 1 to 7: the main thread stopped on its first main loop pass, with no
-  wait and no lock. Cause (run 7): `global_screenshot_count` (`main.c`, a
-  `#pragma pack(push, 1)` struct) was at an odd address. Its first float
-  store (`set_window_camera_values`) faults on the PPE, and lv2 ends only
-  that thread (trap 23). Fixed: `__declspec(align(8))` on the PS3.
-- Run 8: the main thread passed that. The main menu's text then halted in
-  `rasterizer_text_begin` (`parameters->map[0]`): `rasterizer_xbox_text.c`
-  read the caller's struct through its own copy with 8-byte pointers (trap
-  24). Fixed: `HALO_PTR32` in the copy, and a 0x8C size check.
-- Mismatch audit and fixes (2026-10-05, Matt: "fix all"): a static audit of
-  10 classes (struct copies, raw offsets, misaligned floats, byte order,
-  bitfields, prototypes, C runtime ABI, threads, memory, the run 9 path)
-  found 43 issues (about 25 distinct). All are fixed, each one checked in
-  the compiled code. See "Audit fixes" below and GOALS.md ("G3 progress").
-- Run 9 (with the audit fixes): SUCCESS. The main menu ran headless at 30
-  frames per second: `G3: 1800 frames and 1799 game ticks on the swapped map
-  data`, then the green screen. No "needs to be recompiled", no halt. One
-  log line at 2 s: `local player 0, weapon (0x0), deleted unexpectedly`
-  (`first_person_weapons.c`; it resets the slot; not checked against the Xbox).
-- Next: G4 (Direct3D 8 on the RSX), after Matt confirms it. The G3 stop and
-  diagnostics stay until then.
-- Diagnostics in the build, for G3 only (ask Matt before removing them):
+- G0 to G3 are done: hardware SUCCESS. G2 ran the game headless to the open
+  of `d:\maps\ui.map`; the Xbox window is at 0x80000000, so the map pointers
+  stay valid. G3 (run 9) ran the main menu headless at 30 frames per second
+  on the swapped `ui.map`. See "G3 summary".
+- G4 is done: hardware SUCCESS on run 5 (2026-10-05). The main menu draws
+  on the RSX, 4:3 in the middle of the display, at 30 frames per second:
+  about 120 draws a frame, 0 skipped, 13 vertex programs and 15 pixel
+  shaders sent a frame. Matt chose runtime microcode. See "G4 summary" and
+  GOALS.md ("G4 progress").
+- Next: G5 (XInput on the pads and DirectSound on the audio port), after
+  Matt confirms it.
+- Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
     540-549, `set_window_camera_values` 560-568 and 5611-5613),
@@ -94,10 +78,40 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G1 Data model: the game compiles and links for LP64 with the 32-bit layouts of its data | Done in G2 (Matt, 2026-10-05) |
 | G2 The Xbox platform layer on the PS3 (kernel, XAPI, files, threads, memory, from `port/linux/src`). The game runs headless to its first map load. | Done 2026-10-05 (hardware SUCCESS, third run) |
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done 2026-10-05 (hardware SUCCESS, run 9, after the audit fixes) |
-| G4 Direct3D 8 on the RSX: the main menu shows | Not started |
+| G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Not started |
 | G6 First playable level (a10) | Not started |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
+
+## G4 summary
+
+`GOALS.md` ("G4 progress") has the details.
+
+- Shaders: the game's NV2A vertex programs and pixel shaders become RSX
+  microcode at run time (`port/ps3/src/ps3_rsx_vp.c`, `ps3_rsx_fp.c`,
+  `ps3_rsx_asm.c`), cached per vertex shader and per pixel shader key. The
+  encoding is cgcomp's, word for word: `tools/ps3_rsx_shader_check.sh`
+  compares with `cgcomp -a` and with the NV2A's results (0 failures).
+- The RSX back end (`port/ps3/src/ps3_gpu.c`, API `ps3_gpu.h`): the game's
+  thread takes the RSX from the display thread at device creation (the
+  display thread keeps the heartbeat; at a halt it takes the RSX back for
+  the red screen). A 2 x 16 MB scratch in RSX memory holds each frame's
+  vertices, indices and fragment program copies; backend label 64 fences
+  it. Present draws the 640x480 back buffer 4:3 into the display buffer and
+  flips; it also does the XMB exit.
+- The device (`port/ps3/xbox/d3d8_rsx.c`, from `d3d8_gl.c`): render targets
+  are linear A8R8G8B8 and Z24S8 RSX surfaces; textures are RSX copies (DXT
+  as they are, the rest A8R8G8B8 in the same texel order), checked once a
+  frame by a hash of their texels; vertices are converted to float4 per
+  draw; the RSX's winding is Direct3D's (the picture is not mirrored).
+- G4 hardware runs 1 to 4 (2026-10-05): black. Diagnostic builds (test
+  shaders, pixels read back) proved the present, the geometry, the
+  textures (DXT included) and the translated pixel shaders. Two faults:
+  the front face was inverted (every visible triangle culled), and a depth
+  clear of 1.0 wrote 0 (1.0 * 16777215 + 0.5 is 2^24 in a float). Both are
+  fixed; run 5: SUCCESS.
+- Not yet: visibility tests (0), render targets sampled by mip level (level
+  0 only), point sprites, a cache of converted vertex buffers.
 
 ## G3 summary
 
@@ -126,9 +140,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   bitfield and debug table, `ui_widget_event_handler_functions.c` (a word
   count), `material_effects.c`, and 4 narrow views of tag fields (fog
   flags twice, a runtime decal index, vehicle flags).
-- The G3 stop: `HALO_PS3_STOP_AFTER_MAIN_MENU` in the Makefile
-  (`cache_files_g3_frame`, called from `D3DDevice_Present`). G4 removes it.
-  The G2 stop is gone.
+- The G3 stop (`HALO_PS3_STOP_AFTER_MAIN_MENU`) and the G2 stop are gone.
 - Hardware fixes (runs 7 and 8): `global_screenshot_count` is 8-aligned on
   the PS3 (`main.c`); the text parameters' copy in
   `rasterizer_xbox_text.c` has `HALO_PTR32` pointers.
@@ -181,6 +193,9 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   `bitmap_utilities.c`, `bitmap_drawing.c`, `bitmap_extract.c`, the TIFF,
   TGA and quantize importers, `text_hires.c` (a stub on the PS3), a real
   Bink decoder. `string_to_tag` (`cseries.c`, no callers) reads a byte view.
+- G3 run 9 logged at 2 s: `local player 0, weapon (0x0), deleted
+  unexpectedly` (`first_person_weapons.c`; it resets the slot; not checked
+  against the Xbox).
 - G7: `network_distributed.c` `distributed_address_text` assumes a
   little-endian network order; it prints right today only because the PS3
   `p2p_peer_endpoint_address` stub is an identity. TEA in
@@ -210,8 +225,11 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   GPL-3.0-only, so `xbox_tag_swap_tables.h` and the EBOOT are GPLv3
   (upstream is CC0). The maps of his disc are in
   `E:\Users\Matteo\Downloads\[XBOX] HALO Combat Evolved\HALO_Combat_Evolved\maps`.
-- Still open: G4, generate RSX microcode directly or use shaders compiled
-  offline with `cgcomp` (the PS3 has no shader compiler at run time).
+- Matt (2026-10-05), G4: runtime microcode. C emitters translate the NV2A
+  vertex programs and the combiner state to RSX microcode at run time,
+  cached per key. The encoders follow PSL1GHT's cgcomp source
+  (`E:\Users\Matteo\Desktop\Dreamcast\PSL1GHT\tools\cgcomp`); the PC check
+  compares with `cgcomp -a`.
 
 ## How the game units compile
 
@@ -358,6 +376,15 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 30. MSVC's `_vsnprintf`/`_snprintf` return -1 when the text does not fit;
     newlib returns the full length. Game code gets the MSVC return on the
     PS3 (`port/linux/include/stdio.h`).
+31. The RSX's winding is the picture's as shown: with ps3gl's viewport
+    (scale y negative, rows from the top) nothing is mirrored, so
+    Direct3D's front face passes through. An inverted one culled every
+    visible triangle (G4 runs 1 to 4: a black screen, no error).
+32. A float holds 24 bits: `1.0f * 16777215 + 0.5f` is 2^24, which a
+    `<< 8` into a Z24S8 clear value shifts out to 0. Clamp to 0xFFFFFF.
+33. To find a black RSX picture, read pixels back after `rsxFinish`
+    (`gcmGetConfiguration` gives the CPU address of RSX memory) and swap
+    in one-instruction pixel shaders. G4's diagnostic builds did this.
 
 ## Commands
 
@@ -376,6 +403,7 @@ Use Git Bash in the repository folder.
 | `./build.sh clean` | Deletes `build/ps3` |
 | `python3 tools/ps3_tag_swap.py --invader <clone>` | Rewrites `port/ps3/xbox/xbox_tag_swap_tables.h` from a clone of Invader (`git clone --depth 1 https://github.com/SnowyMouse/invader`) |
 | `tools/ps3_tag_swap_check.sh "<maps folder>" [names]` | The swap of each map and BSP on the PC, with its errors and the bytes swapped twice or never |
+| `KEYS=3000 SEED=1 tools/ps3_rsx_shader_check.sh` | The RSX microcode on the PC: the 67 vertex shaders and `KEYS` random pixel shaders against `cgcomp -a` and the NV2A's results (`VERBOSE=1` prints each program) |
 
 The warning build of the G1 open items. It copies the tree, removes the
 `#line` directives in the copy, and writes `warn.txt` to `OUT`. `OUT` is a
@@ -437,7 +465,11 @@ then `./build.sh pkg LOG_IP=<address>`.
 | --- | --- |
 | `Makefile`, `build.sh` | The PS3 build |
 | `port/ps3/src/` | The host layer: the entry point (`ps3_main.c`), `ps3_host.c` (lv2 for the Xbox layer), video, pads, audio, log |
-| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, headless D3D, DirectSound, XInput, network |
+| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, D3D on the RSX, headless DirectSound, XInput, network |
+| `port/ps3/src/ps3_gpu.c`, `ps3_gpu.h` | The RSX back end of D3D (G4) |
+| `port/ps3/src/ps3_rsx_*.c`, `ps3_rsx_program.h` | RSX microcode at run time from NV2A vertex programs and combiners (G4) |
+| `port/ps3/xbox/d3d8_rsx.c` | The D3D 8 device on the RSX (G4), from `d3d8_gl.c` |
+| `tools/ps3_rsx_shader_check.c`, `.sh` | The PC check of the RSX microcode |
 | `port/ps3/bringup/` | The G0 bring-up test |
 | `port/ps3/include/` | `halo_ps3_prefix.h`, `halo_ps3_libtiff.h`, `limits.h`, `setjmp.h` |
 | `port/linux/include/` | The C runtime wrappers, shared with the Linux build |
@@ -486,3 +518,13 @@ then `./build.sh pkg LOG_IP=<address>`.
   fixes", traps 26-30). Run 9 rebuilt with the fixes.
 - 2026-10-05: Run 9: hardware SUCCESS. 1800 frames of the main menu on the
   swapped `ui.map`, green screen. G3 done.
+- 2026-10-05: G4 started. Matt chose runtime microcode. The vertex program
+  and combiner translators and their PC check (67 shaders, 3000 random
+  pixel shaders, 0 failures), the RSX back end (`ps3_gpu.c`) and the
+  device (`d3d8_rsx.c`) are built; `check` passes (0 `r2off`, `.got`
+  0x29c8). The G3 stop is removed. Waiting for the first G4 run.
+- 2026-10-05: G4 runs 1 to 4: black picture, no hang. Diagnostic builds
+  isolated it: an inverted front face and a depth clear of 1.0 that wrote
+  0. Both fixed; the diagnostics are removed. Run 5 is built.
+- 2026-10-05: G4 run 5: hardware SUCCESS. The main menu draws on the RSX at
+  30 frames per second. G4 done.

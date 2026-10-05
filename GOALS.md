@@ -25,7 +25,7 @@ Rules:
 | G1 Data model: the game compiles and links for LP64 with the 32-bit layouts of its data | Done in G2. Steps 1 (pointer fields) and 2 (32-bit `long`) done 2026-10-05. Matt (2026-10-05): no G1 hardware test; G2 fixes the open items and links the game. |
 | G2 The Xbox platform layer on PS3 (kernel, XAPI, files, threads, memory, from `port/linux/src`); the game runs headless to its first map load | Done. Hardware SUCCESS 2026-10-05 on the third run: the game runs headless to the open of `d:\maps\ui.map`, and the XMB exit is clean. See "G2 progress". |
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done. Hardware SUCCESS 2026-10-05 on run 9: 1800 frames of the main menu on the swapped `ui.map`, after the fixes of 2 halts and of the 43 audit mismatches. See "G3 progress". |
-| G4 Direct3D 8 on the RSX: the main menu shows | Not started |
+| G4 Direct3D 8 on the RSX: the main menu shows | Done. Hardware SUCCESS 2026-10-05 on run 5: the main menu at 30 frames per second, after the fixes of an inverted front face and a depth clear of 0. See "G4 progress". |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Not started |
 | G6 First playable level (a10) | Not started |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
@@ -202,7 +202,7 @@ PS3 keeps the Xbox maps as they are.
   `material_effects.c`.
 - The G3 stop: after the first map's tag data is swapped, 1800 presented
   frames (30 s at 60 Hz) end the run on the green screen
-  (`HALO_PS3_STOP_AFTER_MAIN_MENU`).
+  (`HALO_PS3_STOP_AFTER_MAIN_MENU`). G4 removed it.
 - Hardware runs 1 to 8 (2026-10-05):
   - The swap of `ui.map` on the PS3 gives the counts of the PC check and 0
     errors (8 to 9 ms for the tag data).
@@ -254,6 +254,84 @@ PS3 keeps the Xbox maps as they are.
   map data` and the green screen. Free memory: 188 MB at boot, 179 MB after
   the RSX init.
 
+## G4 progress
+
+Matt (2026-10-05): runtime microcode. C emitters translate the NV2A vertex
+programs and the combiner state to RSX microcode at run time, cached per
+key (blocker 4). The encoders follow PSL1GHT's cgcomp
+(`compilervp.cpp`, `compilerfp.cpp`).
+
+- Vertex programs (`port/ps3/src/ps3_rsx_vp.c`): the RSX's vertex unit has
+  the NV2A's opcodes, registers and operand fields. Each NV2A instruction
+  (its MAC and ILU halves) becomes 1 to 4 RSX instructions, in an order
+  that keeps the NV2A's reads before writes. r12 is the position. The
+  program first sets the NV2A's output defaults (0 0 0 1, fog 1) and zeroes
+  the temporaries it reads before it writes them (56 of the 67 shaders):
+  the RSX does not clear them.
+- The position: the game's programs end in screen space (the XDK epilogue
+  with c[-38] and c[-37]). The translation maps screen space to the RSX's
+  clip space with c[192] and c[193], which the device computes for the
+  bound target, with Direct3D's integer pixel centres moved to the RSX's
+  halves. Where the program takes `rcc` of the clip position, that position
+  is kept, so there is no division by w.
+- Relative constants (`c[A0.x + n]`, 23 shaders): the `INDEX_CONST` bit of
+  nouveau's NV40 encoding (cgcomp drops it). An ARL from a computed value
+  adds 0.001 first, as `nv2a_vsh.c`.
+- Pixel shaders (`ps3_rsx_fp.c`): the texture stages (every mode of
+  `nv2a_psh.c`), the general combiners (input and output mappings, dot
+  products, the mux, the [-1, 1] clamp), the final combiner, fog and alpha
+  kill, with `nv2a_psh.c`'s semantics. The per-draw constants are inline
+  constants: a copy of the program with the values patched in goes to the
+  frame's scratch when they change.
+- The PC check (`tools/ps3_rsx_shader_check.sh`, the image's host GCC and
+  `cgcomp`): the 67 vertex shaders and 3000 random pixel shader keys, word
+  for word against `cgcomp -a` (the relative bit aside), and their results
+  against an NV2A interpreter and a combiner reference, with garbage in the
+  RSX's temporaries. 0 failures.
+- The RSX back end (`port/ps3/src/ps3_gpu.c`): the game's thread takes the
+  RSX from the display thread when it creates the device; at a halt the
+  display thread takes it back for the red screen. Per frame: a 16 MB half
+  of a 32 MB scratch in RSX memory (vertices, indices, fragment programs),
+  fenced with backend label 64 (ioQuake3-PS3's pattern); freed RSX memory
+  waits for the frame that last used it. State, programs and textures are
+  sent only when they change, and all again at each frame. Present draws
+  the 640x480 back buffer 4:3 into the display buffer (bilinear) and
+  flips.
+- The device (`port/ps3/xbox/d3d8_rsx.c`, from `d3d8_gl.c`):
+  - Render targets: linear A8R8G8B8 and Z24S8 RSX surfaces in place of the
+    memory their `Data` names. A texture over a rendered target samples
+    its surface (linear, its level 0).
+  - Textures: RSX copies. DXT stays as it is (blocks in order, as on the
+    Xbox); every other format becomes A8R8G8B8 in the same texel order
+    (the RSX's swizzle is the NV2A's); linear textures keep texel
+    coordinates (`UNRM`). A hash of the texels, once a frame per texture,
+    finds the ones the CPU changed.
+  - Vertices: each draw converts its vertex range to float4 attributes,
+    interleaved, in one pass (vertex data is big-endian after G3). Inputs
+    without data get a stride-0 constant (ps3gl's pattern).
+  - Facing: the picture is not mirrored (rows from the top, as ps3gl's),
+    so the RSX's winding is Direct3D's: the front face passes through.
+  - The vertical blank emulation and the flip counter stay as in G2.
+- Not yet: visibility tests (always 0, so lens flares stay hidden), render
+  targets sampled by mip level, point sprites, a cache of converted vertex
+  buffers.
+- Hardware runs (2026-10-05):
+  - Runs 1 and 2: a black picture at 30 frames per second, 0 skipped draws,
+    no hang.
+  - Diagnostic runs 3 and 4 (grey bars, a test square through the present
+    programs, one-instruction test shaders in timed phases, pixels read
+    back): the present, the geometry, the vertex colours, the textures (DXT
+    included) and the full translated pixel shaders work. With the game's
+    own render state, nothing showed.
+  - Causes: the front face was inverted, so every visible triangle was
+    culled; and the depth clear value overflowed (1.0 * 16777215 + 0.5
+    rounds to 2^24 in a float, which shifted out to 0), so every depth test
+    failed. Both are fixed.
+  - Run 5: SUCCESS. The main menu shows at 30 frames per second: about
+    120 draws a frame, 0 skipped, 0 dropped.
+- Not proven on hardware yet: the relative constant bit, `UNRM` textures,
+  stencil.
+
 ## Blockers found in the analysis
 
 1. **ILP32 data on an LP64 compiler.** The game's data (tags, cache files,
@@ -286,8 +364,8 @@ PS3 keeps the Xbox maps as they are.
    so the pointers in the tag data stay valid (see "G2 progress").
 4. **Runtime shaders.** The Linux renderer (`port/linux/src/d3d8_gl.c`)
    translates the NV2A vertex shaders and register combiners to GLSL at run
-   time. The PS3 has no shader compiler at run time: G4 must generate RSX
-   microcode directly, or use shaders compiled offline with `cgcomp`.
+   time. The PS3 has no shader compiler at run time. Decision (Matt,
+   2026-10-05): G4 generates RSX microcode directly (see "G4 progress").
 5. **Memory.** The Xbox window is 128 MB on Linux (tag cache 22 MB, game
    state 16 MB, texture cache 22 MB, sound cache 4 MB, and more). The free
    main memory on the PS3 is approximately 145 to 200 MB, by firmware and
