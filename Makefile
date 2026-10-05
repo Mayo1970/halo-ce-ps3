@@ -104,9 +104,6 @@ XBOX_SRCS := $(wildcard $(PS3_DIR)/xbox/*.c) \
              msvc_wide.c port_config.c xbdm.c xbox_xapi.c)
 XBOX_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(XBOX_SRCS))
 
-# G3 ends after 30 s of the first map on its swapped data (port/ps3/xbox/xbox_tag_swap.c); G4 drops this
-XBOX_DEFINES ?= -DHALO_PS3_STOP_AFTER_MAIN_MENU
-
 # the game's ABI and the XDK declarations; ps3_platform.h stands in for port/linux/src/platform.h.
 # -Wno-format: %ld meets the 32-bit long, which PPC64 passes extended to 64 bits, so it prints right
 XBOX_CFLAGS = -std=gnu99 -fgnu89-inline $(GAME_ABI) -mminimal-toc -Wall -Wno-unused-function \
@@ -168,7 +165,8 @@ $(BUILD)/obj/%.o: %.S
 
 # the G0 bring-up test, without the game: build/ps3/halo_ps3_bringup.elf (bringup-self: its EBOOT.BIN)
 BRINGUP_OBJS := $(BUILD)/obj/$(PS3_DIR)/bringup/ps3_bringup.o \
-                $(filter-out %/ps3_main.o %/ps3_host.o %/ps3_posix.o,$(HOST_OBJS))
+                $(filter-out %/ps3_main.o %/ps3_host.o %/ps3_posix.o %/ps3_gpu.o %/ps3_rsx_asm.o %/ps3_rsx_vp.o \
+                %/ps3_rsx_fp.o,$(HOST_OBJS))
 
 $(BUILD)/$(TARGET)_bringup.elf: $(BRINGUP_OBJS)
 	@echo "LD $@"

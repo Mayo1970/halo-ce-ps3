@@ -19,4 +19,8 @@ void ps3_video_end_frame(void);
 
 void ps3_video_stats(unsigned *flips_queued, unsigned *flips_completed, unsigned *wait_timeouts);
 
+/* the display thread (ps3_main.c) stops drawing: the caller owns the RSX until it releases it */
+void ps3_display_acquire(void);
+void ps3_display_release(void);
+
 #endif

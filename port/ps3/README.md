@@ -1,9 +1,9 @@
 # PS3
 
 The PS3 port builds with PSL1GHT (ppu-gcc 7.2) in the Docker image
-`ps3dev-latest:latest`. The EBOOT links the whole game. It runs headless (no
-picture, no sound, no pads): it loads the first map, swaps the map data to
-the PS3's byte order, runs it for 30 s and stops (G3 in `GOALS.md`).
+`ps3dev-latest:latest`. The EBOOT links the whole game. It loads the first
+map, swaps the map data to the PS3's byte order, and draws the game with the
+RSX (G4 in `GOALS.md`). It has no sound and no pads yet (G5).
 `GOALS.md` in the root folder gives the plan and the blockers.
 
 The code is in three parts:
@@ -11,11 +11,12 @@ The code is in three parts:
 | Folder | Contents | Compiled as |
 | --- | --- | --- |
 | `src/` | The host layer: lv2 and newlib. The entry point, the UDP log, video, pads, audio, and `ps3_host.c`, the lv2 services of the Xbox layer. | LP64, with newlib's own 64-bit `long` |
-| `xbox/` | The Xbox layer on the PS3: kernel, memory, files, and a headless Direct3D, DirectSound, XInput and network. The Linux build's portable units (`port/linux/src`) join it. | The game's ABI: 32-bit `long`, the XDK declarations |
+| `xbox/` | The Xbox layer on the PS3: kernel, memory, files, Direct3D on the RSX, and a headless DirectSound, XInput and network. The Linux build's portable units (`port/linux/src`) join it. | The game's ABI: 32-bit `long`, the XDK declarations |
 | `bringup/` | The G0 bring-up test, without the game | LP64 |
 
-`src/ps3_host.h` is the boundary between the first two parts. It has only
-fixed-width types, because `long` has a different size on each side.
+`src/ps3_host.h`, `src/ps3_gpu.h` and `src/ps3_rsx_program.h` are the
+boundary between the first two parts. They have only fixed-width types,
+because `long` has a different size on each side.
 
 | File | Contents |
 | --- | --- |
@@ -23,6 +24,8 @@ fixed-width types, because `long` has a different size on each side.
 | `src/ps3_host.c` | lv2 mutexes and condition variables, PPU threads, the timebase, the mmapper calls of the memory window, the lv2 file calls. |
 | `src/ps3_system.c` | The UDP log, the XMB exit, the free memory, the time and the data root. |
 | `src/ps3_video.c` | RSX init, three buffers with vsync flips, 720p if the TV has it. |
+| `src/ps3_gpu.c` | The RSX for Direct3D: RSX memory, a per-frame scratch in two halves with a backend label fence, render state, programs, textures, draws, and the present (the 640x480 picture 4:3 in the middle of the display). The game's thread takes the RSX from the display thread when it creates its device. |
+| `src/ps3_rsx_vp.c`, `ps3_rsx_fp.c`, `ps3_rsx_asm.c`, `ps3_rsx_program.h` | RSX microcode made at run time: the game's NV2A vertex programs, and its pixel shaders (texture stages and register combiners), encoded as `cgcomp` encodes them. |
 | `src/ps3_input.c` | DualShock 3 and Sixaxis pads on all 7 ports: buttons, sticks and pressures. |
 | `src/ps3_audio.c` | One 48 kHz stereo float audio port, fed from a ring by a thread. |
 | `src/ps3_posix.c` | The part of `port/linux/src/posix.h` that `msvc_crt.c` calls. |
@@ -32,7 +35,9 @@ fixed-width types, because `long` has a different size on each side.
 | `xbox/xbox_memory.c` | `XPhysicalAlloc`. The Xbox window at `0x80000000`, as on the Xbox. |
 | `xbox/xbox_files.c` | The Win32 file API and the Xbox paths. |
 | `xbox/xbox_tag_swap.c` | The swap of the map data (header, tag data, structure BSPs) to the PS3's byte order when the game reads it. Its layouts are `xbox/xbox_tag_swap_tables.h`, which `tools/ps3_tag_swap.py` writes from Invader's tag definitions (GPLv3). |
-| `xbox/d3d8_null.c`, `dsound_null.c`, `xinput_null.c`, `xnet_null.c` | Headless devices until G4 and G5, no network until G7. |
+| `xbox/d3d8_rsx.c` | The Direct3D 8 device on `src/ps3_gpu.c`, from `port/linux/src/d3d8_gl.c`: state, vertex shaders, render targets as RSX surfaces, a texture cache in RSX memory (converted again when the texels change), vertices converted to floats per draw. |
+| `xbox/xbox_texture_layout.c` | The layout of Xbox textures, and their texels for the RSX: A8R8G8B8 in the same order (the RSX swizzles as the NV2A does), DXT blocks as they are. |
+| `xbox/dsound_null.c`, `xinput_null.c`, `xnet_null.c` | Headless devices until G5, no network until G7. |
 | `xbox/port_stubs.c` | The Linux build's services that the PS3 does not have yet: internet play, the PC menus, the high-res HUD and text. |
 
 ## Build
@@ -49,6 +54,7 @@ Use a shell that runs `build.sh` (Git Bash on Windows) in the root folder:
 | `./build.sh -j12 game` | Compiles the game's 476 units only |
 | `./build.sh clean` | Deletes `build/ps3` |
 | `tools/ps3_tag_swap_check.sh "<maps folder>"` | Runs the map swap on the PC over each map and BSP of an Xbox `maps` folder |
+| `KEYS=3000 SEED=1 tools/ps3_rsx_shader_check.sh` | Checks the RSX microcode on the PC: the game's 67 vertex shaders and `KEYS` random pixel shaders, word for word against `cgcomp -a`, and their results against the NV2A's |
 
 The game units use `include/halo_ps3_prefix.h` (32-bit `long`, `HALO_PTR32`,
 the MSVC keywords) and the GCC equivalents of the Linux build's ABI flags,
@@ -103,17 +109,18 @@ enter `nc -ul 18194` on that computer. `printf`, `puts` and `putchar` also
 go to the log (`-Wl,--wrap`), and so do the lines of the game's
 `debug.txt`.
 
-## The EBOOT (G3)
+## The EBOOT (G4)
 
 | Part | In the log | On the PS3 |
 | --- | --- | --- |
 | System | `[ps3]` lines: the build time, `sizeof` of `void*`, `long` and `wchar_t`, the byte order | |
 | Memory | `[mem]` lines: the free memory at boot, after the memory window and after the RSX init; the mmapper results | |
-| Display | `[vid]` lines; `[hb]` every 10 s | A slow blue pulse while the game runs |
+| Display | `[vid]` lines; `[hb]` every 10 s | A slow blue pulse until the game creates its Direct3D device |
 | Game | `[halo]` lines: each memory window block, each file the game opens, each thread; the game's own `debug.txt` lines | |
 | Map data | `tag data swapped in N ms: ...` and `structure BSP swapped ...`, with the counts and the errors | |
-| End | `G3:` lines: the frames and game ticks on the swapped data | The pulse turns green. PS button > Quit Game goes back to the XMB. |
-| Failure | `EXCEPTION halt` and the call stack: `./build.sh symbols ADDRESSES="..."` names its functions | The pulse turns red and stays red until PS button > Quit Game |
+| Drawing | `[gpu] ready`; `Direct3D:` lines: each vertex shader translated, the first pixel shaders, and every 600 frames the draws, the skips and the texture uploads; `[gpu] frame N` every 600 frames: the programs and the scratch use | The game's picture, 4:3 in the middle of the display |
+| Exit | `[ps3] exit 0` | PS button > Quit Game goes back to the XMB |
+| Failure | `EXCEPTION halt` and the call stack: `./build.sh symbols ADDRESSES="..."` names its functions | A red pulse until PS button > Quit Game |
 
 ## Bring-up test
 
