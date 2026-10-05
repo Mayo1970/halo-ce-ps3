@@ -1,6 +1,7 @@
 /* PS3 entry point: the platform layer, then the game's main() (halo_xbox_main). Until the game draws, a
 thread keeps the display flipping for the XMB: blue running, green stopped, red failed. */
 
+#include "ps3_audio.h"
 #include "ps3_host.h"
 #include "ps3_system.h"
 #include "ps3_video.h"
@@ -162,10 +163,11 @@ static void display_stop(void)
 	}
 }
 
-/* the RSX stops before the process ends, as at the bring-up test's exit */
+/* the audio port and the RSX stop before the process ends, as at the bring-up test's exit */
 void ps3_host_exit(int status)
 {
 	ps3_log_printf("[ps3] exit %d\n", status);
+	ps3_audio_shutdown();
 	display_stop();
 	ps3_system_shutdown();
 	sysProcessExit(status);
@@ -236,6 +238,7 @@ int main(int argc, char *argv[])
 	result = halo_xbox_main();
 	ps3_log_printf("[ps3] the game returned %d\n", result);
 
+	ps3_audio_shutdown();
 	display_stop();
 	ps3_system_shutdown();
 	return result;

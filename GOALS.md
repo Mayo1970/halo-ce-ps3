@@ -26,8 +26,8 @@ Rules:
 | G2 The Xbox platform layer on PS3 (kernel, XAPI, files, threads, memory, from `port/linux/src`); the game runs headless to its first map load | Done. Hardware SUCCESS 2026-10-05 on the third run: the game runs headless to the open of `d:\maps\ui.map`, and the XMB exit is clean. See "G2 progress". |
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done. Hardware SUCCESS 2026-10-05 on run 9: 1800 frames of the main menu on the swapped `ui.map`, after the fixes of 2 halts and of the 43 audit mismatches. See "G3 progress". |
 | G4 Direct3D 8 on the RSX: the main menu shows | Done. Hardware SUCCESS 2026-10-05 on run 5: the main menu at 30 frames per second, after the fixes of an inverted front face and a depth clear of 0. See "G4 progress". |
-| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | In progress. The pads (XInput) work: hardware SUCCESS 2026-10-05 on run 1. DirectSound is not started. See "G5 progress". |
-| G6 First playable level (a10) | Not started |
+| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done. The pads (XInput) work: hardware SUCCESS 2026-10-05 on run 1. Matt moved the sound to G6. See "G5 progress". |
+| G6 First playable level (a10) | In progress. Matt (2026-10-05): "G6. Go for the sound." The sound works: hardware SUCCESS 2026-10-05 on run 1. See "G6 progress". |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
 
 ## G1 progress
@@ -373,6 +373,55 @@ DirectSound is not started.
   a10: the tag data and the structure BSPs swap with 0 errors, and the
   level runs at about 9 to 10 frames per second (the heartbeat). For G6:
   `checksum failed on persistent storage` once at the level start.
+
+## G6 progress
+
+Matt (2026-10-05): "G6. Go for the sound."
+
+- `port/ps3/xbox/dsound_ps3.c` replaces `dsound_null.c`: DirectSound on
+  the audio port of `port/ps3/src/ps3_audio.c` (G0, hardware-tested), after
+  `port/linux/src/dsound_sdl.c`.
+- What the game plays: 81 streams, all Xbox ADPCM (`sound_preferences.c`:
+  mono 22 kHz 2D and 3D, stereo 22 kHz, stereo 44 kHz), each with up to 4
+  packets of about 186 ms; the inanity buffer (silent, no front mix bin);
+  the loading screen's 4 looping ADPCM tones (`progress_bar.c`), which
+  `dsound_sdl.c` leaves silent.
+- Decoding: each packet becomes floats when the game gives it
+  (`Process`, on the game's thread), so the mixer converts nothing. The
+  IMA decoder runs on float tables (the PPE converts an integer to a float
+  through memory); it equals `dsound_sdl.c`'s integer decoder bit for bit.
+  16-bit PCM is read little-endian, as the map keeps it.
+- Mixing: a thread at priority 1000 (above the game's 1001, as the vblank
+  thread) keeps 2048 frames (43 ms) in the port's ring, in chunks of 256
+  frames (one port block, 5.3 ms), and sleeps 4 ms between passes. Per
+  voice: linear resampling to 48 kHz (`SetFrequency`; a buffer's
+  `SetPitch` is 1/4096 octave from 48 kHz), the volume, the front mix
+  bins, and for 3D voices the distance, pan and I3DL2 direct gain of
+  `dsound_sdl.c`. Gains ramp over a chunk. A soft limit above 0.8.
+- Completion: the mixer only marks packets played; the game's callbacks
+  run in `DirectSoundDoWork` and `Flush` on the game's thread, as in
+  `dsound_sdl.c`.
+- `ps3_host_exit` stops the audio port before the RSX (as the bring-up
+  test).
+- `audio.volume` and `audio.enabled` (`config.toml`) work as on Linux.
+- The log: `DirectSound: the PS3 audio port, 48000 Hz stereo, mixed 43 ms
+  ahead` at the start, then every 10 s the streams and buffers that play,
+  the packets decoded, the mixer's time per chunk, and the port blocks
+  played silent or partial (underruns).
+- PC check (a harness in the session's scratchpad, not in the tree): the
+  decoder against `dsound_sdl.c`'s on 4000 random packets, 4 PCM packets
+  (frame count, 1 kHz pitch, level, callbacks), the resampler against the
+  per-frame double cursor of `dsound_sdl.c` at 7 frequencies (largest
+  difference 1e-4), a flush (1 played, 3 flushed), a 3D pan, the loading
+  tone's loop. All passed.
+- `check`: 0 `r2off`, `.got` 0x2c00.
+- Run 1 (2026-10-05): hardware SUCCESS (Matt, "It works!"). The menu,
+  a10 for about 40 s, then the menu again. Every 10 s line: 0 silent and 0
+  partial port blocks; the mixer took 40 to 114 us on average for a 5333 us
+  chunk (at most 249 us), so about 1 to 2 percent of one PPE thread; up to
+  3 streams played at once. `### ERROR no DirectSound for bink` at the
+  start comes from `bink_null.c` (`BinkSetSoundSystem` fails; no Bink
+  decoder yet), not from DirectSound.
 
 ## Blockers found in the analysis
 

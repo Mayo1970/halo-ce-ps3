@@ -54,10 +54,13 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   about 120 draws a frame, 0 skipped, 13 vertex programs and 15 pixel
   shaders sent a frame. Matt chose runtime microcode. See "G4 summary" and
   GOALS.md ("G4 progress").
-- G5 started (Matt, "Wire that Gamepad in!"). Run 1: the pads work
-  (hardware SUCCESS, Matt). The menu moves with the pad; a profile was made
-  and a10 loaded and ran, at about 9 to 10 frames per second in the level.
-  DirectSound is not started. See GOALS.md ("G5 progress").
+- G5 is done: the pads work (run 1, hardware SUCCESS, Matt). The menu
+  moves with the pad; a profile was made and a10 loaded and ran, at about
+  9 to 10 frames per second in the level. See GOALS.md ("G5 progress").
+- G6 started (Matt, "G6. Go for the sound."). Run 1: the sound works
+  (hardware SUCCESS, Matt): DirectSound on the PS3 audio port
+  (`port/ps3/xbox/dsound_ps3.c`), in the menu and in a10, with 0 underruns.
+  See GOALS.md ("G6 progress").
 - Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
@@ -73,6 +76,9 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     `[ps3] main thread: priority ...` (an error code if lv2 ended it).
   - From G5: `XInput: port M: <buttons>` at each change of the buttons that
     the game gets (`xinput_ps3.c`).
+  - From G6: `DirectSound:` every 10 s (`dsound_ps3.c`): the voices that
+    play, the packets decoded, the mixer's time per chunk, the port blocks
+    played silent or partial.
 
 ## Goal stack
 
@@ -83,8 +89,8 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G2 The Xbox platform layer on the PS3 (kernel, XAPI, files, threads, memory, from `port/linux/src`). The game runs headless to its first map load. | Done 2026-10-05 (hardware SUCCESS, third run) |
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done 2026-10-05 (hardware SUCCESS, run 9, after the audit fixes) |
 | G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
-| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | In progress: the pads work (run 1, hardware SUCCESS); DirectSound not started |
-| G6 First playable level (a10) | Not started |
+| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
+| G6 First playable level (a10) | In progress: the sound works (run 1, hardware SUCCESS) |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
 
 ## G4 summary
@@ -469,7 +475,7 @@ then `./build.sh pkg LOG_IP=<address>`.
 | --- | --- |
 | `Makefile`, `build.sh` | The PS3 build |
 | `port/ps3/src/` | The host layer: the entry point (`ps3_main.c`), `ps3_host.c` (lv2 for the Xbox layer), video, pads, audio, log |
-| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, D3D on the RSX, XInput on the pads (`xinput_ps3.c`), headless DirectSound, network |
+| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, D3D on the RSX, XInput on the pads (`xinput_ps3.c`), DirectSound on the audio port (`dsound_ps3.c`), headless network |
 | `port/ps3/src/ps3_gpu.c`, `ps3_gpu.h` | The RSX back end of D3D (G4) |
 | `port/ps3/src/ps3_rsx_*.c`, `ps3_rsx_program.h` | RSX microcode at run time from NV2A vertex programs and combiners (G4) |
 | `port/ps3/xbox/d3d8_rsx.c` | The D3D 8 device on the RSX (G4), from `d3d8_gl.c` |
@@ -537,3 +543,10 @@ then `./build.sh pkg LOG_IP=<address>`.
   `r2off`, `.got` 0x29c8). Waiting for G5 run 1.
 - 2026-10-05: G5 run 1: the pads work (Matt). From the menu, a new profile
   and a10: the level loads and runs (about 9 to 10 frames per second).
+- 2026-10-05: G6 started (Matt, "G6. Go for the sound."). DirectSound on
+  the PS3 audio port (`dsound_ps3.c`, replaces `dsound_null.c`) is built;
+  a PC check of its decoder and mixer passes; `check` passes (0 `r2off`,
+  `.got` 0x2c00).
+- 2026-10-05: G6 run 1: the sound works (Matt). Menu, a10, menu: 0 silent
+  and 0 partial port blocks; the mixer used 40 to 114 us a 5333 us chunk
+  (at most 249 us), with up to 3 streams.

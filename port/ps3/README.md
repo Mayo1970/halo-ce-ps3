@@ -3,8 +3,8 @@
 The PS3 port builds with PSL1GHT (ppu-gcc 7.2) in the Docker image
 `ps3dev-latest:latest`. The EBOOT links the whole game. It loads the first
 map, swaps the map data to the PS3's byte order, and draws the game with the
-RSX (G4 in `GOALS.md`). The PS3 pads are its Xbox gamepads (G5). It has no
-sound yet.
+RSX (G4 in `GOALS.md`). The PS3 pads are its Xbox gamepads (G5). Its
+DirectSound plays on the PS3 audio port (G6).
 `GOALS.md` in the root folder gives the plan and the blockers.
 
 The code is in three parts:
@@ -12,7 +12,7 @@ The code is in three parts:
 | Folder | Contents | Compiled as |
 | --- | --- | --- |
 | `src/` | The host layer: lv2 and newlib. The entry point, the UDP log, video, pads, audio, and `ps3_host.c`, the lv2 services of the Xbox layer. | LP64, with newlib's own 64-bit `long` |
-| `xbox/` | The Xbox layer on the PS3: kernel, memory, files, Direct3D on the RSX, XInput on the pads, and a headless DirectSound and network. The Linux build's portable units (`port/linux/src`) join it. | The game's ABI: 32-bit `long`, the XDK declarations |
+| `xbox/` | The Xbox layer on the PS3: kernel, memory, files, Direct3D on the RSX, XInput on the pads, DirectSound on the audio port, and a headless network. The Linux build's portable units (`port/linux/src`) join it. | The game's ABI: 32-bit `long`, the XDK declarations |
 | `bringup/` | The G0 bring-up test, without the game | LP64 |
 
 `src/ps3_host.h`, `src/ps3_gpu.h`, `src/ps3_rsx_program.h` and
@@ -28,7 +28,7 @@ because `long` has a different size on each side.
 | `src/ps3_gpu.c` | The RSX for Direct3D: RSX memory, a per-frame scratch in two halves with a backend label fence, render state, programs, textures, draws, and the present (the 640x480 picture 4:3 in the middle of the display). The game's thread takes the RSX from the display thread when it creates its device. |
 | `src/ps3_rsx_vp.c`, `ps3_rsx_fp.c`, `ps3_rsx_asm.c`, `ps3_rsx_program.h` | RSX microcode made at run time: the game's NV2A vertex programs, and its pixel shaders (texture stages and register combiners), encoded as `cgcomp` encodes them. |
 | `src/ps3_input.c` | DualShock 3 and Sixaxis pads on all 7 ports: buttons, sticks and pressures, and the motors. |
-| `src/ps3_audio.c` | One 48 kHz stereo float audio port, fed from a ring by a thread. |
+| `src/ps3_audio.c` | One 48 kHz stereo float audio port, fed from a ring by a thread. `xbox/dsound_ps3.c` opens it, and `ps3_host_exit` stops it. |
 | `src/ps3_posix.c` | The part of `port/linux/src/posix.h` that `msvc_crt.c` calls. |
 | `src/ps3_setjmp.S`, `include/setjmp.h` | A 64-bit `setjmp`/`longjmp` in place of the newlib one, which overflows `jmp_buf`. |
 | `xbox/ps3_platform.h` | Force-included in the Xbox layer, in place of `port/linux/src/platform.h`. |
@@ -39,7 +39,8 @@ because `long` has a different size on each side.
 | `xbox/d3d8_rsx.c` | The Direct3D 8 device on `src/ps3_gpu.c`, from `port/linux/src/d3d8_gl.c`: state, vertex shaders, render targets as RSX surfaces, a texture cache in RSX memory (converted again when the texels change), vertices converted to floats per draw. |
 | `xbox/xbox_texture_layout.c` | The layout of Xbox textures, and their texels for the RSX: A8R8G8B8 in the same order (the RSX swizzles as the NV2A does), DXT blocks as they are. |
 | `xbox/xinput_ps3.c` | XInput on `src/ps3_input.c`: each pad takes the lowest free Xbox port (0 to 3) and keeps it until it disconnects. The game's polls read the pads once a frame. |
-| `xbox/dsound_null.c`, `xnet_null.c` | No sound until the sound part of G5, no network until G7. |
+| `xbox/dsound_ps3.c` | DirectSound on `src/ps3_audio.c`, after `port/linux/src/dsound_sdl.c`: a mixer thread (priority 1000) keeps the port's ring 43 ms ahead. Streams decode each packet (Xbox ADPCM or PCM, little-endian) to floats when the game gives it; the packets complete on the game's thread, in `DirectSoundDoWork` and `Flush`. Buffers loop (the loading screen's tones). 3D voices get the Linux build's distance and pan. |
+| `xbox/xnet_null.c` | No network until G7. |
 | `xbox/port_stubs.c` | The Linux build's services that the PS3 does not have yet: internet play, the PC menus, the high-res HUD and text. |
 
 ## Build
@@ -111,7 +112,7 @@ enter `nc -ul 18194` on that computer. `printf`, `puts` and `putchar` also
 go to the log (`-Wl,--wrap`), and so do the lines of the game's
 `debug.txt`.
 
-## The EBOOT (G5)
+## The EBOOT (G6)
 
 | Part | In the log | On the PS3 |
 | --- | --- | --- |
@@ -122,6 +123,7 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 | Map data | `tag data swapped in N ms: ...` and `structure BSP swapped ...`, with the counts and the errors | |
 | Pads | `[pad] port N connected`; `XInput:` lines: the Xbox port of each pad, the game's open and close, and the buttons the game gets at each change | The D-pad and the left stick move in the menus, CROSS chooses (A), CIRCLE goes back (B) |
 | Drawing | `[gpu] ready`; `Direct3D:` lines: each vertex shader translated, the first pixel shaders, and every 600 frames the draws, the skips and the texture uploads; `[gpu] frame N` every 600 frames: the programs and the scratch use | The game's picture, 4:3 in the middle of the display |
+| Sound | `[aud] port N` at the start; `DirectSound:` every 10 s: the streams and buffers that play, the packets decoded, the mixer's time per 5333 us chunk, and the port blocks played silent or partial (underruns) | The game's sound on the PS3 audio output |
 | Exit | `[ps3] exit 0` | PS button > Quit Game goes back to the XMB |
 | Failure | `EXCEPTION halt` and the call stack: `./build.sh symbols ADDRESSES="..."` names its functions | A red pulse until PS button > Quit Game |
 
