@@ -26,7 +26,7 @@ Rules:
 | G2 The Xbox platform layer on PS3 (kernel, XAPI, files, threads, memory, from `port/linux/src`); the game runs headless to its first map load | Done. Hardware SUCCESS 2026-10-05 on the third run: the game runs headless to the open of `d:\maps\ui.map`, and the XMB exit is clean. See "G2 progress". |
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done. Hardware SUCCESS 2026-10-05 on run 9: 1800 frames of the main menu on the swapped `ui.map`, after the fixes of 2 halts and of the 43 audit mismatches. See "G3 progress". |
 | G4 Direct3D 8 on the RSX: the main menu shows | Done. Hardware SUCCESS 2026-10-05 on run 5: the main menu at 30 frames per second, after the fixes of an inverted front face and a depth clear of 0. See "G4 progress". |
-| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Not started |
+| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | In progress. The pads (XInput) work: hardware SUCCESS 2026-10-05 on run 1. DirectSound is not started. See "G5 progress". |
 | G6 First playable level (a10) | Not started |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
 
@@ -331,6 +331,48 @@ key (blocker 4). The encoders follow PSL1GHT's cgcomp
     120 draws a frame, 0 skipped, 0 dropped.
 - Not proven on hardware yet: the relative constant bit, `UNRM` textures,
   stencil.
+
+## G5 progress
+
+Matt (2026-10-05): start G5 with the gamepad ("Wire that Gamepad in!").
+DirectSound is not started.
+
+- `port/ps3/xbox/xinput_ps3.c` replaces `xinput_null.c`: XInput on the pads
+  of `port/ps3/src/ps3_input.c`.
+- Ports: a pad takes the lowest free Xbox port (0 to 3) when it connects,
+  and keeps it until it disconnects. A lone pad is port 0 on any PS3 port,
+  and the ports of the other players do not move. If a port loses its pad
+  and gets a new one in the same poll, the game sees a removal and an
+  insertion.
+- Polling: the game calls `XGetDeviceChanges` for the gamepads once a frame
+  on its thread (`input_frame_begin`). The pads are polled there, so all
+  pad calls run on one thread. `XInputSetState` comes from the game's input
+  thread: it only keeps the motor speeds, and the next poll sends them.
+- Mapping (as `xinput_sdl.c`):
+
+  | DS3 | Xbox |
+  | --- | --- |
+  | CROSS, CIRCLE, SQUARE, TRIANGLE | A, B, X, Y |
+  | L1, R1 | White, Black |
+  | L2, R2 | Left trigger, right trigger |
+  | D-pad, left stick, right stick | D-pad, left stick, right stick |
+  | L3, R3 | Left stick click, right stick click |
+  | START, SELECT | Start, Back |
+
+- Analog buttons: 255 while held, else 0. The game reads them only through
+  its press thresholds (`input_xbox.c`), so the pressures are not used.
+- Sticks: 0 to 255 (128 at the center) become -32768 to 32767, y up. The
+  game applies its own dead zone (9000).
+- Rumble: the left motor's speed / 256 drives the large motor. The small
+  motor (only on or off) runs from half of the right motor's speed. Sent
+  only on a change. Not tested: the menu does not rumble (G6).
+- The log: `XInput: PS3 pad N is port M`, `port M open`, and
+  `XInput: port M: <buttons>` at each change of the buttons the game gets.
+- Run 1 (2026-10-05): hardware SUCCESS for the pads (Matt). The D-pad, A,
+  B and Start reached the game; a new profile, then a10 from the menu. In
+  a10: the tag data and the structure BSPs swap with 0 errors, and the
+  level runs at about 9 to 10 frames per second (the heartbeat). For G6:
+  `checksum failed on persistent storage` once at the level start.
 
 ## Blockers found in the analysis
 

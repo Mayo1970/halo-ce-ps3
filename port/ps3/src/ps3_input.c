@@ -116,3 +116,16 @@ const struct ps3_pad *ps3_input_pad(int port)
 {
 	return &pads[port];
 }
+
+/* the motors run until the next call (ioQuake3-PS3 PS3_SetRumble) */
+void ps3_input_rumble(int port, int large, int small)
+{
+	padActParam act;
+
+	if (!initialized || port < 0 || port >= PS3_PAD_PORTS)
+		return;
+	memset(&act, 0, sizeof(act));
+	act.small_motor = small ? 1 : 0;
+	act.large_motor = (u8)(large < 0 ? 0 : large > 255 ? 255 : large);
+	ioPadSetActDirect(port, &act);
+}

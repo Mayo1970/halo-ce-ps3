@@ -54,8 +54,10 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   about 120 draws a frame, 0 skipped, 13 vertex programs and 15 pixel
   shaders sent a frame. Matt chose runtime microcode. See "G4 summary" and
   GOALS.md ("G4 progress").
-- Next: G5 (XInput on the pads and DirectSound on the audio port), after
-  Matt confirms it.
+- G5 started (Matt, "Wire that Gamepad in!"). Run 1: the pads work
+  (hardware SUCCESS, Matt). The menu moves with the pad; a profile was made
+  and a10 loaded and ran, at about 9 to 10 frames per second in the level.
+  DirectSound is not started. See GOALS.md ("G5 progress").
 - Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
@@ -69,6 +71,8 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     thread's last wait site; `[host] thread ... blocked` for lock and
     condition waits over 2 s (`ps3_host.c`). At the first stall:
     `[ps3] main thread: priority ...` (an error code if lv2 ended it).
+  - From G5: `XInput: port M: <buttons>` at each change of the buttons that
+    the game gets (`xinput_ps3.c`).
 
 ## Goal stack
 
@@ -79,7 +83,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G2 The Xbox platform layer on the PS3 (kernel, XAPI, files, threads, memory, from `port/linux/src`). The game runs headless to its first map load. | Done 2026-10-05 (hardware SUCCESS, third run) |
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done 2026-10-05 (hardware SUCCESS, run 9, after the audit fixes) |
 | G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
-| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Not started |
+| G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | In progress: the pads work (run 1, hardware SUCCESS); DirectSound not started |
 | G6 First playable level (a10) | Not started |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
 
@@ -465,7 +469,7 @@ then `./build.sh pkg LOG_IP=<address>`.
 | --- | --- |
 | `Makefile`, `build.sh` | The PS3 build |
 | `port/ps3/src/` | The host layer: the entry point (`ps3_main.c`), `ps3_host.c` (lv2 for the Xbox layer), video, pads, audio, log |
-| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, D3D on the RSX, headless DirectSound, XInput, network |
+| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, D3D on the RSX, XInput on the pads (`xinput_ps3.c`), headless DirectSound, network |
 | `port/ps3/src/ps3_gpu.c`, `ps3_gpu.h` | The RSX back end of D3D (G4) |
 | `port/ps3/src/ps3_rsx_*.c`, `ps3_rsx_program.h` | RSX microcode at run time from NV2A vertex programs and combiners (G4) |
 | `port/ps3/xbox/d3d8_rsx.c` | The D3D 8 device on the RSX (G4), from `d3d8_gl.c` |
@@ -528,3 +532,8 @@ then `./build.sh pkg LOG_IP=<address>`.
   0. Both fixed; the diagnostics are removed. Run 5 is built.
 - 2026-10-05: G4 run 5: hardware SUCCESS. The main menu draws on the RSX at
   30 frames per second. G4 done.
+- 2026-10-05: G5 started with the gamepad (Matt). XInput on the PS3 pads
+  (`xinput_ps3.c`, `ps3_input_rumble`) is built; `check` passes (0
+  `r2off`, `.got` 0x29c8). Waiting for G5 run 1.
+- 2026-10-05: G5 run 1: the pads work (Matt). From the menu, a new profile
+  and a10: the level loads and runs (about 9 to 10 frames per second).
