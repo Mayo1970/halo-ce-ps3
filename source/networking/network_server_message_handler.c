@@ -1,248 +1,5 @@
-/*
-NETWORK_SERVER_MESSAGE_HANDLER.C
-
-symbols in this file:
-0011E890 0090:
-	_code_0011e890 (0000)
-0011E920 00a0:
-	_code_0011e920 (0000)
-0011E9C0 0090:
-	_code_0011e9c0 (0000)
-0011EA50 0090:
-	_code_0011ea50 (0000)
-0011EAE0 00a0:
-	_code_0011eae0 (0000)
-0011EB80 00a0:
-	_code_0011eb80 (0000)
-0011EC20 0020:
-	_code_0011ec20 (0000)
-0011EC40 0040:
-	_network_game_server_send_message_to_machine (0000)
-0011EC80 0110:
-	_network_game_server_send_message_to_all_machines (0000)
-0011ED90 0090:
-	_network_game_server_send_player_joined_info_ingame (0000)
-0011EE20 00c0:
-	_network_game_server_send_game_data_pregame (0000)
-0011EEE0 0240:
-	_code_0011eee0 (0000)
-0011F120 00c0:
-	_code_0011f120 (0000)
-0011F1E0 03f0:
-	_code_0011f1e0 (0000)
-0011F5D0 00c0:
-	_code_0011f5d0 (0000)
-0011F690 00c0:
-	_code_0011f690 (0000)
-0011F750 00e0:
-	_code_0011f750 (0000)
-0011F830 00d0:
-	_code_0011f830 (0000)
-0011F900 00d0:
-	_code_0011f900 (0000)
-0011F9D0 00f0:
-	_code_0011f9d0 (0000)
-0011FAC0 0310:
-	_network_game_server_handle_datagram (0000)
-0011FDD0 0400:
-	_network_game_server_handle_client_message (0000)
-00286F00 005a:
-	??_C@_0FK@KMJJAKFL@failed?5to?5handle?5a?5message_clien@ (0000)
-00286F60 0043:
-	??_C@_0ED@BONJCMOD@server?5failed?5to?5decode?5a?5messag@ (0000)
-00286FA8 0065:
-	??_C@_0GF@BGPKJGEH@failed?5to?5handle?5a?5message_type_@ (0000)
-00287010 004e:
-	??_C@_0EO@HMJBCLNP@server?5failed?5to?5decode?5a?5messag@ (0000)
-00287060 0056:
-	??_C@_0FG@LPGCCINN@failed?5to?5handle?5a?5message_clien@ (0000)
-002870B8 0037:
-	??_C@_0DH@MMOKOPCN@server?5failed?5to?5decode?5a?5messag@ (0000)
-002870F0 005e:
-	??_C@_0FO@NHCIMMDF@failed?5to?5handle?5a?5message_clien@ (0000)
-00287150 004a:
-	??_C@_0EK@ONPDOJKK@server?5failed?5to?5decode?5a?5messag@ (0000)
-002871A0 0068:
-	??_C@_0GI@DLKCJODI@failed?5to?5handle?5a?5message_clien@ (0000)
-00287208 004f:
-	??_C@_0EP@DAOANLDM@server?5failed?5to?5decode?5a?5messag@ (0000)
-00287258 0033:
-	??_C@_0DD@FJKDMFNA@server?5failed?5to?5remove?5a?5networ@ (0000)
-00287290 005b:
-	??_C@_0FL@NDHDFCNK@failed?5to?5handle?5a?5message_clien@ (0000)
-002872F0 0045:
-	??_C@_0EF@MJLJMBIP@network_game_server_switch_machi@ (0000)
-00287338 0059:
-	??_C@_0FJ@PEAAKLFN@network_game_server_write?$CI?$CJ?5fail@ (0000)
-00287394 0027:
-	??_C@_0CH@EEEHHOGO@message_length?$DM?$DNsizeof?$CImessage_b@ (0000)
-002873BC 0012:
-	??_C@_0BC@FDHBPMJE@server?5?$CG?$CG?5message?$AA@ (0000)
-002873D0 003b:
-	??_C@_0DL@ICDCPLFI@c?3?2halo?2SOURCE?2networking?2networ@ (0000)
-0028740C 003c:
-	??_C@_0DM@MOMFHJIG@failed?5to?5create?5a?5message_serve@ (0000)
-00287448 0072:
-	??_C@_0HC@FGJDKKLC@network_game_server_send_message@ (0000)
-002874C0 0058:
-	??_C@_0FI@LBJCENJB@failed?5to?5handle?5a?5message_serve@ (0000)
-00287518 003f:
-	??_C@_0DP@CCCLFFGC@failed?5to?5create?5a?5message_serve@ (0000)
-00287558 004b:
-	??_C@_0EL@NFHCHAEG@failed?5to?5send?5message_server_ga@ (0000)
-002875A4 0039:
-	??_C@_0DJ@PCNJDMDI@failed?5to?5create?5a?5message_serve@ (0000)
-002875E0 0054:
-	??_C@_0FE@HMKEDIDF@network_game_server_write?$CI?$CJ?5fail@ (0000)
-00287634 002b:
-	??_C@_0CL@FOJJMNII@server?5?$CG?$CG?5source_address?5?$CG?$CG?5clie@ (0000)
-00287660 002f:
-	??_C@_0CP@JCCANCCC@failed?5to?5create?5a?5message_serve@ (0000)
-00287690 0043:
-	??_C@_0ED@LGNNJLKJ@network_game_server_write?$CI?$CJ?5fail@ (0000)
-002876D8 0042:
-	??_C@_0EC@MGMKMMHI@server?5failed?5to?5decode?5a?5messag@ (0000)
-0028771C 003b:
-	??_C@_0DL@JAHACCAG@failed?5to?5create?5a?5message_serve@ (0000)
-00287758 0043:
-	??_C@_0ED@PLLDKIEI@client?5machine?5?8?$CFs?8?5?$EA?$CFs?5tried?5to@ (0000)
-002877A0 0041:
-	??_C@_0EB@ONCPMINI@client?5machine?5?8?$CFs?8?5?$EA?$CFs?5tried?5to@ (0000)
-002877E8 0043:
-	??_C@_0ED@DKNIPKFL@network_game_server_write?$CI?$CJ?5fail@ (0000)
-00287830 0044:
-	??_C@_0EE@MGEHHOCB@server?5failed?5to?5accept?5valid?5cl@ (0000)
-00287878 0075:
-	??_C@_0HF@HFOMEJBD@network_game_server_send_game_da@ (0000)
-002878F0 0039:
-	??_C@_0DJ@CKOCAMEF@sent?5_message_type_server_machin@ (0000)
-00287930 0064:
-	??_C@_0GE@MLODGBHN@network_game_server_write?$CI?$CJ?5fail@ (0000)
-00287994 0029:
-	??_C@_0CJ@EPMEBAJK@network_machine_is_valid?$CIclient_@ (0000)
-002879C0 0040:
-	??_C@_0EA@HPKAIHHK@server?5refused?5client?5?8?$CFs?8?5becau@ (0000)
-00287A00 000d:
-	??_C@_0N@MPMCKMFC@d?3?2hosts?4txt?$AA@ (0000)
-00287A10 002d:
-	??_C@_0CN@LBHCOBFK@ignoring?5redundant?5join?5request?5@ (0000)
-00287A40 0062:
-	??_C@_0GC@IBIEHGFG@failed?5to?5handle?5a?5message_clien@ (0000)
-00287AA8 004b:
-	??_C@_0EL@BFEPJEFO@server?5failed?5to?5decode?5a?5messag@ (0000)
-00287AF8 0070:
-	??_C@_0HA@DHHGOECG@server?5failed?5to?5add?5a?5network?5p@ (0000)
-00287B68 0072:
-	??_C@_0HC@LODCIJJJ@server?5failed?5to?5send?5pregame?5ga@ (0000)
-00287BE0 0065:
-	??_C@_0GF@EKICMCEL@failed?5to?5handle?5a?5message_clien@ (0000)
-00287C48 004e:
-	??_C@_0EO@JJCAGDLG@server?5failed?5to?5decode?5a?5messag@ (0000)
-00287C98 0076:
-	??_C@_0HG@LNIKCCLC@server?5failed?5to?5remove?5a?5networ@ (0000)
-00287D10 0075:
-	??_C@_0HF@KPAHGLDA@server?5failed?5to?5send?5pregame?5ga@ (0000)
-00287D88 0058:
-	??_C@_0FI@HEMIANGD@failed?5to?5handle?5a?5message_clien@ (0000)
-00287DE0 0041:
-	??_C@_0EB@EACNFEBF@server?5failed?5to?5decode?5a?5messag@ (0000)
-00287E28 0075:
-	??_C@_0HF@CJBDOMOO@network_game_server_adjust_machi@ (0000)
-00287EA0 0068:
-	??_C@_0GI@IHEHKNKB@server?5failed?5to?5send?5pregame?5ga@ (0000)
-00287F08 0036:
-	??_C@_0DG@ECGMMKBK@server?5received?5machine?5settings@ (0000)
-00287F40 005f:
-	??_C@_0FP@BKMGBKPC@failed?5to?5handle?5a?5message_clien@ (0000)
-00287FA0 0048:
-	??_C@_0EI@NDLJFMCJ@server?5failed?5to?5decode?5a?5messag@ (0000)
-00287FE8 006b:
-	??_C@_0GL@MGDAOAGD@network_game_update_player?$CI?$CJ?5fai@ (0000)
-00288058 006f:
-	??_C@_0GP@IGEJNGEG@server?5failed?5to?5send?5pregame?5ga@ (0000)
-002880C8 0028:
-	??_C@_0CI@NAMNDBJF@server?5received?5updated?5player?5s@ (0000)
-002880F0 006a:
-	??_C@_0GK@PIEMGCFK@failed?5to?5handle?5a?5message_clien@ (0000)
-00288160 004b:
-	??_C@_0EL@FGPNNAHJ@server?5failed?5to?5decode?5a?5messag@ (0000)
-002881B0 0080:
-	??_C@_0IA@GMAELFDC@network_game_server_remove_machi@ (0000)
-00288230 0072:
-	??_C@_0HC@JPOEIOK@server?5failed?5to?5send?5pregame?5ga@ (0000)
-002882A8 0061:
-	??_C@_0GB@BICEKEIA@failed?5to?5handle?5a?5message_clien@ (0000)
-00288310 004d:
-	??_C@_0EN@FBHIPCPE@server?5failed?5to?5decode?5a?5messag@ (0000)
-00288360 003a:
-	??_C@_0DK@HGNCDCGJ@server?5received?5a?5malformed?1dama@ (0000)
-002883A0 0047:
-	??_C@_0EH@HDCJJGCF@server?5received?5low?9level?5error?5@ (0000)
-002883E8 0046:
-	??_C@_0EG@NGIBKKFK@server?5received?5a?5bad?5message?5ty@ (0000)
-00288430 003f:
-	??_C@_0DP@DJCDAEKP@failed?5to?5decode?5a?5message_clien@ (0000)
-00288470 003e:
-	??_C@_0DO@EMEMPFEN@server?5failed?5to?5advertise?5game?5@ (0000)
-002884B0 002e:
-	??_C@_0CO@IFNMPAGP@failed?5to?5decode?5a?5message_clien@ (0000)
-002884E0 0026:
-	??_C@_0CG@PBGOHBCL@server?5failed?5to?5handle?5a?5client@ (0000)
-00288508 0042:
-	??_C@_0EC@OIEIALKJ@ignoring?5a?5message_client_game_u@ (0000)
-00288550 0062:
-	??_C@_0GC@EMAKPFP@failed?5to?5handle?5a?5message_clien@ (0000)
-002885B4 0035:
-	??_C@_0DF@NPLDDCCG@failed?5to?5decode?5a?5message_clien@ (0000)
-002885F0 0046:
-	??_C@_0EG@DEJFBBLL@server?5received?5datagram?5with?5an@ (0000)
-00288638 004c:
-	??_C@_0EM@NPFBANHI@server?5received?5a?5datagram?5with?5@ (0000)
-00288684 003c:
-	??_C@_0DM@HFFMPMPG@server?5received?5a?5datagram?5with?5@ (0000)
-002886C0 0081:
-	??_C@_0IB@OPFACLKA@server?5?$CG?$CG?5message?5?$CG?$CG?5source_addr@ (0000)
-00288744 003a:
-	??_C@_0DK@NEANDKEL@server?5received?5a?5malformed?1dama@ (0000)
-00288780 0047:
-	??_C@_0EH@PCKBOEPO@server?5received?5low?9level?5error?5@ (0000)
-002887C8 0046:
-	??_C@_0EG@GPPJDFA@server?5received?5a?5bad?5message?5ty@ (0000)
-00288810 003e:
-	??_C@_0DO@LBJNGIAJ@bad?5or?5inappropriate?5packet?5type@ (0000)
-00288850 004e:
-	??_C@_0EO@OPDINPHL@network_game_server_handle_messa@ (0000)
-002888A0 0045:
-	??_C@_0EF@FHPBCOMI@network_game_server_handle_messa@ (0000)
-002888E8 0052:
-	??_C@_0FC@HBMALEKE@network_game_server_handle_messa@ (0000)
-00288940 0050:
-	??_C@_0FA@OHGBEJHJ@network_game_server_handle_messa@ (0000)
-00288990 004d:
-	??_C@_0EN@IOBKAAMM@network_game_server_handle_messa@ (0000)
-002889E0 003a:
-	??_C@_0DK@DJBGFGMF@network_game_server_handle_messa@ (0000)
-00288A20 0046:
-	??_C@_0EG@KNLLMEKN@network_game_server_handle_messa@ (0000)
-00288A68 004b:
-	??_C@_0EL@IBNDPBLB@network_game_server_handle_messa@ (0000)
-00288AB8 0044:
-	??_C@_0EE@KLMGADOJ@network_game_server_handle_messa@ (0000)
-00288B00 0051:
-	??_C@_0FB@PPCOJHGP@network_game_server_handle_messa@ (0000)
-00288B58 004e:
-	??_C@_0EO@EEEMKLCF@network_game_server_handle_messa@ (0000)
-00288BA8 0045:
-	??_C@_0EF@FHABLMKA@network_game_server_handle_messa@ (0000)
-00288BF0 0048:
-	??_C@_0EI@INBBOEGP@an?5un?9validated?5client?5sent?5some@ (0000)
-00288C38 0044:
-	??_C@_0EE@EPDDKPMF@server?5received?5a?5client?5message@ (0000)
-00288C7C 0032:
-	??_C@_0DC@DAGHEIED@server?5received?5client?5message?5w@ (0000)
-00288CB0 0054:
-	??_C@_0FE@BPJHKGCF@server?5?$CG?$CG?5machine?5?$CG?$CG?5message?5?$CG?$CG?5@ (0000)
-*/
+/* NETWORK_SERVER_MESSAGE_HANDLER.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/networking/network_server_message_handler.c. */
 
 
 /* ---------- headers */
@@ -424,8 +181,12 @@ struct message_client_settings_request
 
 struct message_client_game_start_request
 {
-	long countdown_time;
+	/* the packet holds one short at offset 0 (network_messages.c), not the long the Xbox read the low half of */
+	short countdown_time;
+	short pad;
 };
+typedef char message_client_game_start_request_size_assert[
+	sizeof(struct message_client_game_start_request) == 0x04 ? 1 : -1];
 
 struct message_client_graceful_game_exit_pregame
 {
@@ -556,10 +317,8 @@ static boolean network_game_server_handle_message_client_switch_to_pregame(
 
 /* ---------- private code */
 
-/* port: a name a machine sends (its machine's, or a player's: they come
-from the wire, from anyone joining by any link) kept to what draws as one
-line of text (player_name_clean); one with nothing left that the host's
-ban command can type the default given */
+/* port: a name from the wire (a machine's or a player's, from anyone joining) kept to what draws as one line
+of text (player_name_clean); one with nothing left that the host's ban command can type gets the default */
 static void network_game_server_clean_name(
 	wchar_t *name,
 	long count,
@@ -618,9 +377,8 @@ static boolean network_game_server_player_name_taken(
 	return FALSE;
 }
 
-/* port: a player's name from the wire made one the host's ban command can
-always single out: kept to text that draws, with something it can type
-(else "Player"), and, the same as another player's, numbered ("Player 2") */
+/* port: a player's name from the wire made one the host's ban command can always single out: text that draws,
+with something it can type (else "Player"), numbered when another player has it ("Player 2") */
 static void network_game_server_clean_player_name(
 	struct network_game_server *server,
 	struct network_player *player,
@@ -665,9 +423,8 @@ static boolean network_game_server_write(
 		reliable);
 }
 
-/* port: whether a line about a stray datagram (which anyone may send, as
-fast as they like) goes in the log: at most one a second, with how many were
-left out (the host writes its log a line at a time) */
+/* port: whether a line about a stray datagram (anyone may send them, as fast as they like) is logged: at most
+one a second, with how many were left out (the host writes its log a line at a time) */
 static boolean network_game_server_datagram_event_logged(
 	void)
 {
@@ -838,9 +595,8 @@ boolean network_distributed_server_send_to_machine(
 	connection = network_game_server_get_client_connection(machine);
 	if (!connection || !network_connection_active(connection))
 		return FALSE;
-	/* from the game's public datagram endpoint (the one clients send
-	their game updates to) to the client's, at the address its
-	connection comes from (the write swaps the header in place) */
+	/* from the game's public datagram endpoint (where clients send their game updates) to the client's, at the
+	address its connection comes from (the write swaps the header in place) */
 	network_connection_get_address(connection, &address, NULL);
 	address.port = NETWORK_GAME_CLIENT_PORT;
 	csmemcpy(buffer, message, size);
@@ -995,10 +751,8 @@ boolean network_game_server_send_player_joined_info_ingame(
 	return FALSE;
 }
 
-/* With up to 128 machines, sending the whole settings record (13 KB) to every
-machine on each lobby change would flood the network while a lobby fills, so
-changes are collected and sent at most this often; the server's pregame idle
-sends what is pending. */
+/* The 13 KB settings record sent to up to 128 machines on each lobby change would flood the network as a lobby
+fills: changes are collected and sent at most this often (the server's pregame idle sends what is pending). */
 enum
 {
 	NETWORK_GAME_SETTINGS_UPDATE_INTERVAL = MILLISECONDS_PER_SECOND / 4,
@@ -1021,9 +775,8 @@ boolean network_game_server_send_game_settings_to_all_machines(
 		0x1C8,
 		server);
 
-	/* every piece goes out even if one fails for a machine: the others
-	would otherwise keep the old settings (a machine whose connection failed
-	is closed, and is skipped when the update is sent again) */
+	/* every piece goes out even if one fails for a machine, or the others would keep the old settings
+	(a machine whose connection failed is closed, and skipped when the update is sent again) */
 	for (offset = 0; offset < game_size; offset += sizeof(message.data))
 	{
 		void *encoded_message;
@@ -1105,9 +858,8 @@ boolean network_game_server_handle_client_message(
 	word message_type;
 	byte packet_type;
 
-	/* port: the size comes from the wire, and an assert is no check (an
-	empty message read its packet type from before the buffer): the machine
-	that sent it is dropped */
+	/* port: the size comes from the wire, and an assert is no check (an empty message read its packet type
+	from before the buffer): the machine that sent it is dropped */
 	if (message_buffer_size <= (short)sizeof(message_header) ||
 		message_buffer_size != GET_MESSAGE_SIZE(*message))
 	{
@@ -1465,9 +1217,8 @@ boolean network_game_server_handle_datagram(
 						break;
 
 					case _message_client_game_update:
-						/* (ten times a second from every machine in the game, and
-						from those still in it as it ends: one not in the game, or
-						not now, is dropped without a line in the log for each) */
+						/* (ten times a second from every machine in the game, and from those still in it as it ends:
+						one not in the game, or not now, is dropped without a line in the log for each) */
 						if (network_game_server_get_state(server, NULL) == _network_game_server_state_ingame)
 						{
 							struct network_game_server_client_machine *client_machine =
@@ -1600,9 +1351,8 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 	struct message_client_broadcast_game_search *client_message)
 {
 	boolean result = TRUE;
-	/* port: the advertisement is broadcast (to every internet play peer
-	too): one each so often answers every machine searching, and a flood of
-	searches no more */
+	/* port: the advertisement is broadcast (to every internet play peer too): one each so often answers every
+	searching machine, and a flood of searches gets no more */
 	static unsigned long last_advertised_time = 0;
 	unsigned long now = system_milliseconds();
 
@@ -1663,9 +1413,8 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 				advertisement.flags |= FLAG(_game_advertisement_oddball_variant_bit);
 			}
 
-			/* the native builds' network version and netcode (a client
-			refuses a host of another version, or of the lockstep netcode
-			older builds had: network_client_manager.c) */
+			/* the native builds' network version and netcode (a client refuses a host of another version, or of
+			the lockstep netcode older builds had: network_client_manager.c) */
 			advertisement.reserved[HALO_PORT_ADVERTISED_VERSION_OFFSET] = (byte)(HALO_PORT_NETWORK_VERSION & 0xFF);
 			advertisement.reserved[HALO_PORT_ADVERTISED_VERSION_OFFSET + 1] = (byte)(HALO_PORT_NETWORK_VERSION >> 8);
 			advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] =
@@ -1794,15 +1543,13 @@ static boolean network_game_server_handle_message_client_join_game_request(
 		{
 			struct transport_address source_address;
 			wchar_t machine_name[MAXIMUM_MACHINE_NAME_LENGTH];
-			/* port: a lobby with no player slot free (its machines' players
-			fill it) is full: a machine that joined could add none, and held
-			the countdown for ever */
+			/* port: a lobby with no player slot free (its machines' players fill it) is full: a machine that
+			joined could add none, and held the countdown for ever */
 			boolean full = network_game_server_get_state(server, NULL) == _network_game_server_state_pregame &&
 				!network_game_has_free_player_slot(network_game_server_get_game(server));
 
-			/* port: its hardware id, as it tells it: hex only (anything else
-			left out), no more than its field; the host logs it, and refuses
-			one it banned (network_game_server_accept_client_machine_into_game) */
+			/* port: its hardware id as it tells it, hex only (anything else left out), no more than its field; the
+			host logs it, and refuses one it banned (network_game_server_accept_client_machine_into_game) */
 			{
 				char hardware_id[sizeof(join_game_request.hardware_id) + 1];
 
@@ -1834,9 +1581,8 @@ static boolean network_game_server_handle_message_client_join_game_request(
 					join_game_token,
 					sizeof(join_game_token)))
 				{
-					/* (the Xbox game refused a machine not named in the
-					development kit's d:\hosts.txt: a stray file of that name
-					on a PC refused machines) */
+					/* (the Xbox game refused a machine not named in the development kit's d:\hosts.txt:
+					a stray file of that name on a PC refused machines) */
 					if (network_game_server_accept_client_machine_into_game(server, server_client_machine))
 					{
 						struct message_server_machine_accepted acceptance;
@@ -1855,9 +1601,8 @@ static boolean network_game_server_handle_message_client_join_game_request(
 							0x2CE,
 							network_machine_is_valid(client_machine));
 
-						/* port: a machine joining the game in progress is named
-						by its join (its settings request, which names a machine
-						in the lobby, is refused in game) */
+						/* port: a machine joining the game in progress is named by its join (its settings
+						request, which names a machine in the lobby, is refused in game) */
 						if (late_join)
 							csmemcpy(client_machine->name, machine_name, sizeof(client_machine->name));
 
@@ -2106,9 +1851,8 @@ static boolean network_game_server_handle_message_client_add_player_request_preg
 			network_event("server failed to decode a message_client_add_player_request_pregame packet");
 		}
 	}
-	/* a machine joining the game in progress: its players are added as in
-	game (network_game_server_start_late_joiner then starts it; one that
-	cannot, the game full, is refused there) */
+	/* a machine joining the game in progress: its players are added as in game (network_game_server_start_late_joiner
+	then starts it; one that cannot, the game full, is refused there) */
 	else if (network_game_server_get_state(server, NULL) == _network_game_server_state_ingame &&
 		!network_game_server_client_machine_is_loaded(server, client_machine))
 	{
@@ -2279,10 +2023,8 @@ static boolean network_game_server_handle_message_client_player_settings_request
 			struct network_game *game = network_game_server_get_game(server);
 			long machine_index;
 
-			/* port: a machine's own player, of its slot (the settings come
-			from the wire, and the Xbox game took any machine's, and wrote a
-			slot out of the list over the machines), with a name that ends,
-			and on a team of the game's: else the one the host has it on */
+			/* port: a machine's own player, of its slot, with a name that ends, on a team of the game's (else its team on
+			the host); settings come from the wire: the Xbox game took any machine's, and wrote a slot out of the list over the machines */
 			network_game_server_get_client_machine(server, client_machine, &machine_index);
 			network_game_server_clean_player_name(server, &player,
 				VALID_INDEX(player.player_list_index, MAXIMUM_NUMBER_OF_PLAYERS) ? player.player_list_index : NONE);
@@ -2348,13 +2090,10 @@ static boolean network_game_server_handle_message_client_game_start_request(
 			&packet_version,
 			_network_game_packet_class_client_pregame))
 		{
-			/* (a short on the wire: the rest of the long is not written) */
-			short countdown_event = (short)game_start_request.countdown_time;
+			short countdown_event = game_start_request.countdown_time;
 
-			/* port: the pregame screen's faster and slower, from any machine;
-			to stop the countdown or start at once (a script's), the host's own
-			(the Xbox game took any event from any machine, and a machine
-			could hold the lobby or skip the countdown) */
+			/* port: faster and slower from any machine, stop and start-at-once (a script's) from the host's own only
+			(the Xbox game took any event from any machine, so one could hold the lobby or skip the countdown) */
 			if ((countdown_event == _network_game_server_countdown_event_player_left &&
 					network_game_server_client_machine_may_slow_countdown(server, client_machine)) ||
 				countdown_event == _network_game_server_countdown_event_player_joined ||

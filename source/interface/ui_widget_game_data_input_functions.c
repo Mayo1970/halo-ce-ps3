@@ -222,12 +222,14 @@ struct persistent_game_data_info_view
 
 struct single_player_level_entry
 {
-	char const *map_name;
+	char const *HALO_PTR32 map_name;
 	boolean available;
 	boolean completion_marker;
 	boolean difficulty_marker;
 	boolean cooperative_marker;
 };
+typedef char single_player_level_entry_size_assert[
+	sizeof(struct single_player_level_entry) == 0x8 ? 1 : -1];
 
 struct cached_player_profile_entry
 {
@@ -341,6 +343,7 @@ static ui_widget_game_data_function game_data_input_function_list[41];
 
 extern struct persistent_game_data_info_view persistant_game_data_info;
 extern struct single_player_level_entry single_player_level_data[10];
+typedef char single_player_level_data_size_assert[sizeof(single_player_level_data) == 0x50 ? 1 : -1];
 extern struct cached_player_profile_entry cached_player_profile[3];
 extern struct cached_variant_profile_entry cached_variant_profile[3];
 

@@ -1,8 +1,4 @@
-/*
-STRUCTURE_BSP_DEFINITIONS.H
-
-header included in hcex build.
-*/
+/* STRUCTURE_BSP_DEFINITIONS.H: header included in hcex build. */
 
 #ifndef __STRUCTURE_BSP_DEFINITIONS_H
 #define __STRUCTURE_BSP_DEFINITIONS_H
@@ -81,11 +77,8 @@ struct structure_cluster_runtime_decals
 	byte unused2[0x58];
 };
 
-/*
- * The January scenario code indexes this block with a 0x68-byte stride and
- * reads the background-sound palette index at +0x4.  The surrounding fields
- * remain unnamed until independently evidenced.
- */
+/* The January scenario code indexes this block with a 0x68-byte stride and reads the background-sound
+palette index at +0x4; the other fields stay unnamed until independently evidenced. */
 struct structure_cluster
 {
 	short sky_index;
@@ -109,10 +102,8 @@ typedef char structure_cluster_weather_offset_assert[
 typedef char structure_cluster_predicted_resources_offset_assert[
 	offsetof(struct structure_cluster, predicted_resources) == 0x28 ? 1 : -1];
 
-/*
- * The January scenario code indexes this palette with a 0x74-byte stride and
- * resolves the looping-sound reference at +0x20.
- */
+/* The January scenario code indexes this palette with a 0x74-byte stride and resolves the looping-sound
+reference at +0x20. */
 struct structure_background_sound_palette_entry
 {
 	byte unused0[0x20];
@@ -136,8 +127,14 @@ typedef char structure_sound_environment_palette_entry_size_assert[
 struct structure_runtime_decal
 {
 	real_point3d position;
+#ifdef __BIG_ENDIAN__
+	/* port: the low byte of the tag's short index, which a big-endian short keeps last */
+	byte unused;
+	byte palette_index;
+#else
 	byte palette_index;
 	byte unused;
+#endif
 	char yaw;
 	char pitch;
 };

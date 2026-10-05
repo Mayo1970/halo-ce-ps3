@@ -280,6 +280,15 @@ static void main_game_render(
 
 /* ---------- globals */
 
+#ifdef HALO_PS3
+/* port: the main loop's place and passes, for the PS3's heartbeat (port/ps3/xbox/xbox_kernel.c) */
+volatile long ps3_main_loop_step = 0;
+volatile unsigned long ps3_main_loop_count = 0;
+#define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
+#else
+#define PS3_MAIN_STEP(step) ((void)0)
+#endif
+
 short global_difficulty_level = 1;
 short player_spawn_count = 1;
 boolean global_frame_rate_throttle = TRUE;
@@ -307,6 +316,10 @@ boolean debug_frame_rate = FALSE;
 boolean display_framerate = FALSE;
 boolean display_vblank_deltas = FALSE;
 boolean display_precache_progress = FALSE;
+#ifdef HALO_PS3
+/* port: pack(1) lets it start at an odd address, and the PPE faults on its misaligned floats */
+__declspec(align(8))
+#endif
 struct _screenshot_and_framerate_globals global_screenshot_count = { 0 };
 boolean debug_render_freeze;
 
@@ -686,18 +699,25 @@ void main_menu_unload(
 void main_menu_load(
 	void)
 {
+	PS3_MAIN_STEP(100);
 	if (!main_globals.main_menu_scenario_loaded)
 		main_load_ui_scenario(FALSE);
+	PS3_MAIN_STEP(101);
 	main_screen_shell_load();
+	PS3_MAIN_STEP(102);
 	main_menu_precache_resources();
+	PS3_MAIN_STEP(103);
 	update_server_delete();
 	update_server_new();
 	update_server_start();
+	PS3_MAIN_STEP(104);
 	game_time_dispose_from_old_map();
 	game_time_initialize_for_new_map();
 	game_time_start();
+	PS3_MAIN_STEP(105);
 	hs_runtime_dispose_from_old_map();
 	hs_runtime_initialize_for_new_map();
+	PS3_MAIN_STEP(106);
 	main_globals.want_to_be_at_main_menu = FALSE;
 
 	return;
@@ -718,6 +738,20 @@ void set_window_camera_values(
 	struct render_window *window,
 	struct observer_result const *observer)
 {
+	PS3_MAIN_STEP(560);
+#ifdef HALO_PS3
+	{
+		static boolean logged = FALSE;
+
+		if (!logged)
+		{
+			logged = TRUE;
+			error(_error_silent, "ps3: window camera of player %d, observer %s, field of view %08lx",
+				window->local_player_index, observer ? "set" : "none",
+				observer ? *(unsigned long const *)&observer->field_of_view : 0UL);
+		}
+	}
+#endif
 	if (observer)
 	{
 		window->rasterizer_camera.position = observer->position;
@@ -729,29 +763,35 @@ void set_window_camera_values(
 					observer->field_of_view),
 				1.0f);
 
+		PS3_MAIN_STEP(561);
 		if (window->local_player_index != NONE &&
-			!console_is_active() &&
-			!game_time_get_paused() &&
-			director_get_perspective(window->local_player_index) !=
+			(PS3_MAIN_STEP(5611), !console_is_active()) &&
+			(PS3_MAIN_STEP(5612), !game_time_get_paused()) &&
+			(PS3_MAIN_STEP(5613), director_get_perspective(window->local_player_index)) !=
 				_director_perspective_neutral)
 		{
 			real_matrix4x3 effect_matrix;
 			real_matrix4x3 view_matrix;
 
+			PS3_MAIN_STEP(562);
 			player_effect_get_camera_effect_matrix(
 				window->local_player_index,
 				&effect_matrix);
+			PS3_MAIN_STEP(563);
 			matrix4x3_from_point_and_vectors(
 				&view_matrix,
 				&observer->position,
 				&observer->forward,
 				&observer->up);
+			PS3_MAIN_STEP(564);
 			matrix4x3_multiply(&view_matrix, &effect_matrix, &view_matrix);
+			PS3_MAIN_STEP(565);
 			matrix4x3_to_point_and_vectors(
 				&view_matrix,
 				&window->rasterizer_camera.position,
 				&window->rasterizer_camera.forward,
 				&window->rasterizer_camera.up);
+			PS3_MAIN_STEP(566);
 		}
 	}
 	else
@@ -759,6 +799,7 @@ void set_window_camera_values(
 		window->rasterizer_camera.position = *global_origin3d;
 		window->rasterizer_camera.forward = *global_forward3d;
 		window->rasterizer_camera.up = *global_up3d;
+		PS3_MAIN_STEP(567);
 		window->rasterizer_camera.vertical_field_of_view =
 			2.0f * arctangent(
 				0.75f * render_camera_get_adjusted_field_of_view_tangent(
@@ -766,6 +807,7 @@ void set_window_camera_values(
 				1.0f);
 	}
 
+	PS3_MAIN_STEP(568);
 	window->rasterizer_camera.mirrored = FALSE;
 	window->rasterizer_camera.z_near = rasterizer_globals.near_clip_distance;
 	window->rasterizer_camera.z_far = rasterizer_globals.far_clip_distance;
@@ -2090,6 +2132,10 @@ void main_rasterizer_throttle(
 				{
 					Sleep(1);
 				}
+#ifdef HALO_PS3
+				/* lv2 schedules by strict priority: let equal-priority game threads use this PPE thread */
+				SwitchToThread();
+#endif
 				if (system_milliseconds() > start_milliseconds + 1000)
 				{
 					console_warning(
@@ -2581,12 +2627,16 @@ static void main_game_render(
 
 	lock_global_random_seed();
 	collision_log_continue_period(TRUE);
+	PS3_MAIN_STEP(501);
 	sound_render();
+	PS3_MAIN_STEP(502);
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
+	PS3_MAIN_STEP(540);
 	window_count = PIN(local_player_count(), 1, MAXIMUM_LOCAL_PLAYERS);
 	player_window_count = window_count;
+	PS3_MAIN_STEP(541);
 	if (force_single_screen || cinematic_in_progress())
 	{
 		window_count = 1;
@@ -2598,6 +2648,7 @@ static void main_game_render(
 		window = &global_screenshot_count.windows[window_index];
 		observer = NULL;
 
+		PS3_MAIN_STEP(542);
 		compute_window_bounds(
 			window_index,
 			player_window_count,
@@ -2622,19 +2673,25 @@ static void main_game_render(
 				}
 			}
 
+			PS3_MAIN_STEP(543);
 			window->local_player_index = last_local_player_index;
 			observer = observer_get_camera(window->local_player_index);
+			PS3_MAIN_STEP(544);
 			observer = render_interpolation_camera(window->local_player_index, observer);
+			PS3_MAIN_STEP(545);
 		}
 		else
 		{
 			window->local_player_index = NONE;
 		}
 
+		PS3_MAIN_STEP(546);
 		set_window_camera_values(window, observer);
+		PS3_MAIN_STEP(547);
 		window->console_window = FALSE;
 	}
 
+	PS3_MAIN_STEP(548);
 	window = &global_screenshot_count.windows[player_window_count];
 	compute_window_bounds(
 		0,
@@ -2643,8 +2700,10 @@ static void main_game_render(
 		&window->rasterizer_camera.window_bounds);
 	window->local_player_index = NONE;
 	window->console_window = TRUE;
+	PS3_MAIN_STEP(549);
 	set_window_camera_values(window, NULL);
 
+	PS3_MAIN_STEP(503);
 	if (global_screenshot_count.count <= 0)
 	{
 		render_frame(
@@ -2690,6 +2749,10 @@ void main_loop(
 
 	while (TRUE)
 	{
+#ifdef HALO_PS3
+		ps3_main_loop_count++;
+#endif
+		PS3_MAIN_STEP(1);
 		if (!game_in_editor())
 		{
 			if (main_globals.switch_to_structure_bsp_index!=NONE)
@@ -2777,13 +2840,20 @@ void main_loop(
 			main_reset_map_private();
 		}
 
+		PS3_MAIN_STEP(20);
 		profile_frame_start();
 		input_frame_begin();
+		PS3_MAIN_STEP(21);
 		input_update();
+		PS3_MAIN_STEP(22);
 		input_abstraction_update();
+		PS3_MAIN_STEP(23);
 		shell_idle();
+		PS3_MAIN_STEP(24);
 		event_manager_update();
+		PS3_MAIN_STEP(25);
 		telnet_console_process();
+		PS3_MAIN_STEP(26);
 
 		if (!shell_application_is_paused())
 		{
@@ -2821,9 +2891,13 @@ void main_loop(
 				break;
 			}
 
+			PS3_MAIN_STEP(30);
 			main_update_time();
+			PS3_MAIN_STEP(31);
 			process_ui_widgets();
+			PS3_MAIN_STEP(32);
 			bink_playback_update();
+			PS3_MAIN_STEP(33);
 
 			if ((!game_in_editor() && (input_key_is_down(_key_end) || input_key_is_down(_key_escape))) || editor_should_exit())
 			{
@@ -2837,10 +2911,12 @@ void main_loop(
 
 			if (game_in_progress())
 			{
+				PS3_MAIN_STEP(40);
 				terminal_update();
 
 				if (!console_update() || main_globals.connection!=_game_connection_local)
 				{
+					PS3_MAIN_STEP(41);
 					debug_keys_update();
 					cheats_update();
 					player_control_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
@@ -2852,7 +2928,9 @@ void main_loop(
 						network_game_abort();
 					}
 
+					PS3_MAIN_STEP(42);
 					game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
+					PS3_MAIN_STEP(43);
 
 					render_frame = main_globals.main_menu_scenario_loaded ||
 						(main_globals.halt_time_scale &&
@@ -2862,10 +2940,12 @@ void main_loop(
 						render_frame = main_globals.main_menu_scenario_loaded || main_globals.halt_time_scale;
 					render_frame &= !game_engine_running() || game_time_get()>=3;
 
+					PS3_MAIN_STEP(44);
 					collision_log_continue_period(1);
 					director_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 					observer_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 					collision_log_end_period();
+					PS3_MAIN_STEP(45);
 					game_engine_update_non_deterministic((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 				}
 
@@ -2876,28 +2956,34 @@ void main_loop(
 
 				if (render_frame && !debug_no_drawing)
 				{
+					PS3_MAIN_STEP(50);
 					profile_render_start();
 					render_interpolation_frame_begin();
 					main_game_render((double)main_globals.seconds_elapsed);
+					PS3_MAIN_STEP(51);
 					render_interpolation_frame_end();
 					profile_render_end();
 				}
 			}
 			else
 			{
+				PS3_MAIN_STEP(52);
 				profile_render_start();
 				main_pregame_render();
 				profile_render_end();
 			}
 
+			PS3_MAIN_STEP(60);
 			main_rasterizer_throttle();
 
 			if (render_frame && !debug_no_drawing)
 			{
+				PS3_MAIN_STEP(61);
 				main_present_frame();
 			}
 		}
 
+		PS3_MAIN_STEP(70);
 		input_frame_end();
 		profile_frame_end();
 		main_frame_rate_debug();

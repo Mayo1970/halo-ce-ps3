@@ -26,6 +26,13 @@ upstream halo-ce-universal copy of source/cache/cache_files.c. */
 #define CACHE_FILE_HEADER_SIGNATURE 'head'
 #define CACHE_FILE_FOOTER_SIGNATURE 'foot'
 
+#ifdef HALO_PS3
+/* port: unlike x86, the PPE can see the cache thread's read_complete before the data it covers */
+#define CACHE_IO_BARRIER() __sync_synchronize()
+#else
+#define CACHE_IO_BARRIER()
+#endif
+
 /* ---------- structures */
 
 struct cache_file_tag_instance
@@ -459,6 +466,12 @@ boolean cache_file_header_verify(
 	char const *scenario_name,
 	boolean fatal)
 {
+#ifdef HALO_PS3
+	/* port: each header the game reads comes here; an Xbox one is little-endian (port/ps3/xbox/xbox_tag_swap.c) */
+	extern int cache_files_swap_header(void *header);
+
+	cache_files_swap_header(header);
+#endif
 	if (header->header_signature != CACHE_FILE_HEADER_SIGNATURE ||
 		header->footer_signature != CACHE_FILE_FOOTER_SIGNATURE ||
 		header->file_length < 0 ||
@@ -673,6 +686,15 @@ long scenario_tags_load(
 			{
 				SwitchToThread();
 			}
+			CACHE_IO_BARRIER();
+#ifdef HALO_PS3
+			/* port: the map's tag data is little-endian (port/ps3/xbox/xbox_tag_swap.c) */
+			{
+				extern void cache_files_swap_tag_data(void *tag_data, long size);
+
+				cache_files_swap_tag_data(tag_cache_base_address, cache_file_globals.header.tag_data_size);
+			}
+#endif
 
 			cache_file_globals.tag_header = tag_cache_base_address;
 			match_vassert(
@@ -682,10 +704,10 @@ long scenario_tags_load(
 				csprintf(
 					temporary,
 					"signature is '%c%c%c%c', should be '%c%c%c%c'",
-					((char *)&cache_file_globals.tag_header->signature)[3],
-					((char *)&cache_file_globals.tag_header->signature)[2],
-					((char *)&cache_file_globals.tag_header->signature)[1],
-					((char *)&cache_file_globals.tag_header->signature)[0],
+					(char)(cache_file_globals.tag_header->signature >> 24),
+					(char)(cache_file_globals.tag_header->signature >> 16),
+					(char)(cache_file_globals.tag_header->signature >> 8),
+					(char)cache_file_globals.tag_header->signature,
 					't',
 					'a',
 					'g',
@@ -747,7 +769,16 @@ boolean scenario_structure_bsp_load(
 				sound_idle();
 			}
 		}
+		CACHE_IO_BARRIER();
 	}
+#ifdef HALO_PS3
+	/* port: the map's structure BSPs are little-endian (port/ps3/xbox/xbox_tag_swap.c) */
+	{
+		extern void cache_files_swap_structure_bsp(void *structure_bsp, long size);
+
+		cache_files_swap_structure_bsp(reference->base_address, reference->file_size);
+	}
+#endif
 
 	cache_file_globals.structure_bsp_header = reference->base_address;
 	match_assert(

@@ -577,6 +577,14 @@ static void render_player_frame(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: the main loop's place, for the PS3's heartbeat (main.c) */
+extern volatile long ps3_main_loop_step;
+#define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
+#else
+#define PS3_MAIN_STEP(step)
+#endif
+
 void render_frame(
 	struct render_window *windoze,
 	short window_count,
@@ -595,8 +603,11 @@ void render_frame(
 	memset(&parameters, 0, sizeof(parameters));
 	/* continuous between ticks (render_interpolation.c) */
 	parameters.game_time_sec = render_interpolation_game_time_sec(game_time_get());
+	PS3_MAIN_STEP(520);
 	rasterizer_frame_begin(&parameters);
+	PS3_MAIN_STEP(521);
 	rasterizer_windows_begin();
+	PS3_MAIN_STEP(522);
 
 	for (window_index = 0; window_index < window_count; window_index++)
 	{
@@ -618,6 +629,7 @@ void render_frame(
 					screenshot_page_index->y * global_screenshot_size + screenshot_index->y;
 			}
 
+			PS3_MAIN_STEP(523);
 			render_player_frame(
 				window,
 				screenshot_index != NULL ? &screenshot_combined_index : NULL);
@@ -628,14 +640,19 @@ void render_frame(
 			window_type = 1;
 		}
 
+		PS3_MAIN_STEP(524 + window_type);
 		render_nonplayer_frame(window, window_type);
 	}
 
+	PS3_MAIN_STEP(527);
 	halo_screen_ui_offset(TRUE);
 	progress_bar_eachframe();
 	halo_screen_ui_offset(FALSE);
+	PS3_MAIN_STEP(528);
 	rasterizer_windows_end();
+	PS3_MAIN_STEP(529);
 	rasterizer_frame_end();
+	PS3_MAIN_STEP(530);
 
 	return;
 }

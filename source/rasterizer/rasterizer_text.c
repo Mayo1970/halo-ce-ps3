@@ -1,64 +1,5 @@
-/*
-RASTERIZER_TEXT.C
-
-symbols in this file:
-00172E80 0010:
-	_code_00172e80 (0000)
-00172E90 0010:
-	_code_00172e90 (0000)
-00172EA0 0090:
-	_rasterizer_text_cache_initialize (0000)
-00172F30 0010:
-	_rasterizer_text_set_shadow_color (0000)
-00172F40 0030:
-	_rasterizer_text_cache_flush (0000)
-00172F70 0030:
-	_rasterizer_text_cache_dispose (0000)
-00172FA0 0020:
-	_code_00172fa0 (0000)
-00172FC0 00b0:
-	_code_00172fc0 (0000)
-00173070 0060:
-	_code_00173070 (0000)
-001730D0 0380:
-	_code_001730d0 (0000)
-00173450 00f0:
-	_code_00173450 (0000)
-00173540 0170:
-	_code_00173540 (0000)
-001736B0 0200:
-	_rasterizer_draw_string (0000)
-001738B0 0200:
-	_rasterizer_draw_unicode_string (0000)
-0029EEE0 0033:
-	??_C@_0DD@DKOHMJNA@?$CD?$CD?$CD?5ERROR?5failed?5to?5initialize?5h@ (0000)
-0029EF14 0026:
-	??_C@_0CG@HPKDNNGC@?$CBhardware_character_cache?4initia@ (0000)
-0029EF3C 002c:
-	??_C@_0CM@KJINBGGM@c?3?2halo?2SOURCE?2rasterizer?2raster@ (0000)
-0029EF68 0009:
-	??_C@_08KDNNBGOA@x0?5?$CG?$CG?5y0?$AA@ (0000)
-0029EF78 0054:
-	??_C@_0FE@BCPFIEIE@hardware_character_index?$DO?$DN0?5?$CG?$CG?5h@ (0000)
-0029EFCC 0025:
-	??_C@_0CF@POBHCEMM@hardware_character_cache?4initial@ (0000)
-0029EFF4 0026:
-	??_C@_0CG@JHCOKPHL@font?5cache?5overwrote?5character?5i@ (0000)
-0029F01C 0013:
-	??_C@_0BD@PIEBJAO@hardware_character?$AA@ (0000)
-0029F030 0046:
-	??_C@_0EG@CBPAFGHN@font_character?9?$DObitmap_height?$DM?$DNH@ (0000)
-0029F078 0044:
-	??_C@_0EE@KGLMBKON@font_character?9?$DObitmap_width?$DM?$DNHA@ (0000)
-0029F0C0 0068:
-	??_C@_0GI@IDEJCHPO@font_character?$DN?$DNhardware_charact@ (0000)
-0029F128 0074:
-	??_C@_0HE@KFKECHAF@font_character?9?$DOhardware_charact@ (0000)
-0030D4D0 0002:
-	_data_0030d4d0 (0000)
-004B82C0 0816:
-	_bss_004b82c0 (0000)
-*/
+/* RASTERIZER_TEXT.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/rasterizer/rasterizer_text.c. */
 
 
 /* ---------- headers */
@@ -78,9 +19,8 @@ symbols in this file:
 #include "text/unicode.h"
 #include "tag_files/tag_files.h"
 
-/* port: the high-res text (port/linux/src/text_hires.c): the text drawn with
-fonts at the display's resolution, laid out as before. Characters are drawn
-from an atlas of the fonts' glyphs that a placeholder bitmap stands for. */
+/* port: the high-res text (port/linux/src/text_hires.c), drawn with fonts at the display's resolution
+and laid out as before, from an atlas of the fonts' glyphs that a placeholder bitmap stands for */
 struct text_hires_glyph
 {
 	float left, top, right, bottom;
@@ -118,6 +58,13 @@ enum
 };
 
 /* ---------- macros */
+
+/* port: the cache's texels keep the Xbox's little-endian byte order, as the map's do */
+#ifdef HALO_PS3
+#define TEXEL16(value) ((word)__builtin_bswap16(value))
+#else
+#define TEXEL16(value) (value)
+#endif
 
 /* ---------- structures */
 
@@ -508,9 +455,8 @@ rasterizer_draw_string(
 					MIN(render.camera.viewport_bounds.x1 - render.camera.viewport_bounds.x0, clip->x1),
 					MIN(render.camera.viewport_bounds.y1 - render.camera.viewport_bounds.y0, clip->y1));
 			}
-			/* port: text drawn scaled (rasterizer_text_set_scale) clipped where
-			it reaches the viewport once scaled: the clip as it is before the
-			scale */
+			/* port: text drawn scaled (rasterizer_text_set_scale) clipped where it reaches
+			the viewport once scaled: the clip as it is before the scale */
 			if (text_scale != 1.0f)
 			{
 				viewport_bounds.x0 = (short)(text_scale_origin_x + (viewport_bounds.x0 - text_scale_origin_x) / text_scale);
@@ -637,9 +583,8 @@ rasterizer_draw_unicode_string(
 					MIN(render.camera.viewport_bounds.x1 - render.camera.viewport_bounds.x0, clip->x1),
 					MIN(render.camera.viewport_bounds.y1 - render.camera.viewport_bounds.y0, clip->y1));
 			}
-			/* port: text drawn scaled (rasterizer_text_set_scale) clipped where
-			it reaches the viewport once scaled: the clip as it is before the
-			scale */
+			/* port: text drawn scaled (rasterizer_text_set_scale) clipped where it reaches
+			the viewport once scaled: the clip as it is before the scale */
 			if (text_scale != 1.0f)
 			{
 				viewport_bounds.x0 = (short)(text_scale_origin_x + (viewport_bounds.x0 - text_scale_origin_x) / text_scale);
@@ -740,9 +685,8 @@ rasterizer_draw_character_with_dropshadow(
 
 /* ---------- private code */
 
-/* port: text drawn scale times larger about a point (in screen units), until
-it is set back to 1: the characters' quads are laid out as before, and
-scaled about it as they are drawn */
+/* port: text drawn scale times larger about a point (in screen units) until it is set back
+to 1: the characters' quads are laid out as before, and scaled about it as they are drawn */
 void rasterizer_text_set_scale(
 	real scale,
 	real origin_x,
@@ -780,9 +724,8 @@ static void rasterizer_text_draw_scaled_character(
 	return;
 }
 
-/* port: the high-res text's font for a font tag, sized by the height of its
-capital H (its rows with ink), its glyphs drawn with oversample times the
-pixels (for text scaled up), or NONE */
+/* port: the high-res text's font for a font tag, sized by its capital H's rows with ink, its glyphs
+drawn with oversample times the pixels (for text scaled up), or NONE */
 static long hires_text_font_get(
 	long font_index,
 	real oversample)
@@ -866,9 +809,8 @@ static long font_character_ink(
 	return ink;
 }
 
-/* port: whether draw_string's cut of the font tag's character took a part
-of it that shows: more than an eighth of its ink (a cut through its edge's
-faint pixels, or its bitmap's empty columns, leaves it whole to the eye) */
+/* port: whether draw_string's cut of the font tag's character took a part that shows: more than an
+eighth of its ink (a cut through its faint edge or empty columns leaves it whole to the eye) */
 static boolean font_character_cut(
 	struct font_header *font,
 	struct font_character *font_character,
@@ -882,12 +824,8 @@ static boolean font_character_cut(
 	return font_character_ink(font, font_character, x0, x1, y0, y1) * 8 > all;
 }
 
-/* port: a character from the high-res text's atlas: the font's glyph on the
-baseline, its advance centred on the font tag's character's, cut where
-draw_string cut a part of the font tag's character that shows (to the
-text's box). Where it cut only the character's bitmap's empty columns or
-rows, or its edge's faint pixels, the character looked whole, and so does
-the glyph. */
+/* port: a character from the high-res atlas: the glyph on the baseline, its advance centred on the
+tag character's, cut only where draw_string cut a part of the tag character that shows (to the box) */
 static void rasterizer_draw_hires_glyph(
 	struct font_header *font,
 	struct font_character *font_character,
@@ -1046,13 +984,8 @@ hardware_character_cache_get_origin(
 	return;
 }
 
-/* port: the clear texels around a character in the cache (its cell is that
-much larger each side). The cache packs characters edge to edge, which the
-Xbox's 640x480 sampled texel for pixel; drawn larger (a fullscreen
-display's resolution), each edge pixel blends in half a texel past the
-character, from the next character or one the cache dropped, and the text
-and its drop shadow showed the cells' borders. A character too large for
-the border goes without. */
+/* port: clear texels around each cached character (its cell grows that much each side): drawn larger than
+640x480, edge pixels blended in the neighbouring cells and showed their borders. Too large: no border */
 static short hardware_character_padding(
 	struct font_character const *font_character)
 {
@@ -1185,11 +1118,11 @@ cache_hardware_format_character(
 				if (y < padding || y >= padding + font_character->bitmap_height ||
 					x < padding || x >= padding + font_character->bitmap_width)
 				{
-					*destination++ = 0x0FFF;
+					*destination++ = TEXEL16(0x0FFF);
 				}
 				else
 				{
-					*destination++ = (word)((*source++ << 8) | 0x0FFF);
+					*destination++ = TEXEL16((word)((*source++ << 8) | 0x0FFF));
 				}
 			}
 		}

@@ -556,6 +556,27 @@ int halo_linux_snprintf(char *buffer, size_t count, const char *format, ...)
 	return result;
 }
 
+#ifdef HALO_PS3
+/* the game's _vsnprintf: MSVC returns -1 when the text and its terminator do not fit (still terminated here) */
+int halo_linux_msvc_vsnprintf(char *buffer, size_t count, const char *format, va_list arguments)
+{
+	int length = halo_linux_vsnprintf(buffer, count, format, arguments);
+
+	return (size_t)length < count ? length : -1;
+}
+
+int halo_linux_msvc_snprintf(char *buffer, size_t count, const char *format, ...)
+{
+	va_list arguments;
+	int result;
+
+	va_start(arguments, format);
+	result = halo_linux_msvc_vsnprintf(buffer, count, format, arguments);
+	va_end(arguments);
+	return result;
+}
+#endif
+
 int halo_linux_vsprintf(char *buffer, const char *format, va_list arguments)
 {
 	char translated_format[1024];

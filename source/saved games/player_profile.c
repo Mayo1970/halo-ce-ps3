@@ -127,6 +127,10 @@ void player_profiles_dispose(
 			"waiting for asynchronous player profile writes to finish...");
 		while (!thread_has_exited(player_profile_globals.thread))
 		{
+#ifdef HALO_PS3
+			/* lv2 schedules by strict priority: yield so the equal-priority writer thread can run */
+			SwitchToThread();
+#endif
 		}
 		dispose_thread(player_profile_globals.thread);
 		player_profile_globals.thread = NULL;
@@ -577,6 +581,9 @@ static boolean player_profile_read(
 			"waiting for asynchronous player profile io to finish...");
 		while (!thread_has_exited(player_profile_globals.thread))
 		{
+#ifdef HALO_PS3
+			SwitchToThread();
+#endif
 		}
 		dispose_thread(player_profile_globals.thread);
 		player_profile_globals.thread = NULL;
@@ -797,6 +804,9 @@ static void player_profile_write(
 			"waiting for asynchronous player profile io to finish...");
 		while (!thread_has_exited(player_profile_globals.thread))
 		{
+#ifdef HALO_PS3
+			SwitchToThread();
+#endif
 		}
 		dispose_thread(player_profile_globals.thread);
 		player_profile_globals.thread = NULL;

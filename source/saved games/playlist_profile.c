@@ -176,6 +176,10 @@ void playlist_profiles_dispose(
 			"waiting for asynchronous playlist profile writes to finish...");
 		while (!thread_has_exited(playlist_profile_globals.thread))
 		{
+#ifdef HALO_PS3
+			/* lv2 schedules by strict priority: yield so the equal-priority writer thread can run */
+			SwitchToThread();
+#endif
 		}
 		dispose_thread(playlist_profile_globals.thread);
 		playlist_profile_globals.thread = NULL;
@@ -450,6 +454,9 @@ void playlist_profile_save_with_options(
 		{
 			while (!thread_has_exited(playlist_profile_globals.thread))
 			{
+#ifdef HALO_PS3
+				SwitchToThread();
+#endif
 			}
 			dispose_thread(playlist_profile_globals.thread);
 			playlist_profile_globals.thread = NULL;
@@ -571,6 +578,9 @@ static boolean playlist_profile_read(
 			"waiting for asynchronous playlist profile io to finish...");
 		while (!thread_has_exited(playlist_profile_globals.thread))
 		{
+#ifdef HALO_PS3
+			SwitchToThread();
+#endif
 		}
 		dispose_thread(playlist_profile_globals.thread);
 		playlist_profile_globals.thread = NULL;
@@ -767,6 +777,9 @@ static void playlist_profile_write(
 			"waiting for asynchronous playlist profile io to finish...");
 		while (!thread_has_exited(playlist_profile_globals.thread))
 		{
+#ifdef HALO_PS3
+			SwitchToThread();
+#endif
 		}
 		dispose_thread(playlist_profile_globals.thread);
 		playlist_profile_globals.thread = NULL;
@@ -805,6 +818,9 @@ static boolean playlist_profile_read_block(
 	{
 		while (!thread_has_exited(playlist_profile_globals.thread))
 		{
+#ifdef HALO_PS3
+			SwitchToThread();
+#endif
 		}
 		dispose_thread(playlist_profile_globals.thread);
 		playlist_profile_globals.thread = NULL;

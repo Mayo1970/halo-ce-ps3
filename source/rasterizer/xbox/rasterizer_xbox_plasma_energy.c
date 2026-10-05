@@ -25,8 +25,8 @@ upstream halo-ce-universal copy of source/rasterizer/xbox/rasterizer_xbox_plasma
 
 struct plasma_runtime_parameters
 {
-	real_rgb_color const *colors;
-	real const *exponents;
+	real_rgb_color const *HALO_PTR32 colors;
+	real const *HALO_PTR32 exponents;
 };
 
 struct rasterizer_transparent_geometry_group_plasma
@@ -68,6 +68,8 @@ struct shader_transparent_plasma_definition
 	long secondary_noise_map;
 };
 
+typedef char plasma_runtime_parameters_size_assert[
+	sizeof(struct plasma_runtime_parameters) == 0x8 ? 1 : -1];
 typedef char plasma_group_size_assert[
 	sizeof(struct rasterizer_transparent_geometry_group_plasma) == 0x70 ? 1 : -1];
 typedef char plasma_group_shader_offset_assert[

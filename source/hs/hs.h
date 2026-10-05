@@ -108,6 +108,20 @@ enum hs_function_index
 #define HS_TYPE_IS_OBJECT_NAME(type) ((type)>=_hs_type_object_name && (type)<=_hs_type_scenery_name)
 #define HS_TYPE_IS_OBJECT(type) ((type)>=_hs_type_object && (type)<=_hs_type_scenery)
 
+/* port: a script value is a long whose boolean and short views are its low bytes, which a big-endian long
+keeps last. HS_LOW_* name them in a long; HS_SLOT_* lay out a long slot that holds one (GOALS.md, G3). */
+#ifdef __BIG_ENDIAN__
+#define HS_LOW_BOOLEAN(value) (((boolean *)&(value))[3])
+#define HS_LOW_SHORT(value) (((short *)&(value))[1])
+#define HS_SLOT_BOOLEAN(name) byte name##_high[3]; boolean name
+#define HS_SLOT_WORD(type, name) word name##_high; type name
+#else
+#define HS_LOW_BOOLEAN(value) (*(boolean *)&(value))
+#define HS_LOW_SHORT(value) (*(short *)&(value))
+#define HS_SLOT_BOOLEAN(name) boolean name; byte name##_high[3]
+#define HS_SLOT_WORD(type, name) type name; word name##_high
+#endif
+
 /* ---------- structures */
 
 struct hs_enum_definition
@@ -130,14 +144,18 @@ struct hs_function_definition
 {
 	short return_type;
 	short flags;
-	char const *name;
-	hs_function_parse_proc parse;
-	hs_evaluate_procedure evaluate;
-	char const *help;
-	char const *usage;
+	char const *HALO_PTR32 name;
+	hs_function_parse_proc HALO_PTR32 parse;
+	hs_evaluate_procedure HALO_PTR32 evaluate;
+	char const *HALO_PTR32 help;
+	char const *HALO_PTR32 usage;
 	short parameter_count;
 	short parameter_types[1];
 };
+
+/* the with_N_parameters types (hs.c) continue parameter_types right after this */
+typedef char hs_function_definition_size_assert[
+	sizeof(struct hs_function_definition) == 0x1C ? 1 : -1];
 
 struct hs_external_global_definition
 {

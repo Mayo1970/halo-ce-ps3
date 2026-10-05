@@ -100,6 +100,13 @@ enum
 
 /* ---------- macros */
 
+#ifdef HALO_PS3
+/* port: unlike x86, the PPE can see the cache thread's loaded flag before the data it covers */
+#define CACHE_IO_BARRIER() __sync_synchronize()
+#else
+#define CACHE_IO_BARRIER()
+#endif
+
 /* ---------- structures */
 
 struct xbox_texture_cache_globals
@@ -448,6 +455,19 @@ static boolean compare(
 	return difference > 0;
 }
 
+#ifdef HALO_PS3
+/* port: qsort's comparator for texture_cache_debug_bitmaps, whose 8-byte pointers qsort_4byte would split */
+static int compare_bitmap_pointers(
+	void const *first,
+	void const *second)
+{
+	struct bitmap_data *const *first_bitmap = first;
+	struct bitmap_data *const *second_bitmap = second;
+
+	return compare(*first_bitmap, *second_bitmap) - compare(*second_bitmap, *first_bitmap);
+}
+#endif
+
 void texture_cache_flush(
 	void)
 {
@@ -483,6 +503,14 @@ static void texture_cache_delete_block_proc(
 		cache_entry = datum_get(
 			xbox_texture_cache_globals.textures,
 			block_index);
+#ifdef HALO_PS3
+		/* port: lv2 does not time-slice equal priorities, so let the cache thread finish the read */
+		if (!cache_entry->loaded ||
+			IDirect3DBaseTexture8_IsBusy(&cache_entry->hardware_format))
+		{
+			SwitchToThread();
+		}
+#endif
 	}
 	while (!cache_entry->loaded ||
 		IDirect3DBaseTexture8_IsBusy(&cache_entry->hardware_format));
@@ -780,10 +808,18 @@ void texture_cache_debug_render(
 				texture_cache_debug_bitmaps[bitmap_count++] = bitmap;
 			}
 		}
+#ifdef HALO_PS3
+		qsort(
+			texture_cache_debug_bitmaps,
+			bitmap_count,
+			sizeof(*texture_cache_debug_bitmaps),
+			compare_bitmap_pointers);
+#else
 		qsort_4byte(
 			(long *)texture_cache_debug_bitmaps,
 			bitmap_count,
 			(boolean (*)(long, long))compare);
+#endif
 
 		font_index = interface_get_tag_index(_interface_font_terminal);
 		tab_stops[0] = rasterizer_globals.reserved04.frame_bounds.x0;
@@ -857,6 +893,7 @@ void *_texture_cache_bitmap_get_hardware_format(
 			{
 				if (texture->loaded)
 				{
+					CACHE_IO_BARRIER();
 					if (!texture->used)
 					{
 						texture->used = TRUE;

@@ -135,12 +135,22 @@ struct hs_runtime_globals
 
 struct hs_stack_frame
 {
-	struct hs_stack_frame *previous;
+	struct hs_stack_frame *HALO_PTR32 previous;
 	long expression_index;
-	void *result;
+	void *HALO_PTR32 result;
 	short size;
+#ifdef HALO_PS3
+	/* port: data 4-aligned, as hs_stack_allocate keeps the reals in it for lfs/stfs */
+	short pad;
+	byte data[0];
+#else
 	byte data[2];
+#endif
 };
+
+/* the frames share each thread's 0x200-byte stack with the Xbox's sizes */
+typedef char hs_stack_frame_size_assert[
+	sizeof(struct hs_stack_frame) == 0x10 ? 1 : -1];
 
 struct hs_global_datum
 {
@@ -1030,8 +1040,14 @@ static void hs_stack_push(
 	long thread_index)
 {
 	struct hs_thread_datum *thread = hs_thread_get(thread_index);
+#ifdef HALO_PS3
+	/* port: every frame 4-aligned, so is its data (hs_stack_allocate) */
+	struct hs_stack_frame *new_frame = (struct hs_stack_frame *)
+		((byte *)thread->stack+((thread->stack->size+3)&~3)+sizeof(struct hs_stack_frame));
+#else
 	struct hs_stack_frame *new_frame = (struct hs_stack_frame *)
 		((byte *)thread->stack+thread->stack->size+sizeof(struct hs_stack_frame));
+#endif
 
 	match_hs_assert("c:\\halo\\SOURCE\\hs\\hs_runtime.c", 0x35e, thread_index,
 		(byte *) (new_frame+1)<thread->stack_data+HS_THREAD_STACK_SIZE,
@@ -1269,7 +1285,7 @@ static long hs_long_to_boolean(
 
 	/* BUG: only the low byte of this uninitialised long is written, but all of it is returned; in January its upper bytes
 	   are n's bits 8-31 (zero where hs_string_to_boolean inlines it): unread, but reach the saved-game CRC and saves. */
-	*(boolean *)&result = n==0;
+	HS_LOW_BOOLEAN(result) = n==0;
 
 	return result;
 }
@@ -1281,7 +1297,7 @@ static long hs_short_to_boolean(
 
 	/* BUG: only the low byte of this uninitialised long is written, but the whole long is returned; in January its upper
 	   bytes are s's bits 8-31: unread, but they reach the saved-game CRC and save files via hs_return. */
-	*(boolean *)&result = (short)s==0;
+	HS_LOW_BOOLEAN(result) = (short)s==0;
 
 	return result;
 }
@@ -1335,7 +1351,7 @@ static long hs_real_to_short(
 
 	/* BUG: only the low word of this uninitialised long is written, but the whole long is returned; in January its upper
 	   word is that of r's bit pattern: unread, but it reaches the saved-game CRC and save files via hs_return. */
-	*(short *)&result = (short)*(real *)&r;
+	HS_LOW_SHORT(result) = (short)*(real *)&r;
 
 	return result;
 }
@@ -1353,7 +1369,7 @@ static long hs_long_to_short(
 
 	/* BUG: only the low word of this uninitialised long is written, but the whole long is returned; in January its upper
 	   word is l's, so l returns unchanged; unread, but it reaches the saved-game CRC and save files via hs_return. */
-	*(short *)&result = (short)l;
+	HS_LOW_SHORT(result) = (short)l;
 
 	return result;
 }
@@ -1582,14 +1598,20 @@ void hs_evaluate_equality(
 	arguments = hs_arguments_evaluate(thread_index, 2, parameter_types, initialize);
 	if (arguments)
 	{
+#ifdef __BIG_ENDIAN__
+		/* port: the values' low bytes, which a big-endian long keeps last (hs.h, HS_LOW_*) */
+		boolean equal = csmemcmp((byte *)arguments+sizeof(long)-hs_type_sizes[type],
+			(byte *)(arguments+1)+sizeof(long)-hs_type_sizes[type], hs_type_sizes[type])==0;
+#else
 		boolean equal = csmemcmp(arguments, arguments+1, hs_type_sizes[type])==0;
+#endif
 
 		if (function_index==_hs_function_not_equal)
 			equal = !equal;
 
 		/* BUG: only the low byte of this uninitialised long is written, but hs_return gets it whole; in January it is
 		   (type<<16)|equal (reused function_index slot); its upper bytes go unread but reach the saved-game CRC and saves. */
-		*(boolean *)&result_long = equal;
+		HS_LOW_BOOLEAN(result_long) = equal;
 		hs_return(thread_index, result_long);
 	}
 
@@ -1636,7 +1658,7 @@ void hs_evaluate_inequality(
 
 		/* BUG: only the low byte of this uninitialised long is written, but hs_return gets it whole; in January its upper
 		   bytes are value1's bits 8-31 (spilled in function_index's slot); unread, but reach the saved-game CRC and saves. */
-		*(boolean *)&result_long = comparison;
+		HS_LOW_BOOLEAN(result_long) = comparison;
 		hs_return(thread_index, result_long);
 	}
 
@@ -1666,7 +1688,7 @@ void hs_evaluate_logical(
 	}
 	else
 	{
-		boolean argument = *value;
+		boolean argument = HS_LOW_BOOLEAN(*(long *)value);
 
 		if (and)
 			*result = *result && argument;
@@ -1683,7 +1705,7 @@ void hs_evaluate_logical(
 	{
 		/* BUG: only the low byte of this uninitialised long is written, but hs_return gets it whole; in January its upper
 		   bytes are stack residue of hs_thread_main's initialize push; unread, but reach the saved-game CRC and saves. */
-		*(boolean *)&result_long = *result;
+		HS_LOW_BOOLEAN(result_long) = *result;
 
 		hs_return(thread_index, result_long);
 	}
@@ -1999,8 +2021,9 @@ void hs_evaluate_debug_string(
 	struct hs_thread_datum *thread = hs_thread_get(thread_index);
 	long *expression_index = hs_stack_allocate(thread_index, sizeof(long));
 	long *argument_count = hs_stack_allocate(thread_index, sizeof(long));
-	char const **arguments = hs_stack_allocate(thread_index,
-		MAXIMUM_HS_DEBUG_STRING_ARGUMENTS*sizeof(char const *));
+	/* port: 4-byte string slots, as on the Xbox, keep this frame inside the 0x200-byte stack */
+	char const *HALO_PTR32 *arguments = hs_stack_allocate(thread_index,
+		MAXIMUM_HS_DEBUG_STRING_ARGUMENTS*sizeof(*arguments));
 
 	match_assert("c:\\halo\\source\\hs\\hs_library_internal_runtime.h", 0x304,
 		(function_index>=_hs_function_debug_string__first) &&
@@ -2012,7 +2035,7 @@ void hs_evaluate_debug_string(
 			thread->stack->expression_index)->data)->next_node_index;
 		*argument_count = 0;
 		csmemset((void *)arguments, 0,
-			MAXIMUM_HS_DEBUG_STRING_ARGUMENTS*sizeof(char const *));
+			MAXIMUM_HS_DEBUG_STRING_ARGUMENTS*sizeof(*arguments));
 	}
 
 	if (*expression_index!=NONE && *argument_count<MAXIMUM_HS_DEBUG_STRING_ARGUMENTS)
@@ -2047,7 +2070,18 @@ void hs_evaluate_debug_string(
 		}
 
 		if (procedure)
+		{
+#ifdef HALO_PS3
+			char const *names[MAXIMUM_HS_DEBUG_STRING_ARGUMENTS];
+			long name_index;
+
+			for (name_index = 0; name_index<MAXIMUM_HS_DEBUG_STRING_ARGUMENTS; name_index++)
+				names[name_index] = arguments[name_index];
+			procedure(*argument_count, names);
+#else
 			procedure(*argument_count, arguments);
+#endif
+		}
 
 		hs_return(thread_index, NONE);
 	}
@@ -2074,10 +2108,10 @@ void hs_evaluate_sleep_until(
 
 	if (initialize)
 	{
-		*(boolean *)condition = FALSE;
+		HS_LOW_BOOLEAN(*condition) = FALSE;
 		*start_time = game_time_get();
 		*argument_index = 0;
-		*(short *)ticks = 30;
+		HS_LOW_SHORT(*ticks) = 30;
 		*timeout = NONE;
 
 		if (expression_index!=NONE)
@@ -2320,6 +2354,13 @@ static void *hs_stack_allocate(
 		valid_thread(thread), "corrupted stack.");
 	match_hs_assert("c:\\halo\\SOURCE\\hs\\hs_runtime.c", 0x37e, thread_index,
 		size, "attempt to allocate zero space from the stack.");
+#ifdef HALO_PS3
+	/* port: the PPE faults on lfs/stfs of reals that are not 4-aligned (x86 does not); shorts 2-aligned */
+	if (size>=4)
+		frame->size = (short)((frame->size+3)&~3);
+	else if (size>=2)
+		frame->size = (short)((frame->size+1)&~1);
+#endif
 	match_hs_assert("c:\\halo\\SOURCE\\hs\\hs_runtime.c", 0x37f, thread_index,
 		frame->data+frame->size+size<=thread->stack_data+HS_THREAD_STACK_SIZE,
 		"stack overflow.");
@@ -2395,7 +2436,7 @@ static void hs_global_reconcile_read(
 		switch (hs_global_get_type(global_designator))
 		{
 		case _hs_type_boolean:
-			*(boolean *)&global->value = external->address
+			HS_LOW_BOOLEAN(global->value) = external->address
 				? *(boolean *)external->address
 				: _hs_type_boolean_default;
 			break;
@@ -2405,7 +2446,7 @@ static void hs_global_reconcile_read(
 				: _hs_type_real_default;
 			break;
 		case _hs_type_short_integer:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_short_integer_default;
 			break;
@@ -2415,42 +2456,43 @@ static void hs_global_reconcile_read(
 				: _hs_type_long_integer_default;
 			break;
 		case _hs_type_string:
-			*(char const **)&global->value = external->address
+			/* port: a 4-byte value; a pointer written through &global->value overran it on LP64 */
+			global->value = (long)(unsigned long)(external->address
 				? *(char const * *)external->address
-				: _hs_type_string_default;
+				: _hs_type_string_default);
 			break;
 		case _hs_type_script:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_script_default;
 			break;
 		case _hs_type_trigger_volume:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_trigger_volume_default;
 			break;
 		case _hs_type_cutscene_flag:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_cutscene_flag_default;
 			break;
 		case _hs_type_cutscene_camera_point:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_cutscene_camera_point_default;
 			break;
 		case _hs_type_cutscene_title:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_cutscene_title_default;
 			break;
 		case _hs_type_cutscene_recording:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_cutscene_recording_default;
 			break;
 		case _hs_type_device_group:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_device_group_default;
 			break;
@@ -2460,27 +2502,27 @@ static void hs_global_reconcile_read(
 				: _hs_type_ai_default;
 			break;
 		case _hs_type_ai_command_list:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_ai_command_list_default;
 			break;
 		case _hs_type_starting_profile:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_starting_profile_default;
 			break;
 		case _hs_type_conversation:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_conversation_default;
 			break;
 		case _hs_type_navpoint:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_navpoint_default;
 			break;
 		case _hs_type_hud_message:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_hud_message_default;
 			break;
@@ -2530,27 +2572,27 @@ static void hs_global_reconcile_read(
 				: _hs_type_object_definition_default;
 			break;
 		case _hs_type_enum_game_difficulty:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_enum_game_difficulty_default;
 			break;
 		case _hs_type_enum_team:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_enum_team_default;
 			break;
 		case _hs_type_enum_ai_default_state:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_enum_ai_default_state_default;
 			break;
 		case _hs_type_enum_actor_type:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_enum_actor_type_default;
 			break;
 		case _hs_type_enum_hud_corner:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_enum_hud_corner_default;
 			break;
@@ -2585,7 +2627,7 @@ static void hs_global_reconcile_read(
 				: _hs_type_scenery_default;
 			break;
 		case _hs_type_object_name:
-			*(short *)&global->value = external->address
+			HS_LOW_SHORT(global->value) = external->address
 				? *(short *)external->address
 				: _hs_type_object_name_default;
 			break;

@@ -1,20 +1,5 @@
-/*
-DEAD_CAMERA.C
-
-symbols in this file:
-000740B0 0070:
-	_player_has_allies (0000)
-00074120 00b0:
-	_player_get_next_player_with_a_unit (0000)
-000741D0 0120:
-	_dead_camera_new (0000)
-000742F0 04e0:
-	_dead_camera_update (0000)
-00256AE8 000c:
-	_dead_camera_constants (0000)
-00256AF4 0024:
-	??_C@_0CE@LCNMEPOD@c?3?2halo?2SOURCE?2camera?2dead_camer@ (0000)
-*/
+/* DEAD_CAMERA.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/camera/dead_camera.c. */
 
 /* ---------- headers */
 
@@ -32,11 +17,17 @@ symbols in this file:
 
 /* ---------- structures */
 
+/* leading members of director.c's camera_control */
 struct camera_control
 {
-	long unknown0;
+	short local_player_index;
+	boolean active;
+	byte pad3;
 	real seconds_elapsed;
 };
+
+typedef char camera_control_seconds_elapsed_offset_assert[
+	offsetof(struct camera_control, seconds_elapsed) == 0x4 ? 1 : -1];
 
 struct dead_camera_command
 {
@@ -192,9 +183,8 @@ void dead_camera_update(
 		{
 			next_unit_index = (long)result;
 		}
-		/* January preserves the command pointer as the fallback object index
-		 * when no player is found. This is a bug; a corrected build should
-		 * initialize next_unit_index to NONE instead. */
+		/* January bug: with no player, the command pointer becomes the fallback
+		 * object index; a corrected build would use NONE. */
 
 		if (next_unit_index != camera->unit_index && next_unit_index != NONE)
 		{

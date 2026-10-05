@@ -38,8 +38,16 @@ int halo_linux_vprintf(const char *format, va_list arguments);
 #undef _vsnprintf
 #define snprintf halo_linux_snprintf
 #define vsnprintf halo_linux_vsnprintf
+#ifdef HALO_PS3
+/* MSVC's return: -1 when the text does not fit (terminal_printf asserts on newlib's full length) */
+int halo_linux_msvc_vsnprintf(char *buffer, size_t count, const char *format, va_list arguments);
+int halo_linux_msvc_snprintf(char *buffer, size_t count, const char *format, ...);
+#define _snprintf halo_linux_msvc_snprintf
+#define _vsnprintf halo_linux_msvc_vsnprintf
+#else
 #define _snprintf halo_linux_snprintf
 #define _vsnprintf halo_linux_vsnprintf
+#endif
 #define sprintf halo_linux_sprintf
 #define vsprintf halo_linux_vsprintf
 #define fprintf halo_linux_fprintf

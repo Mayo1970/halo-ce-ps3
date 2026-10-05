@@ -26,8 +26,12 @@ struct data_array
 	short count;
 	short actual_count;
 	short next_identifier;
-	void *data;
+	void *HALO_PTR32 data;
 };
+
+/* a map's script nodes are a data_array with this header (hs.c, hs_allocate) */
+typedef char data_array_size_assert[
+	sizeof(struct data_array) == 0x38 ? 1 : -1];
 
 struct datum_header
 {

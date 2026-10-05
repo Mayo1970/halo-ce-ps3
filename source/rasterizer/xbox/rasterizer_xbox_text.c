@@ -1,42 +1,5 @@
-/*
-RASTERIZER_XBOX_TEXT.C
-
-symbols in this file:
-00162EA0 01b0:
-	_code_00162ea0 (0000)
-00163050 0050:
-	_code_00163050 (0000)
-001630A0 0220:
-	_code_001630a0 (0000)
-001632C0 0060:
-	_code_001632c0 (0000)
-00163320 0010:
-	_code_00163320 (0000)
-00163330 0010:
-	_rasterizer_text_end (0000)
-00163340 0020:
-	_code_00163340 (0000)
-00163360 0010:
-	_code_00163360 (0000)
-00163370 0010:
-	_code_00163370 (0000)
-00163380 0010:
-	_code_00163380 (0000)
-00163390 0690:
-	_rasterizer_text_begin (0000)
-00163A20 0120:
-	_rasterizer_text_draw_character (0000)
-00292B28 0036:
-	??_C@_0DG@NLGEIAMP@c?3?2halo?2SOURCE?2rasterizer?2xbox?2r@ (0000)
-00292B60 0030:
-	??_C@_0DA@FEBHLDDN@?$CD?$CD?$CD?5ERROR?5rasterizer_text_draw_c@ (0000)
-00292B90 0087:
-	??_C@_0IH@NAGGOICD@IDirect3DDevice8_SetVertexData2f@ (0000)
-00292C18 007d:
-	??_C@_0HN@NMADEKEL@IDirect3DDevice8_SetVertexData2f@ (0000)
-00292C98 0058:
-	??_C@_0FI@KKLBHBJN@IDirect3DDevice8_SetVertexDataCo@ (0000)
-*/
+/* RASTERIZER_XBOX_TEXT.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/rasterizer/xbox/rasterizer_xbox_text.c. */
 
 /* ---------- headers */
 
@@ -44,25 +7,8 @@ symbols in this file:
 #include "bitmaps/bitmap_color_conversion.h"
 #include "cseries/errors.h"
 #include "real_math.h"
-/* The January object retains out-of-line copies of the D3D inline wrappers.
- * The stock XDK definition of D3DINLINE (static __forceinline) reproduces all
- * nine wrappers, including IDirect3DDevice8_SetRenderState's 0x220-byte body.
- * Do not replace them with handwritten Microsoft dispatchers or override the
- * XDK's inline policy: taking an address or weakening __forceinline changes
- * their emitted ABI and code shape.
- * Keep this note's line count stable: debug records encode the source lines
- * of these functions and are part of the whole-object regression evidence.
- *
- * code_00162ea0 = D3DDevice_SetRenderState
- * code_00163050 = D3DDevice_SetTextureStageState
- * code_001630a0 = IDirect3DDevice8_SetRenderState
- * code_001632c0 = IDirect3DDevice8_SetTextureStageState
- * code_00163320 = IDirect3DDevice8_SetVertexShaderConstant
- * code_00163340 = IDirect3DDevice8_SetVertexData2f
- * code_00163360 = IDirect3DDevice8_SetVertexDataColor
- * code_00163370 = IDirect3DDevice8_Begin
- * code_00163380 = IDirect3DDevice8_End
- */
+/* the XDK's D3D inline wrappers (code_00162ea0..code_00163380) stay as the XDK defines them:
+ * a weaker inline policy changes their emitted code */
 #include "rasterizer/rasterizer.h"
 #include "rasterizer/rasterizer_console_vars.h"
 #include <xtl.h>
@@ -85,27 +31,31 @@ struct rasterizer_text_vertex
 
 struct bitmap_data;
 
+/* a view of rasterizer.h's rasterizer_dynamic_screen_geometry_parameters, which callers pass */
 struct rasterizer_text_begin_parameters
 {
-	void *meter_parameters;
-	real_vector2d const *scale;
+	void *HALO_PTR32 meter_parameters;
+	real_vector2d const *HALO_PTR32 scale;
 	boolean map_enabled[3];
 	byte pad0B;
-	struct bitmap_data const *map[3];
+	struct bitmap_data const *HALO_PTR32 map[3];
 	boolean clamp[3];
 	byte pad1B;
-	real_vector2d const *texture_offset[3];
+	real_vector2d const *HALO_PTR32 texture_offset[3];
 	real first_constants[6];
 	real second_constants[6];
-	real_rgb_color const *constant_color[3];
+	real_rgb_color const *HALO_PTR32 constant_color[3];
 	real_argb_color color;
 	unsigned long reserved74;
-	real const *constant_alpha[3];
+	real const *HALO_PTR32 constant_alpha[3];
 	unsigned long reserved84;
 	short framebuffer_blend_function;
 	boolean point_filtering;
 	byte pad8B;
 };
+
+typedef char rasterizer_text_begin_parameters_size_assert[
+	sizeof(struct rasterizer_text_begin_parameters) == 0x8C ? 1 : -1];
 
 /* ---------- prototypes */
 
@@ -282,9 +232,8 @@ map_loop:
 			map_stage = map_index;
 			map_array_index = map_stage;
 			bitmap = parameters->map[map_array_index];
-			/* Texture maps are contiguous; the original exits at the first gap.
-			 * Keep the increment on the populated path to preserve that control
-			 * flow and VC7's direct signed-index loop shape. */
+			/* the maps are contiguous: stop at the first gap, as the original does
+			 * (the increment stays on the populated path, VC7's loop shape) */
 			if (bitmap)
 			{
 				rasterizer_set_texture_bitmap_data(map_index, bitmap);

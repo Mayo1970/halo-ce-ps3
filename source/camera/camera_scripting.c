@@ -1,40 +1,5 @@
-/*
-CAMERA_SCRIPTING.C
-
-symbols in this file:
-00073650 0020:
-	_scripted_camera_enable (0000)
-00073670 00d0:
-	_scripted_camera_set_animation (0000)
-00073740 0040:
-	_scripted_camera_set_first_person (0000)
-00073780 0040:
-	_scripted_camera_set_dead (0000)
-000737C0 0030:
-	_scripted_camera_object_is_first_person_camera (0000)
-000737F0 00e0:
-	_scripted_camera_set (0000)
-000738D0 0020:
-	_scripted_camera_set_absolute (0000)
-000738F0 00d0:
-	_scripted_camera_set_camera_point_relative (0000)
-000739C0 0030:
-	_scripted_camera_set_camera_point_absolute (0000)
-000739F0 0010:
-	_scripted_camera_next_camera_point (0000)
-00073A00 0010:
-	_scripted_camera_object_relative_to (0000)
-00073A10 0020:
-	_scripted_camera_time (0000)
-00073A30 0680:
-	_scripted_camera_update (0000)
-00256A7C 003d:
-	??_C@_0DN@JNLEKBID@cannot?5set?5first?5person?5camera?5o@ (0000)
-00256ABC 0029:
-	??_C@_0CJ@GLCFCHKA@c?3?2halo?2SOURCE?2camera?2camera_scr@ (0000)
-002DCB60 0040:
-	_camera_script_globals (0000)
-*/
+/* CAMERA_SCRIPTING.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/camera/camera_scripting.c. */
 
 /* ---------- headers */
 
@@ -66,11 +31,17 @@ enum
 
 /* ---------- structures */
 
+/* leading members of director.c's camera_control */
 struct camera_control
 {
-	long unknown0;
+	short local_player_index;
+	boolean active;
+	byte pad3;
 	real seconds_elapsed;
 };
+
+typedef char camera_control_seconds_elapsed_offset_assert[
+	offsetof(struct camera_control, seconds_elapsed) == 0x4 ? 1 : -1];
 
 struct dead_camera
 {
@@ -505,7 +476,7 @@ void scripted_camera_update(
 			{
 				dead_camera_new(
 					camera,
-					(short)controls->unknown0,
+					controls->local_player_index,
 					camera_script_globals.relative_object_index);
 			}
 			dead_camera_update(camera, controls, result);

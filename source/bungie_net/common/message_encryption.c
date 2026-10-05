@@ -1,24 +1,5 @@
-/*
-MESSAGE_ENCRYPTION.C
-
-symbols in this file:
-0006EE40 0050:
-	_reversible_crypt (0000)
-0006EE90 0090:
-	_tea_encipher (0000)
-0006EF20 0090:
-	_tea_decipher (0000)
-0006EFB0 0100:
-	_message_encrypt (0000)
-0006F0B0 0100:
-	_message_decrypt (0000)
-0025579C 0030:
-	??_C@_0DA@EDCJMCDB@?$CI0?$DM?$DNflags?$CJ?5?$CG?$CG?5?$CI?$CIflags?$CJ?$DM?$DNMESSAGE_@ (0000)
-002557CC 000e:
-	??_C@_0O@IIKLGMGM@msgptr?5?$CG?$CG?5key?$AA@ (0000)
-002557DC 0036:
-	??_C@_0DG@HFDJMHM@c?3?2halo?2SOURCE?2bungie_net?2common@ (0000)
-*/
+/* MESSAGE_ENCRYPTION.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/bungie_net/common/message_encryption.c. */
 
 /* ---------- headers */
 
@@ -45,11 +26,19 @@ union message_header_value
 	word value;
 	struct
 	{
+#ifdef __BIG_ENDIAN__
+		/* port: flags in the low bits (message_header.h's masks), where a big-endian GCC puts the last field */
+		word message_size : 12;
+		word type : 2;
+		word flags : 2;
+#else
 		word flags : 2;
 		word type : 2;
 		word message_size : 12;
+#endif
 	} fields;
 };
+typedef char message_header_value_size_assert[sizeof(union message_header_value) == 0x02 ? 1 : -1];
 
 /* ---------- prototypes */
 

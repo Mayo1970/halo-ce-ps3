@@ -1,58 +1,5 @@
-/*
-S3TC.C
-
-symbols in this file:
-0005EB30 0060:
-	_ColorToFcolor (0000)
-0005EB90 0050:
-	_FcolorToColor (0000)
-0005EBE0 0040:
-	_ColorToRGB (0000)
-0005EC20 0060:
-	_RGBToColor (0000)
-0005EC80 00a0:
-	_Square3x3 (0000)
-0005ED20 0210:
-	_Quantize (0000)
-0005EF30 0140:
-	_ClipExtrema (0000)
-0005F070 0170:
-	_AllSame (0000)
-0005F1E0 0890:
-	_EncodeBlockRGBColorKey (0000)
-0005FA70 01c0:
-	_DecodeBlockRGB (0000)
-0005FC30 01f0:
-	_DecodeBlockRGB__single_pixel (0000)
-0005FE20 0090:
-	_DecodeBlockAlpha4 (0000)
-0005FEB0 0050:
-	_DecodeBlockAlpha4__single_pixel (0000)
-0005FF00 0260:
-	_DecodeBlockAlpha3 (0000)
-00060160 01b0:
-	_DecodeBlockAlpha3__single_pixel (0000)
-00060310 0020:
-	_EncodeBlockRGB (0000)
-00060330 0070:
-	_EncodeBlockAlpha4 (0000)
-000603A0 0270:
-	_EncodeBlockAlpha3 (0000)
-002510C8 0004:
-	__real@3b808081 (0000)
-002510CC 0004:
-	__real@c7c34f80 (0000)
-002510D0 000d:
-	??_C@_0N@NBFAEMLN@v?$DO?$DN0?5?$CG?$CG?5v?$DM?$DN4?$AA@ (0000)
-002510E0 000d:
-	??_C@_0N@CLDKFKKD@u?$DO?$DN0?5?$CG?$CG?5u?$DM?$DN4?$AA@ (0000)
-002510F0 0023:
-	??_C@_0CD@CADFKEEP@c?3?2halo?2SOURCE?2bitmaps?2s3tc?2s3tc@ (0000)
-002DB64C 002c:
-	_wtPrimary (0000)
-	_mapRGB4 (000c)
-	_mapRGB3 (001c)
-*/
+/* S3TC.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/bitmaps/s3tc/s3tc.c. */
 
 /* ---------- headers */
 
@@ -61,6 +8,15 @@ symbols in this file:
 /* ---------- constants */
 
 /* ---------- macros */
+
+/* port: S3TC blocks in texture memory keep the Xbox's little-endian byte order */
+#ifdef HALO_PS3
+#define S3TC_WORD(value) ((word)__builtin_bswap16(value))
+#define S3TC_LONG(value) ((unsigned long)__builtin_bswap32(value))
+#else
+#define S3TC_WORD(value) (value)
+#define S3TC_LONG(value) (value)
+#endif
 
 /* ---------- structures */
 
@@ -156,13 +112,8 @@ static void RGBToColor(
 	struct s3tc_color *pcolor)
 {
 	word rgb = *prgb;
-	/* color.rgba[S3TC_ALPHA] is deliberately left unwritten, as January leaves
-	   it: January stores only three bytes of this local and copies all four out.
-	   Both callers, DecodeBlockRGB and DecodeBlockRGB__single_pixel, assign the
-	   alpha of every colour on the line immediately after calling this, so the
-	   indeterminate byte is never read. Initialising it - either with = { 0 } or
-	   with an explicit store before or after the channels - returns both this
-	   function and DecodeBlockRGB to residual. */
+	/* rgba[S3TC_ALPHA] stays unwritten as in January: both decoders set it right after.
+	   Initialising it makes this function and DecodeBlockRGB residual (non-matching) again. */
 	struct s3tc_color color;
 
 	color.rgba[0] = (byte)rgb;
@@ -310,6 +261,20 @@ static void AllSame(
 
 	return;
 }
+
+#ifdef HALO_PS3
+/* port: a copy of the block in the CPU's byte order, for the decoders */
+static struct s3tc_block_rgb *s3tc_block_rgb_native(
+	struct s3tc_block_rgb const *source,
+	struct s3tc_block_rgb *block)
+{
+	block->color0 = S3TC_WORD(source->color0);
+	block->color1 = S3TC_WORD(source->color1);
+	block->bitmap = S3TC_LONG(source->bitmap);
+
+	return block;
+}
+#endif
 
 /* ---------- public code */
 
@@ -591,12 +556,18 @@ void DecodeBlockRGB(
 	unsigned long bitmap;
 	long pixel;
 	long channel;
+#ifdef HALO_PS3
+	struct s3tc_block_rgb native_block;
+#endif
 
 	if (source == NULL)
 	{
 		memset(colors, 0, S3TC_BLOCK_PIXELS * sizeof(struct s3tc_color));
 		return;
 	}
+#ifdef HALO_PS3
+	source = s3tc_block_rgb_native(source, &native_block);
+#endif
 
 	RGBToColor(&source->color0, &color[0]);
 	RGBToColor(&source->color1, &color[1]);
@@ -652,12 +623,18 @@ void DecodeBlockRGB__single_pixel(
 {
 	struct s3tc_color colors[4];
 	long channel;
+#ifdef HALO_PS3
+	struct s3tc_block_rgb native_block;
+#endif
 
 	if (pblockSrc == NULL)
 	{
 		memset(colorDst, 0, sizeof(*colorDst));
 		return;
 	}
+#ifdef HALO_PS3
+	pblockSrc = s3tc_block_rgb_native(pblockSrc, &native_block);
+#endif
 
 	RGBToColor(&pblockSrc->color0, &colors[0]);
 	RGBToColor(&pblockSrc->color1, &colors[1]);
@@ -712,7 +689,7 @@ void DecodeBlockAlpha4(
 
 	for (row = 0; row < 4; ++row)
 	{
-		alpha = source->alpha_bitmap[row];
+		alpha = S3TC_WORD(source->alpha_bitmap[row]);
 
 		for (column = 0; column < 4; ++column)
 		{
@@ -735,7 +712,7 @@ void DecodeBlockAlpha4__single_pixel(
 
 	DecodeBlockRGB__single_pixel(&source->rgb, color, u, v);
 
-	alpha = (source->alpha_bitmap[v] >> (4 * u)) & 0xF;
+	alpha = (S3TC_WORD(source->alpha_bitmap[v]) >> (4 * u)) & 0xF;
 	color->rgba[S3TC_ALPHA] = (alpha << 4) | alpha;
 
 	return;

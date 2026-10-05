@@ -2,8 +2,9 @@
 
 The PS3 port builds with PSL1GHT (ppu-gcc 7.2) in the Docker image
 `ps3dev-latest:latest`. The EBOOT links the whole game. It runs headless (no
-picture, no sound, no pads) to the first map load, and stops there (G2 in
-`GOALS.md`). `GOALS.md` in the root folder gives the plan and the blockers.
+picture, no sound, no pads): it loads the first map, swaps the map data to
+the PS3's byte order, runs it for 30 s and stops (G3 in `GOALS.md`).
+`GOALS.md` in the root folder gives the plan and the blockers.
 
 The code is in three parts:
 
@@ -30,6 +31,7 @@ fixed-width types, because `long` has a different size on each side.
 | `xbox/xbox_kernel.c` | Handles, events, mutexes, threads, waits, APCs, time, `GlobalAlloc`. One lv2 lock and condition variable for all waits. |
 | `xbox/xbox_memory.c` | `XPhysicalAlloc`. The Xbox window at `0x80000000`, as on the Xbox. |
 | `xbox/xbox_files.c` | The Win32 file API and the Xbox paths. |
+| `xbox/xbox_tag_swap.c` | The swap of the map data (header, tag data, structure BSPs) to the PS3's byte order when the game reads it. Its layouts are `xbox/xbox_tag_swap_tables.h`, which `tools/ps3_tag_swap.py` writes from Invader's tag definitions (GPLv3). |
 | `xbox/d3d8_null.c`, `dsound_null.c`, `xinput_null.c`, `xnet_null.c` | Headless devices until G4 and G5, no network until G7. |
 | `xbox/port_stubs.c` | The Linux build's services that the PS3 does not have yet: internet play, the PC menus, the high-res HUD and text. |
 
@@ -46,6 +48,7 @@ Use a shell that runs `build.sh` (Git Bash on Windows) in the root folder:
 | `./build.sh -j12 bringup-self` | `build/ps3/bringup/EBOOT.BIN`, the G0 bring-up test |
 | `./build.sh -j12 game` | Compiles the game's 476 units only |
 | `./build.sh clean` | Deletes `build/ps3` |
+| `tools/ps3_tag_swap_check.sh "<maps folder>"` | Runs the map swap on the PC over each map and BSP of an Xbox `maps` folder |
 
 The game units use `include/halo_ps3_prefix.h` (32-bit `long`, `HALO_PTR32`,
 the MSVC keywords) and the GCC equivalents of the Linux build's ABI flags,
@@ -78,7 +81,8 @@ The title ID is `HALOCE000`. To update only the program, copy
 ## Game data
 
 The data root is `/dev_hdd0/data/HaloCE`. It is the Xbox `d:\`. Put the
-`maps` folder of an Xbox disc image in it, for example with FTP:
+`maps` folder of an Xbox disc image in it, unchanged (the game swaps the map
+data when it loads it), for example with FTP:
 `/dev_hdd0/data/HaloCE/maps/a10.map`. If the HDD has no `maps` folder, the
 port looks for `HaloCE/maps` on the USB drives (`/dev_usb000` to
 `/dev_usb006`). At the first start without data, it makes the HDD folder.
@@ -99,7 +103,7 @@ enter `nc -ul 18194` on that computer. `printf`, `puts` and `putchar` also
 go to the log (`-Wl,--wrap`), and so do the lines of the game's
 `debug.txt`.
 
-## The EBOOT (G2)
+## The EBOOT (G3)
 
 | Part | In the log | On the PS3 |
 | --- | --- | --- |
@@ -107,7 +111,8 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 | Memory | `[mem]` lines: the free memory at boot, after the memory window and after the RSX init; the mmapper results | |
 | Display | `[vid]` lines; `[hb]` every 10 s | A slow blue pulse while the game runs |
 | Game | `[halo]` lines: each memory window block, each file the game opens, each thread; the game's own `debug.txt` lines | |
-| End | `G2:` lines: the first map file, its header, the free memory | The pulse turns green. PS button > Quit Game goes back to the XMB. |
+| Map data | `tag data swapped in N ms: ...` and `structure BSP swapped ...`, with the counts and the errors | |
+| End | `G3:` lines: the frames and game ticks on the swapped data | The pulse turns green. PS button > Quit Game goes back to the XMB. |
 | Failure | `EXCEPTION halt` and the call stack: `./build.sh symbols ADDRESSES="..."` names its functions | The pulse turns red and stays red until PS button > Quit Game |
 
 ## Bring-up test

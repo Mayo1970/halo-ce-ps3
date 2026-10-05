@@ -100,6 +100,68 @@ struct ps3_host_condition
 	sys_cond_t condition;
 };
 
+/* the lock and condition waits in progress, with their callers, for the heartbeat (ps3_host_report_blocked) */
+#define BLOCKED_SLOTS 32
+
+static struct
+{
+	volatile uint64_t thread;
+	volatile uint64_t since;
+	void *volatile callers[3];
+} blocked[BLOCKED_SLOTS];
+
+/* the return addresses of the waiting function's callers, from the back chain of this thread's own stack,
+which ends at a zero link */
+static int __attribute__((noinline)) blocked_begin(void)
+{
+	sys_ppu_thread_t thread = 0;
+	uint64_t frames[5];
+	int slot, level;
+
+	frames[0] = (uint64_t)__builtin_frame_address(0);
+	for (level = 1; level < 5; level++)
+	{
+		uint64_t next = frames[level - 1] ? *(volatile uint64_t *)frames[level - 1] : 0;
+
+		frames[level] = next > frames[level - 1] && next - frames[level - 1] < 0x100000 && !(next & 15) ? next : 0;
+	}
+	sysThreadGetId(&thread);
+	for (slot = 0; slot < BLOCKED_SLOTS; slot++)
+	{
+		if (__sync_bool_compare_and_swap(&blocked[slot].thread, 0, (uint64_t)thread + 1))
+		{
+			for (level = 0; level < 3; level++)
+				blocked[slot].callers[level] = frames[level + 2] ? *(void *volatile *)(frames[level + 2] + 16) : NULL;
+			blocked[slot].since = ps3_host_microseconds();
+			return slot;
+		}
+	}
+	return -1;
+}
+
+static void blocked_end(int slot)
+{
+	if (slot >= 0)
+		blocked[slot].thread = 0;
+}
+
+void ps3_host_report_blocked(void)
+{
+	uint64_t now = ps3_host_microseconds();
+	int slot;
+
+	for (slot = 0; slot < BLOCKED_SLOTS; slot++)
+	{
+		uint64_t thread = blocked[slot].thread;
+		uint64_t since = blocked[slot].since;
+
+		if (thread && now > since && now - since > 2000000)
+			ps3_log_printf("[host] thread %llx blocked %llu s, callers %p %p %p\n", (unsigned long long)(thread - 1),
+				(unsigned long long)((now - since) / 1000000), blocked[slot].callers[0], blocked[slot].callers[1],
+				blocked[slot].callers[2]);
+	}
+}
+
 struct ps3_host_lock *ps3_host_lock_create(int recursive)
 {
 	struct ps3_host_lock *lock = malloc(sizeof(*lock));
@@ -130,7 +192,10 @@ void ps3_host_lock_destroy(struct ps3_host_lock *lock)
 
 void ps3_host_lock_enter(struct ps3_host_lock *lock)
 {
+	int slot = blocked_begin();
+
 	sysMutexLock(lock->mutex, 0);
+	blocked_end(slot);
 }
 
 int ps3_host_lock_try_enter(struct ps3_host_lock *lock)
@@ -162,8 +227,10 @@ struct ps3_host_condition *ps3_host_condition_create(struct ps3_host_lock *lock)
 
 int ps3_host_condition_wait(struct ps3_host_condition *condition, uint64_t timeout_microseconds)
 {
+	int slot = blocked_begin();
 	s32 result = sysCondWait(condition->condition, timeout_microseconds);
 
+	blocked_end(slot);
 	return errno_from_lv2(result) == ETIMEDOUT;
 }
 

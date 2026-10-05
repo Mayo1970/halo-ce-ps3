@@ -606,7 +606,12 @@ static void parse_bounds(char const *text, rectangle2d *bounds, char const *file
 	long top, left, bottom, right;
 	char extra;
 
+#ifdef HALO_PS3
+	/* the game's long is an int here; newlib's %ld would store 8 bytes */
+	if (text && sscanf(text, "%d %d %d %d %c", &top, &left, &bottom, &right, &extra) == 4)
+#else
 	if (text && sscanf(text, "%ld %ld %ld %ld %c", &top, &left, &bottom, &right, &extra) == 4)
+#endif
 	{
 		bounds->y0 = (short)top;
 		bounds->x0 = (short)left;

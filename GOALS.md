@@ -24,7 +24,7 @@ Rules:
 | G0 Scaffolding and the platform layer: video, pads, audio, files, UDP log, XMB exit, memory probe | Done. Hardware SUCCESS 2026-10-05: 60 fps with paced flips, pad buttons and sticks, the 440 Hz tone with 0 partial blocks, a clean XMB exit. No listener ran at boot, so the free memory, the resolution and the map list are not measured yet. |
 | G1 Data model: the game compiles and links for LP64 with the 32-bit layouts of its data | Done in G2. Steps 1 (pointer fields) and 2 (32-bit `long`) done 2026-10-05. Matt (2026-10-05): no G1 hardware test; G2 fixes the open items and links the game. |
 | G2 The Xbox platform layer on PS3 (kernel, XAPI, files, threads, memory, from `port/linux/src`); the game runs headless to its first map load | Done. Hardware SUCCESS 2026-10-05 on the third run: the game runs headless to the open of `d:\maps\ui.map`, and the XMB exit is clean. See "G2 progress". |
-| G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Not started |
+| G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done. Hardware SUCCESS 2026-10-05 on run 9: 1800 frames of the main menu on the swapped `ui.map`, after the fixes of 2 halts and of the 43 audit mismatches. See "G3 progress". |
 | G4 Direct3D 8 on the RSX: the main menu shows | Not started |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Not started |
 | G6 First playable level (a10) | Not started |
@@ -146,9 +146,113 @@ Done 2026-10-05: hardware SUCCESS on the third run.
   `d:\maps\ui.map` (14145536 bytes, version 5, build "01.10.12.2276") and
   stopped on the green screen. 94 MB were free after the game's start-up
   (179 MB after the RSX init). The XMB exit was clean.
-- Still a risk: the game state pools may outgrow 15.75 MB with 8-byte
-  pointers (an assert in `game_state_malloc`). The audit found the budget
-  is 0xFC0000, against 0x305000 on the Xbox.
+- The game state fits (audit, 2026-10-05): the PS3 needs 0xDA0C3C (13.63
+  MB) of the 0xFC0000 budget; ILP32 needs 13.60 MB. Only 33 KB grow with
+  8-byte pointers (mostly `object_header_datum`, 12 to 16 bytes).
+
+## G3 progress
+
+Matt (2026-10-05): swap the map data at load time on the PS3, with Invader's
+tag definitions (GPL-3.0-only, so the tables and the EBOOT are GPLv3). The
+PS3 keeps the Xbox maps as they are.
+
+- No pointer relocation: the Xbox window is at `0x80000000`, so the map's
+  pointers stay valid (blocker 3).
+- The swap (`port/ps3/xbox/xbox_tag_swap.c`), in place, when the game reads:
+  - The map header, in `cache_file_header_verify` (each header the game
+    reads goes there), only if it is little-endian. The cache copy writes
+    the swapped header to `z:\cacheNNN.map`; the rest of that file stays
+    little-endian.
+  - The tag data, in `scenario_tags_load`, before the `tags` check: the
+    tag header, the tag instances, the D3D vertex and index buffer headers,
+    then each tag by its group's layout, through its blocks.
+  - Each structure BSP, in `scenario_structure_bsp_load`: its header, its
+    D3D vertex buffer headers, then the `sbsp` layout.
+  - Special data: Xbox model parts (32-byte compressed vertices behind the
+    part's D3D vertex buffer, and the triangle strip), BSP lightmap vertices
+    (by the material's counts), script nodes (a `data_array` of 20-byte
+    nodes; values swap as longs), animation frame info, default data and
+    frames (by the node flags; compressed animations by the sections of
+    their header), recorded animation streams (version 4, by event),
+    UTF-16 strings, PVS bit vectors. Sound samples and bitmap pixels are not
+    in the tag data: the caches read them by file offset (G4, G5).
+- The layouts: `tools/ps3_tag_swap.py` reads Invader's JSON definitions and
+  writes `port/ps3/xbox/xbox_tag_swap_tables.h`. It checks each struct's
+  size against Invader's. Xbox specifics: the data field kinds, MCC-only
+  fields as padding, the 'external' word of a data field is not used.
+- Checked on the PC: `tools/ps3_tag_swap_check.sh` runs the same C file with
+  the host GCC of the Docker image on all 24 maps of the NTSC disc
+  (01.10.12.2276) and their 82 BSPs: 0 errors, no byte reached twice, only
+  names and alignment bytes not reached. Python checks of the same maps:
+  the 94 compressed animations of a10 and c40 have consistent keyframes, and
+  all 349 recorded animation streams end exactly at their end event.
+- The game's views of tag data, compared with Invader's units through the
+  DWARF of a `-g` build (244 struct pairs): 5 fields that the game reads
+  narrower than the tag defines them. Fixed: the UI widget text box flags
+  (swapped as words), the fog flags (a byte and a word view), a runtime
+  decal's palette index, the vehicle flags that AI perception reads.
+- Big-endian fixes in the game: `struct data_array` (`HALO_PTR32` data,
+  0x38 bytes, as the map's script nodes); the HaloScript values
+  (`HS_LOW_*`, `HS_SLOT_*` in `hs.h`: the argument views, the results, the
+  global reconcile, the casts, `sleep_until`, `and`/`or`, `=`/`!=`);
+  `hs_stack_frame` (0x10); the string external global (it wrote 8 bytes in
+  a 4-byte value); the recorded animation header bitfield; the recorded
+  animation debug table (0x10 entries); a word count passed as a long
+  (`ui_widget_event_handler_functions.c`); the material type read of
+  `material_effects.c`.
+- The G3 stop: after the first map's tag data is swapped, 1800 presented
+  frames (30 s at 60 Hz) end the run on the green screen
+  (`HALO_PS3_STOP_AFTER_MAIN_MENU`).
+- Hardware runs 1 to 8 (2026-10-05):
+  - The swap of `ui.map` on the PS3 gives the counts of the PC check and 0
+    errors (8 to 9 ms for the tag data).
+  - Runs 1 to 7: the main thread stopped on its first main loop pass, with
+    no wait and no lock; the display thread and the heartbeat ran on. Finer
+    main loop steps in each run placed it in `set_window_camera_values`,
+    then at its first float store. Cause: `global_screenshot_count` (a
+    `#pragma pack(push, 1)` struct, 0x38B bytes) was at 0x103D217F. The PPE
+    faults on a misaligned float store, and lv2 ends only that thread.
+    Fixed: `__declspec(align(8))` on the PS3. No other data symbol with
+    floats is misaligned.
+  - Run 8: the main menu's text halted in `rasterizer_text_begin`
+    (`parameters->map[0]`, called from `render_ui_widgets`).
+    `rasterizer_xbox_text.c` read the caller's
+    `rasterizer_dynamic_screen_geometry_parameters` through its own copy
+    with 8-byte pointers. Fixed: `HALO_PTR32` in the copy, a 0x8C size
+    check. `rasterizer_xbox_plasma_energy.c` had the same bug (fixed in the
+    audit below).
+  - lv2's debug calls (`sys/dbg.h`) give 0x8001042c on Matt's console, so
+    the build has no exception handler.
+- Mismatch audit (2026-10-05). Why G2 and G3 went one bug per boot: each
+  fault ends the run where it happens, a fault is silent (lv2 ends only that
+  thread; no debug calls; `__try` compiled out), and the bug classes exist
+  on no upstream build (all ILP32 and little-endian). A static audit of 10
+  classes, each finding checked by an adversarial verifier, found 43 issues;
+  Matt asked to fix all. Each fix was reviewed in the compiled code:
+  - `hs_function_definition` (5 pointers, 56 bytes on LP64) put tail
+    padding before its `with_N_parameters` arrays, so every script function
+    with 2+ parameters read types 2..N as 0 ("needs to be recompiled" and
+    garbage arguments; `ring_loop` on the menu, 1793 calls in a10). Now
+    `HALO_PTR32`, 0x1C, with offset checks.
+  - Script reals sat at 2 mod 4 on the script stack (frame data at +14):
+    a silent main thread death early in a10. Frames and slots are now
+    4-aligned on the PS3; a simulation over the 24 maps gives 0 misaligned
+    reals and a worst case of 457 of 512 bytes (453 on the Xbox).
+  - Compressed animations: 89 of 186 have float sections at 2 mod 4 in the
+    Xbox maps (a10 intro): now copied to aligned locals before use.
+  - `single_player_level_data[0x50]` held 16-byte entries (10 x 16): the
+    level list overwrote `build_number_string`. `map_name` is `HALO_PTR32`.
+  - Also fixed: `plasma_runtime_parameters`, the camera and game start
+    request copies, the AI vocalization short, CPU texels in the Xbox byte
+    order, contrail alpha, Winsock order, the network message size union,
+    the message header bitfield, MSVC `_vsnprintf` returns (lines of 256+
+    characters halted), `fast_ftol_C`, `menu_tags.c` `%ld`, `trees.c`,
+    the texture cache debug sort, the loading TGA, thread priorities and
+    spins, cache flag barriers, thread names.
+- Run 9 (2026-10-05, the audit fixes): SUCCESS. The main loop ran at 30
+  frames per second to `G3: 1800 frames and 1799 game ticks on the swapped
+  map data` and the green screen. Free memory: 188 MB at boot, 179 MB after
+  the RSX init.
 
 ## Blockers found in the analysis
 
@@ -174,8 +278,8 @@ Done 2026-10-05: hardware SUCCESS on the third run.
 2. **Little-endian map data.** Cache files, tag data, vertex and index
    data, bitmaps and sounds are little-endian. Only 7 files in `source/`
    define tag fields or byte-swap codes, so a swap needs external tag
-   definitions. Choice for G3: convert the maps once on the PC, or swap
-   them at load time.
+   definitions. Decision (Matt, 2026-10-05): swap at load time with
+   Invader's definitions (see "G3 progress").
 3. **Fixed Xbox addresses.** The tag cache is at `0x803A6000` and the game
    state at `0x81A00000` (`source/cache/physical_memory_map.c`). Solved on
    the PS3 (2026-10-05): lv2's mmapper gives the window at `0x80000000`,

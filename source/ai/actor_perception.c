@@ -436,7 +436,12 @@ struct actor_perception_vehicle_definition_view
 {
 	byte __unknown000[4];
 	real bounding_radius;
+#ifdef __BIG_ENDIAN__
+	/* port: the low byte of the tag's long flags, which a big-endian long keeps last */
+	byte __unknown008[0x2EB];
+#else
 	byte __unknown008[0x2E8];
+#endif
 	byte danger_zone_flags;
 };
 
@@ -670,8 +675,10 @@ typedef char actor_perception_definition_melee_range_offset_assert[
 	offsetof(struct actor_definition, berserk.melee_attack_range) == 0x37C ? 1 : -1];
 typedef char actor_perception_vehicle_definition_radius_offset_assert[
 	offsetof(struct actor_perception_vehicle_definition_view, bounding_radius) == 4 ? 1 : -1];
+#ifndef __BIG_ENDIAN__
 typedef char actor_perception_vehicle_definition_danger_zone_offset_assert[
 	offsetof(struct actor_perception_vehicle_definition_view, danger_zone_flags) == 0x2F0 ? 1 : -1];
+#endif
 typedef char actor_perception_responsible_unit_team_offset_assert[
 	offsetof(struct actor_perception_responsible_unit_view, team) == 0x68 ? 1 : -1];
 typedef char actor_perception_encounter_view_blind_offset_assert[

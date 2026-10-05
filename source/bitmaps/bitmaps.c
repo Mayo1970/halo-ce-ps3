@@ -1,230 +1,5 @@
-/*
-BITMAPS.C
-
-symbols in this file:
-0006ADC0 0070:
-	_bitmap_type_get_string (0000)
-0006AE30 0080:
-	_bitmap_format_get_string (0000)
-0006AEB0 0070:
-	_bitmap_format_get_bits_per_pixel (0000)
-0006AF20 0040:
-	_bitmap_changed (0000)
-0006AF60 0050:
-	_bitmap_delete (0000)
-0006AFB0 0220:
-	_bitmap_2d_address (0000)
-0006B1D0 0290:
-	_bitmap_3d_address (0000)
-0006B460 0210:
-	_bitmap_cube_map_address (0000)
-0006B670 00d0:
-	_bitmap_mipmap_address (0000)
-0006B740 0220:
-	_bitmap_format_to_a8r8g8b8 (0000)
-0006B960 0010:
-	_bitmap_byte_swap_pixels (0000)
-0006B970 0100:
-	_palette_find_closest_match (0000)
-0006BA70 0020:
-	_bitmap_format_type_valid_width (0000)
-0006BA90 0020:
-	_bitmap_format_type_valid_height (0000)
-0006BAB0 0030:
-	_bitmap_format_type_valid_depth (0000)
-0006BAE0 0160:
-	_bitmap_verify (0000)
-0006BC40 0080:
-	_bitmap_rebuild (0000)
-0006BCC0 0090:
-	_bitmap_get_max_mipmap_count (0000)
-0006BD50 00a0:
-	_bitmap_mipmap_get_width (0000)
-0006BDF0 00a0:
-	_bitmap_mipmap_get_height (0000)
-0006BE90 0090:
-	_bitmap_mipmap_get_depth (0000)
-0006BF20 00b0:
-	_bitmap_mipmap_get_pixel_count (0000)
-0006BFD0 0090:
-	_bitmap_mipmap_get_pixel_data_size (0000)
-0006C060 00e0:
-	_bitmap_mipmap_get_row_pitch (0000)
-0006C140 0510:
-	_bitmap_2d_get_pixel (0000)
-0006C650 0060:
-	_bitmap_get_pixel_count (0000)
-0006C6B0 0070:
-	_bitmap_get_pixel_data_size (0000)
-0006C720 0180:
-	_bitmap_2d_new (0000)
-0006C8A0 01c0:
-	_bitmap_3d_new (0000)
-0006CA60 0170:
-	_bitmap_cube_map_new (0000)
-0006CBD0 0280:
-	_bitmap_3d_slice_extract (0000)
-0006CE50 0280:
-	_bitmap_3d_slice_insert (0000)
-0006D0D0 0280:
-	_bitmap_cube_map_face_extract (0000)
-0006D350 0280:
-	_bitmap_cube_map_face_insert (0000)
-002544CC 0013:
-	_rdata_002544cc (0000)
-002544E0 0014:
-	??_C@_0BE@NMMIDGBH@palettized?5bump?5map?$AA@ (0000)
-002544F4 0016:
-	??_C@_0BG@OOFEMLJA@true?9color?5with?5alpha?$AA@ (0000)
-0025450C 000b:
-	??_C@_0L@BOBKAIGE@true?9color?$AA@ (0000)
-00254518 0016:
-	??_C@_0BG@KKGKOADO@high?9color?5with?5alpha?$AA@ (0000)
-00254530 001c:
-	??_C@_0BM@LMNMJHOE@high?9color?5with?51?9bit?5alpha?$AA@ (0000)
-0025454C 0007:
-	??_C@_06MOMCHLAF@r6g5b5?$AA@ (0000)
-00254554 000b:
-	??_C@_0L@HMILFLFB@high?9color?$AA@ (0000)
-00254560 0019:
-	??_C@_0BJ@NGPIOEHO@separate?5alpha?9intensity?$AA@ (0000)
-0025457C 0019:
-	??_C@_0BJ@GECAPECH@combined?5alpha?9intensity?$AA@ (0000)
-00254598 000a:
-	??_C@_09DDBFFAKC@intensity?$AA@ (0000)
-002545A4 0006:
-	??_C@_05IAEKHIAN@alpha?$AA@ (0000)
-002545AC 000b:
-	??_C@_0L@HGKEADFO@3d?5texture?$AA@ (0000)
-002545B8 000b:
-	??_C@_0L@LHCKNMJO@2d?5texture?$AA@ (0000)
-002545C4 0037:
-	??_C@_0DH@BEHPNKOO@bitmap_type_string_table?$FLNUMBER_@ (0000)
-002545FC 0027:
-	??_C@_0CH@BDFKHBGO@type?$DO?$DN0?5?$CG?$CG?5type?$DMNUMBER_OF_BITMAP@ (0000)
-00254624 0021:
-	??_C@_0CB@ICKBKEMJ@c?3?2halo?2SOURCE?2bitmaps?2bitmaps?4c@ (0000)
-00254648 003b:
-	??_C@_0DL@KKAOOLLI@bitmap_format_string_table?$FLNUMBE@ (0000)
-00254684 002d:
-	??_C@_0CN@FACOLOCE@format?$DO?$DN0?5?$CG?$CG?5format?$DMNUMBER_OF_BI@ (0000)
-002546B4 002e:
-	??_C@_0CO@OINHIEJL@bitmap_format_bits_per_pixel_tab@ (0000)
-002546E8 0042:
-	??_C@_0EC@HCBFGBH@?$CBTEST_FLAG?$CIbitmap?9?$DOflags?0?5_bitma@ (0000)
-00254730 0044:
-	??_C@_0EE@JDKFDDJD@?$CBTEST_FLAG?$CIbitmap?9?$DOflags?0?5_bitma@ (0000)
-00254774 0036:
-	??_C@_0DG@JNCCJPLP@mipmap_index?$DO?$DN0?5?$CG?$CG?5mipmap_index?$DM@ (0000)
-002547AC 0019:
-	??_C@_0BJ@HFDMDDBL@y?$DO?$DN0?5?$CG?$CG?5y?$DMbitmap?9?$DOheight?$AA@ (0000)
-002547C8 0018:
-	??_C@_0BI@PFMPFOOK@x?$DO?$DN0?5?$CG?$CG?5x?$DMbitmap?9?$DOwidth?$AA@ (0000)
-002547E0 0015:
-	??_C@_0BF@FJOEGAHK@bitmap?9?$DObase_address?$AA@ (0000)
-002547F8 004a:
-	??_C@_0EK@CEJFGEAF@?$CBTEST_FLAG?$CIbitmap?9?$DOflags?0?5_bitma@ (0000)
-00254848 004c:
-	??_C@_0EM@ILMNFLHJ@?$CBTEST_FLAG?$CIbitmap?9?$DOflags?0?5_bitma@ (0000)
-00254894 0018:
-	??_C@_0BI@DEJNOKHK@z?$DO?$DN0?5?$CG?$CG?5z?$DMbitmap?9?$DOdepth?$AA@ (0000)
-002548AC 000f:
-	??_C@_0P@FPPECFAG@mipmap_address?$AA@ (0000)
-002548BC 001a:
-	??_C@_0BK@JFOFDHCG@closest_match_index?$CB?$DNNONE?$AA@ (0000)
-002548D8 0035:
-	??_C@_0DF@KNEGKCJ@?$CD?$CD?$CD?5ERROR?5bitmap?5?$EA?$CFp?5?$CI?$CD?$CFdx?$CD?$CFd?$CJ?5a@ (0000)
-00254910 0040:
-	??_C@_0EA@GIFFGKIJ@?$CD?$CD?$CD?5ERROR?5bitmap?5?$EA?$CFp?5?$CI?$CD?$CFdx?$CD?$CFd?$CJ?5a@ (0000)
-00254950 001d:
-	??_C@_0BN@GIHJBEAI@bitmap_verify?$CIbitmap?0?5FALSE?$CJ?$AA@ (0000)
-00254970 0030:
-	??_C@_0DA@NMAFJIPF@?$CBTEST_FLAG?$CIbitmap?9?$DOflags?0?5_bitma@ (0000)
-002549A0 0032:
-	??_C@_0DC@IAIEDLML@?$CBTEST_FLAG?$CIbitmap?9?$DOflags?0?5_bitma@ (0000)
-002549D4 000f:
-	??_C@_0P@KMBFAFCG@y?$DO?$DN0?5?$CG?$CG?5y?$DM4096?$AA@ (0000)
-002549E4 000f:
-	??_C@_0P@LDJJNFHK@x?$DO?$DN0?5?$CG?$CG?5x?$DM4096?$AA@ (0000)
-002549F8 0079:
-	??_C@_0HJ@FCOPIPKI@bitmap_2d_get_pixel?5tried?5to?5acc@ (0000)
-00254A78 007b:
-	??_C@_0HL@JNIKKJE@bitmap_2d_get_pixel?5tried?5to?5acc@ (0000)
-00254AF4 0017:
-	??_C@_0BH@KGBHNMIE@lod?$DO?$DN0?40f?5?$CG?$CG?5lod?$DM?$DN1?40f?$AA@ (0000)
-00254B0C 002e:
-	??_C@_0CO@GAMEHMN@?$CBTEST_FLAG?$CIbitmap?9?$DOflags?0?5_bitma@ (0000)
-00254B3C 0024:
-	??_C@_0CE@IDMEMNBL@?$CD?$CD?$CD?5ERROR?5failed?5to?5allocate?5bit@ (0000)
-00254B60 0032:
-	??_C@_0DC@NHEJMJDK@?$CD?$CD?$CD?5ERROR?5failed?5to?5allocate?5bit@ (0000)
-00254B98 0041:
-	??_C@_0EB@LFCKBNF@bitmap_format_type_valid_height?$CI@ (0000)
-00254BE0 0040:
-	??_C@_0EA@PKAAFKPD@bitmap_format_type_valid_width?5?$CI@ (0000)
-00254C20 0040:
-	??_C@_0EA@IPIJEMGL@bitmap_format_type_valid_depth?5?$CI@ (0000)
-00254C60 0041:
-	??_C@_0EB@JAPHONLK@bitmap_format_type_valid_height?$CI@ (0000)
-00254CA8 0040:
-	??_C@_0EA@DLIOIFDD@bitmap_format_type_valid_width?5?$CI@ (0000)
-00254CE8 0015:
-	??_C@_0BF@IJMOOLDH@?$CIwidth?$CG?$CIwidth?91?$CJ?$CJ?$DN?$DN0?$AA@ (0000)
-00254D00 0045:
-	??_C@_0EF@IICJNIK@bitmap_format_type_valid_width?$CIf@ (0000)
-00254D48 0036:
-	??_C@_0DG@FMDLIHFJ@?$CBTEST_FLAG?$CIslice_bitmap?9?$DOflags?0?5@ (0000)
-00254D80 002c:
-	??_C@_0CM@EGJNMILG@slice_bitmap?9?$DOformat?$DN?$DNsource_bit@ (0000)
-00254DAC 0024:
-	??_C@_0CE@BICOCAEK@slice_bitmap?9?$DOtype?$DN?$DN_bitmap_type@ (0000)
-00254DD0 001e:
-	??_C@_0BO@KMMCPBDP@slice_bitmap?9?$DOmipmap_count?$DN?$DN0?$AA@ (0000)
-00254DF0 0023:
-	??_C@_0CD@CAAKKKMF@bitmap_verify?$CIslice_bitmap?0?5FALS@ (0000)
-00254E14 0037:
-	??_C@_0DH@HEICNHNC@?$CBTEST_FLAG?$CIsource_bitmap?9?$DOflags?0@ (0000)
-00254E50 0049:
-	??_C@_0EJ@MCLGGFPA@MAX?$CI1?0?5source_bitmap?9?$DOheight?$DO?$DOso@ (0000)
-00254EA0 0048:
-	??_C@_0EI@LIHIIGIH@MAX?$CI1?0?5source_bitmap?9?$DOwidth?5?$DO?$DOso@ (0000)
-00254EE8 0041:
-	??_C@_0EB@KNIHOCN@source_slice_index?$DO?$DN0?5?$CG?$CG?5source_@ (0000)
-00254F30 0053:
-	??_C@_0FD@PPNICDCJ@MAX?$CI1?0?5destination_bitmap?9?$DOheigh@ (0000)
-00254F88 0052:
-	??_C@_0FC@FNCEBHHP@MAX?$CI1?0?5destination_bitmap?9?$DOwidth@ (0000)
-00254FE0 0050:
-	??_C@_0FA@MMKBHEAM@destination_slice_index?$DO?$DN0?5?$CG?$CG?5de@ (0000)
-00255030 0031:
-	??_C@_0DB@DIIJDBNH@slice_bitmap?9?$DOformat?$DN?$DNdestinatio@ (0000)
-00255064 0035:
-	??_C@_0DF@JCFMHHNJ@?$CBTEST_FLAG?$CIface_bitmap?9?$DOflags?0?5_@ (0000)
-0025509C 002b:
-	??_C@_0CL@JBBIIFAN@face_bitmap?9?$DOformat?$DN?$DNsource_bitm@ (0000)
-002550C8 0023:
-	??_C@_0CD@KFLOJMCE@face_bitmap?9?$DOtype?$DN?$DN_bitmap_type_@ (0000)
-002550EC 001d:
-	??_C@_0BN@PLKACPJ@face_bitmap?9?$DOmipmap_count?$DN?$DN0?$AA@ (0000)
-0025510C 0022:
-	??_C@_0CC@KDDOJPOH@bitmap_verify?$CIface_bitmap?0?5FALSE@ (0000)
-00255130 0048:
-	??_C@_0EI@OAEENKNE@MAX?$CI1?0?5source_bitmap?9?$DOheight?$DO?$DOso@ (0000)
-00255178 0047:
-	??_C@_0EH@OIPLGNCD@MAX?$CI1?0?5source_bitmap?9?$DOwidth?5?$DO?$DOso@ (0000)
-002551C0 0043:
-	??_C@_0ED@NEHKMLHM@source_face_index?$DO?$DN0?5?$CG?$CG?5source_f@ (0000)
-00255208 0052:
-	??_C@_0FC@FGJHNELB@MAX?$CI1?0?5destination_bitmap?9?$DOheigh@ (0000)
-00255260 0051:
-	??_C@_0FB@GBNEJIOO@MAX?$CI1?0?5destination_bitmap?9?$DOwidth@ (0000)
-002552B8 004d:
-	??_C@_0EN@PLLIEHKF@destination_face_index?$DO?$DN0?5?$CG?$CG?5des@ (0000)
-00255308 0030:
-	??_C@_0DA@BPGHACIB@face_bitmap?9?$DOformat?$DN?$DNdestination@ (0000)
-002DC660 045c:
-	_global_vector_palette (0000)
-*/
+/* BITMAPS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/bitmaps/bitmaps.c. */
 
 /* ---------- headers */
 
@@ -294,6 +69,15 @@ enum
 };
 
 /* ---------- macros */
+
+/* port: texels keep the Xbox's little-endian byte order (the map's pixels are not swapped at load) */
+#ifdef HALO_PS3
+#define TEXEL16(value) ((word)__builtin_bswap16(value))
+#define TEXEL32(value) ((pixel32)__builtin_bswap32(value))
+#else
+#define TEXEL16(value) (value)
+#define TEXEL32(value) (value)
+#endif
 
 /* ---------- structures */
 
@@ -789,9 +573,8 @@ pixel32 bitmap_format_to_a8r8g8b8(
 	void const *mipmap_address,
 	long pixel_index)
 {
-	/* January relies on the fatal assertion for unsupported formats, as
-	 * bitmap_mipmap_address does for unsupported types; there is no fallback
-	 * pixel if system_exit unexpectedly returns. */
+	/* January relies on the fatal assertion for unsupported formats (as bitmap_mipmap_address
+	 * does for types): no fallback pixel if system_exit unexpectedly returns */
 	pixel32 result;
 
 	match_assert("c:\\halo\\SOURCE\\bitmaps\\bitmaps.c", 0x22B, mipmap_address);
@@ -800,7 +583,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 	{
 	case _bitmap_format_r5g6b5:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = TEXEL16(((word const *)mipmap_address)[pixel_index]);
 
 		result = 0xFF000000 |
 			(((((pixel >> 11) & 0x1F) << 3) | (((pixel >> 11) & 0x1F) >> 2)) << 16) |
@@ -811,7 +594,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 
 	case _bitmap_format_a1r5g5b5:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = TEXEL16(((word const *)mipmap_address)[pixel_index]);
 
 		result = (((pixel >> 15) * 0xFF) << 24) |
 			(((((pixel >> 10) & 0x1F) << 3) | (((pixel >> 10) & 0x1F) >> 2)) << 16) |
@@ -822,7 +605,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 
 	case _bitmap_format_a4r4g4b4:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = TEXEL16(((word const *)mipmap_address)[pixel_index]);
 
 		result = (((((pixel >> 12) & 0xF) << 4) | ((pixel >> 12) & 0xF)) << 24) |
 			(((((pixel >> 8) & 0xF) << 4) | ((pixel >> 8) & 0xF)) << 16) |
@@ -832,11 +615,11 @@ pixel32 bitmap_format_to_a8r8g8b8(
 	}
 
 	case _bitmap_format_x8r8g8b8:
-		result = ((pixel32 const *)mipmap_address)[pixel_index];
+		result = TEXEL32(((pixel32 const *)mipmap_address)[pixel_index]);
 		break;
 
 	case _bitmap_format_a8r8g8b8:
-		result = ((pixel32 const *)mipmap_address)[pixel_index];
+		result = TEXEL32(((pixel32 const *)mipmap_address)[pixel_index]);
 		break;
 
 	case _bitmap_format_a8:
@@ -861,7 +644,7 @@ pixel32 bitmap_format_to_a8r8g8b8(
 
 	case _bitmap_format_a8y8:
 	{
-		word pixel = ((word const *)mipmap_address)[pixel_index];
+		word pixel = TEXEL16(((word const *)mipmap_address)[pixel_index]);
 		byte intensity = (byte)pixel;
 
 		result = ((pixel >> 8) << 24) | (intensity << 16) | (intensity << 8) | intensity;
@@ -1128,18 +911,8 @@ pixel32 bitmap_2d_get_pixel(
 			x &= 3;
 			y &= 3;
 
-			/* BUG (original, preserved for exact matching; admitted narrowly by the owner 2026-09-27 - no general
-			 * varargs exception): both messages end "lod=%f" but January passes the short mipmap_index there
-			 * (0x46c140 +0x2d2 movsx eax,[ebp-0x10] / +0x2e2 push eax, and +0x363 / +0x373; the same defect occurs
-			 * in the August and September 2001 builds and the later /Od build). Stack at the csprintf call: six ints for
-			 * the %d conversions, then mipmap_index, then display_assert's __FILE__ pointer pushed just before it.
-			 * %f is the last conversion, so it consumes exactly those two pushed dwords (no later argument shifts).
-			 * Passing an int where the format reads a double is undefined behaviour in C; the bound below is a
-			 * property of this compiler, CRT and linked image, not of the source: for every mipmap_index value with
-			 * January's __FILE__ address as the high dword the double is a tiny positive normal and the halt message
-			 * shows "lod=0.000000" (at most 182 characters plus NUL in the 256-byte buffer; January's formatter has no x87 code).
-			 * display_assert then returns into an unconditional system_exit, which never returns (halt_and_catch_fire).
-			 * A corrected build passes lod. */
+			/* BUG (original, kept for matching, owner-approved 2026-09-27): "lod=%f" gets the short mipmap_index, as in
+			 * January (0x46c140 +0x2e2/+0x373; it shows lod=0.000000 before the halt). A corrected build passes lod. */
 			match_vassert(
 				"c:\\halo\\SOURCE\\bitmaps\\bitmaps.c",
 				0x2A0,
@@ -1204,13 +977,10 @@ pixel32 bitmap_2d_get_pixel(
 				break;
 			}
 
-			/* BUG (original, preserved for exact matching; admitted narrowly by the owner 2026-09-27): the
-			 * unsupported-format default arm leaves pixel unassigned and January returns it after the fatal
-			 * assertion (0x46c140 +0x3ed mov eax,[ebp+8]). In this image the assertion is followed by an
-			 * unconditional system_exit, which never returns (halt_and_catch_fire loops or calls _exit on re-entry).
-			 * The uninitialised return expression would read an indeterminate value if the halt returned, but is
-			 * not executed on this path. A corrected build assigns pixel in that arm. */
-			return pixel;
+			/* BUG (original, kept for matching, owner-approved 2026-09-27): the default arm leaves pixel
+			 * unassigned, but its assertion's system_exit never returns (halt_and_catch_fire) */
+			/* port: the decoders' s3tc_color bytes (blue first) are a little-endian a8r8g8b8 texel */
+			return TEXEL32(pixel);
 		}
 
 		if (TEST_FLAG(bitmap->flags, _bitmap_swizzled_bit))

@@ -1,8 +1,4 @@
-/*
-HS_SCENARIO_DEFINITIONS.H
-
-header included in hcex build.
-*/
+/* HS_SCENARIO_DEFINITIONS.H: header included in hcex build. */
 
 #ifndef __HS_SCENARIO_DEFINITIONS_H
 #define __HS_SCENARIO_DEFINITIONS_H
@@ -80,11 +76,21 @@ struct hs_syntax_node
 	union
 	{
 		long data;
+#ifdef __BIG_ENDIAN__
+		/* port: the low byte and short of data, which a big-endian long keeps last (hs.h, HS_SLOT_*) */
+		struct { byte boolean_value_high[3]; boolean boolean_value; };
+		real real_value;
+		struct { word short_value_high; short short_value; };
+#else
 		boolean boolean_value;
 		real real_value;
 		short short_value;
+#endif
 	};
 };
+
+typedef char hs_syntax_node_size_assert[
+	sizeof(struct hs_syntax_node) == 0x14 ? 1 : -1];
 
 /* ---------- prototypes/EXAMPLE.C */
 

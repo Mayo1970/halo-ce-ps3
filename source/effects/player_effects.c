@@ -1,88 +1,5 @@
-/*
-PLAYER_EFFECTS.C
-
-symbols in this file:
-00090D00 0070:
-	_player_effect_get (0000)
-00090D70 0040:
-	_player_effect_initialize (0000)
-00090DB0 0010:
-	_player_effect_dispose (0000)
-00090DC0 0040:
-	_player_effect_initialize_for_new_map (0000)
-00090E00 0010:
-	_player_effect_dispose_from_old_map (0000)
-00090E10 0140:
-	_player_effect_add_continuous_effect (0000)
-00090F50 0040:
-	_scripted_player_effect_set_rotation (0000)
-00090F90 0010:
-	_scripted_player_effect_set_rumble (0000)
-00090FA0 0040:
-	_player_telefrag_effect_stop (0000)
-00090FE0 0050:
-	_player_effect_screen_fade_in (0000)
-00091030 0050:
-	_player_effect_screen_fade_out (0000)
-00091080 0060:
-	_player_effect_get_damage_indicators (0000)
-000910E0 0020:
-	_player_effect_clear_damage_indicators (0000)
-00091100 0020:
-	_effect_scale_factor (0000)
-00091120 00f0:
-	_player_effect_update_screen_flash (0000)
-00091210 00d0:
-	_player_effect_update_camera_shake (0000)
-000912E0 0030:
-	_effect_scale_value (0000)
-00091310 0090:
-	_player_effect_update (0000)
-000913A0 0090:
-	_player_effect_continuous_refresh (0000)
-00091430 0030:
-	_scripted_player_effect_set_translation (0000)
-00091460 0050:
-	_scripted_player_effect_start (0000)
-000914B0 0040:
-	_scripted_player_effect_stop (0000)
-000914F0 0050:
-	_player_effect_screen_flash (0000)
-00091540 00f0:
-	_player_telefrag_effect_start (0000)
-00091630 0320:
-	_player_effect_get_screen_flash (0000)
-00091950 0090:
-	_get_shake_matrix (0000)
-000919E0 0520:
-	_player_effect_get_camera_effect_matrix (0000)
-00091F00 02f0:
-	_player_effect_update_camera_impulse (0000)
-000921F0 02e0:
-	_player_effect_start (0000)
-0025AA2C 0016:
-	??_C@_0BG@DLCFJLMF@player_effect_globals?$AA@ (0000)
-0025AA44 0028:
-	??_C@_0CI@HGGDJELB@c?3?2halo?2SOURCE?2effects?2player_ef@ (0000)
-0025AA6C 000f:
-	??_C@_0P@DCHLBMFM@player?5effects?$AA@ (0000)
-0025AA80 0008:
-	__real@3f847ae147ae147b (0000)
-0025AA88 0018:
-	??_C@_0BI@MALCPACJ@screen_flash?9?$DOintensity?$AA@ (0000)
-0025AAA0 003f:
-	??_C@_0DP@NOLEHAI@screen_flash?9?$DOintensity?$DO?$DN0?40f?5?$CG?$CG@ (0000)
-0025AAE0 000d:
-	??_C@_0N@MFJHANDO@screen_flash?$AA@ (0000)
-0025AAF0 0007:
-	??_C@_06CGNOPMBC@matrix?$AA@ (0000)
-0025AAF8 0004:
-	__real@4016cbe4 (0000)
-002DDDA0 000e:
-	_render_screen_flash_type_map (0000)
-0043D58C 0004:
-	_player_effect_globals (0000)
-*/
+/* PLAYER_EFFECTS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/effects/player_effects.c. */
 
 /* ---------- headers */
 
@@ -809,6 +726,15 @@ static void get_shake_matrix(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: the main loop's place, for the PS3's heartbeat (main.c) */
+#include "cseries/errors.h"
+extern volatile long ps3_main_loop_step;
+#define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
+#else
+#define PS3_MAIN_STEP(step)
+#endif
+
 void player_effect_get_camera_effect_matrix(
 	short local_player_index,
 	real_matrix4x3 *matrix)
@@ -820,10 +746,8 @@ void player_effect_get_camera_effect_matrix(
 
 	if (local_player_index != NONE)
 	{
-		/* The camera is drawn every frame, several frames per tick on the
-		native builds (port/linux/game/render_interpolation.c), and each draw
-		shook it in a new random direction: shake once a tick, as on the
-		Xbox, by drawing from a seed made from the tick. */
+		/* several draws per tick (port/linux/game/render_interpolation.c): a seed made from the tick
+		shakes the camera once a tick, as on the Xbox */
 		unsigned long *local_seed = get_global_local_random_seed_address();
 		unsigned long saved_local_seed = *local_seed;
 		unsigned long tick_seed =
@@ -836,11 +760,28 @@ void player_effect_get_camera_effect_matrix(
 		*local_seed = tick_seed;
 		game_time_get();
 
+		PS3_MAIN_STEP(570);
+#ifdef HALO_PS3
+		{
+			static boolean logged = FALSE;
+			struct player_effect_datum const *logged_effect = player_effect_get(local_player_index);
+
+			if (!logged)
+			{
+				logged = TRUE;
+				error(_error_silent, "ps3: camera effect of player %d: global flags %lx, flags %x, impulse %d, shake %d ticks",
+					local_player_index, player_effect_globals->global_flags, logged_effect->flags,
+					logged_effect->camera_impulse_time_left, logged_effect->camera_shake_time_left);
+			}
+		}
+#endif
 		if (TEST_FLAG(player_effect_globals->global_flags, _scripted_player_effect_active_bit))
 		{
 			struct scripted_player_effect_definition *scripted_effect =
 				&player_effect_globals->scripted_effect;
 			real intensity = scripted_effect->max_intensity;
+
+			PS3_MAIN_STEP(571);
 
 			*matrix = *global_identity4x3;
 
@@ -918,6 +859,7 @@ void player_effect_get_camera_effect_matrix(
 			real_matrix4x3 const *source;
 			short camera_shake_ticks;
 
+			PS3_MAIN_STEP(572);
 			if (effect->camera_impulse_time_left > 0 ||
 				TEST_FLAG(effect->flags, _player_effect_camera_impulse_just_started_bit))
 			{
@@ -970,6 +912,7 @@ void player_effect_get_camera_effect_matrix(
 
 			*matrix = *source;
 
+			PS3_MAIN_STEP(573);
 			camera_shake_ticks = effect->camera_shake_time_left;
 
 			if (camera_shake_ticks > 0 ||
@@ -1018,20 +961,20 @@ void player_effect_get_camera_effect_matrix(
 					_player_effect_camera_shake_just_started_bit,
 					FALSE);
 
+				PS3_MAIN_STEP(574);
 				get_shake_matrix(
 					random_translation_magnitude + continuous->translational_shake,
 					random_rotation_magnitude + continuous->rotational_shake,
 					&effect_matrix);
+				PS3_MAIN_STEP(575);
 
 				rumble_player_continuous(
 					local_player_index,
 					continuous->vibrate_frequencies[0],
 					continuous->vibrate_frequencies[1]);
 
-				/* Looping sounds add their continuous shake once a frame
-				(game_sound.c), so it is used up once a frame too: a frame that
-				runs no tick (port/linux/game/render_interpolation.c) must not
-				keep it and have the next frame's shake added on top. */
+				/* looping sounds add this shake each frame (game_sound.c): use it up each frame too, or a
+				frame with no tick (render_interpolation.c) keeps it under the next frame's */
 				effect->continuous_effect_timer = 1;
 
 				if (effect->continuous_effect_timer > 0)
@@ -1050,6 +993,7 @@ void player_effect_get_camera_effect_matrix(
 				matrix4x3_multiply(matrix, &effect_matrix, matrix);
 			}
 		}
+		PS3_MAIN_STEP(576);
 		*local_seed = saved_local_seed;
 	}
 

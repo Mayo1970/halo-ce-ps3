@@ -61,12 +61,14 @@ struct widget_instance
 
 struct single_player_level_entry
 {
-	char *map_name;
+	char *HALO_PTR32 map_name;
 	boolean available;
 	boolean unknown5;
 	boolean unknown6;
 	boolean unknown7;
 };
+typedef char single_player_level_entry_size_assert[
+	sizeof(struct single_player_level_entry) == 0x8 ? 1 : -1];
 
 struct event_record
 {
@@ -153,7 +155,7 @@ boolean network_game_client_add_player(
 	short controller_index);
 void playlist_profiles_enumerate_available_to_local_player_index(
 	short local_player_index,
-	long *profile_count,
+	word *profile_count,
 	long *profile_indices);
 /* port: (playlist_profile.h, which this file's own declarations above disagree with) */
 struct game_variant_options;
@@ -585,6 +587,8 @@ static boolean solo_level_initialize_list_single_player(
 
 static wchar_t new_campaign_profile_name[12] = { 0 };
 byte single_player_level_data[0x50] = { 0 };
+typedef char single_player_level_data_size_assert[
+	sizeof(single_player_level_data) == 10 * sizeof(struct single_player_level_entry) ? 1 : -1];
 struct persistent_game_difficulty
 {
 	short value;
@@ -2413,9 +2417,11 @@ static boolean multiplayer_profiles_list_initialize(
 	if (profile_indices)
 	{
 		long profile_count;
+		word available_count = 100;
 
-		profile_count = 100;
-		playlist_profiles_enumerate_available_to_local_player_index(0, &profile_count, profile_indices);
+		/* port: the count is a word (playlist_profile.c); a long's address reached its high half on big-endian */
+		playlist_profiles_enumerate_available_to_local_player_index(0, &available_count, profile_indices);
+		profile_count = available_count;
 		if ((word)profile_count < 3)
 		{
 			long *profile_index_pointer;

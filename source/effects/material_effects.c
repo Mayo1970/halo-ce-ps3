@@ -1,16 +1,5 @@
-/*
-MATERIAL_EFFECTS.C
-
-symbols in this file:
-0008DA20 0080:
-	_material_effect_visible (0000)
-0008DAA0 0140:
-	_material_effect_new (0000)
-0008DBE0 0110:
-	_material_effect_new_from_point (0000)
-0043D589 0001:
-	_debug_material_effects (0000)
-*/
+/* MATERIAL_EFFECTS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/effects/material_effects.c. */
 
 /* ---------- headers */
 
@@ -181,7 +170,12 @@ void material_effect_new_from_point(
 			/* The January build consumes the complete 32-bit material slot here. */
 			material_type = scenario_location_underwater(&collision.location, &collision.point, NULL)
 				? _material_effect_underwater_material_type
+#ifdef __BIG_ENDIAN__
+				/* port: the slot's low half is its pad on a big-endian CPU */
+				: collision.material_type;
+#else
 				: *(long *)&collision.material_type;
+#endif
 			material_effect_new(
 				definition_index,
 				effect_index,

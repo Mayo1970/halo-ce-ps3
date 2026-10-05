@@ -1,8 +1,4 @@
-/*
-FOG_DEFINITIONS.H
-
-header included in hcex build.
-*/
+/* FOG_DEFINITIONS.H: header included in hcex build. */
 
 #ifndef __FOG_DEFINITIONS_H
 #define __FOG_DEFINITIONS_H
@@ -28,8 +24,15 @@ enum
 
 struct fog_definition
 {
+#ifdef __BIG_ENDIAN__
+	/* port: the low byte of the tag's long flags, which a big-endian long keeps last */
+	byte flags_high[3];
+	byte flags;
+	byte unused4[0x70];
+#else
 	byte flags;
 	byte unused1[0x73];
+#endif
 	real plane_distance;
 	byte unused78[0x88];
 	long background_sound_index;

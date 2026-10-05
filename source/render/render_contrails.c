@@ -1,26 +1,5 @@
-/*
-RENDER_CONTRAILS.C
-
-symbols in this file:
-001777D0 0090:
-	_contrail_fade (0000)
-00177860 07a0:
-	_code_00177860 (0000)
-00178000 00b0:
-	_code_00178000 (0000)
-001780B0 0010:
-	_render_contrails_ground_mapped (0000)
-001780C0 0010:
-	_render_contrails_media_mapped (0000)
-001780D0 0010:
-	_render_contrails_normal (0000)
-0029FC28 002d:
-	??_C@_0CN@ILEHFPFH@contrail?5?$CFs?5uses?5an?5unsupported?5@ (0000)
-0029FC58 0016:
-	??_C@_0BG@PBIEBPJJ@triangles?5?$CG?$CG?5vertices?$AA@ (0000)
-0029FC70 0029:
-	??_C@_0CJ@KBEDIECC@c?3?2halo?2SOURCE?2render?2render_con@ (0000)
-*/
+/* RENDER_CONTRAILS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/render/render_contrails.c. */
 
 /* ---------- headers */
 
@@ -368,12 +347,8 @@ static void render_contrail(
 						_error_silent,
 						"contrail %s uses an unsupported render type.",
 						tag_get_name(contrail->definition_index));
-					/*
-					 * Original bug preserved: this return bypasses the buffer
-					 * unlock/delete calls and leaves current_lock_operation set.
-					 * A non-matching safety fix would route this arm through the
-					 * common cleanup at the end of the function.
-					 */
+					/* Original bug preserved: this return skips the buffer unlock/delete and leaves
+					 * current_lock_operation set (a fix would route it through the common cleanup). */
 					return;
 				}
 
@@ -394,13 +369,13 @@ static void render_contrail(
 			first_vertex = vertices;
 			if (!(definition->flags & (1 << _contrail_first_point_unfaded_bit)))
 			{
-				((byte *)&first_vertex[0].color)[3] = 0;
-				((byte *)&first_vertex[1].color)[3] = 0;
+				first_vertex[0].color &= 0x00FFFFFF;
+				first_vertex[1].color &= 0x00FFFFFF;
 			}
 			if (!(definition->flags & (1 << _contrail_last_point_unfaded_bit)))
 			{
-				((byte *)&vertices[vertex_count - 1].color)[3] = 0;
-				((byte *)&vertices[vertex_count - 2].color)[3] = 0;
+				vertices[vertex_count - 1].color &= 0x00FFFFFF;
+				vertices[vertex_count - 2].color &= 0x00FFFFFF;
 			}
 			if (segment_count > 0)
 			{

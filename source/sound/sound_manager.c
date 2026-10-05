@@ -3607,6 +3607,14 @@ static void detail_sound_random_offset(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: the main loop's place, for the PS3's heartbeat (main.c) */
+extern volatile long ps3_main_loop_step;
+#define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
+#else
+#define PS3_MAIN_STEP(step)
+#endif
+
 void sound_render(
 	void)
 {
@@ -3614,7 +3622,9 @@ void sound_render(
 
 	if (sound_manager_globals.initialized && sound_manager_globals.enabled)
 	{
+		PS3_MAIN_STEP(510);
 		sound_manager_globals.platform_definition->begin_scene();
+		PS3_MAIN_STEP(511);
 
 		if (!sound_manager_globals.paused)
 		{
@@ -3635,21 +3645,29 @@ void sound_render(
 				leftover_ticks -= (real)ticks;
 				sound_classes_update(ticks);
 			}
+			PS3_MAIN_STEP(512);
 			refresh_listener();
+			PS3_MAIN_STEP(513);
 			process_looping_sounds();
+			PS3_MAIN_STEP(514);
 			refresh_sounds();
+			PS3_MAIN_STEP(515);
 			prioritize_sounds();
+			PS3_MAIN_STEP(516);
 			update_channels();
+			PS3_MAIN_STEP(517);
 			sound_manager_globals.flip_flop = !sound_manager_globals.flip_flop;
 		}
 
 		sound_manager_globals.platform_definition->end_scene();
+		PS3_MAIN_STEP(518);
 	}
 
 	if (!sound_manager_globals.paused)
 	{
 		sound_cache_idle();
 	}
+	PS3_MAIN_STEP(519);
 
 	profile_exit(sound_render_section);
 

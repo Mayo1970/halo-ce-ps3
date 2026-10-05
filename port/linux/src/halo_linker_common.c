@@ -160,7 +160,14 @@ HALO_COMMON(window_globals, 160); /* struct window_globals_prefix window_globals
 inline fast_ftol in cseries.h (fld/fistp). */
 __attribute__((weak)) long fast_ftol_C(float value)
 {
+#ifdef HALO_PS3
+	/* FISTP's integer indefinite for NaN, inf and out of range; newlib's lrintf would wrap its 64-bit long */
+	if (!(value > -2147483649.f && value < 2147483648.f))
+		return (long)0x80000000;
+	return (long)lrintf(value);
+#else
 	return lrintf(value);
+#endif
 }
 
 /* The debug console's "crash" command, which deliberately brings the game
