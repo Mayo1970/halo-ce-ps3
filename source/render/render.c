@@ -299,6 +299,20 @@ struct rendered_cluster *rendered_cluster_get(
 	return &render.rendered_clusters[rendered_cluster_index];
 }
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build: each split adds the time since the last one to a part of the window; in a probe
+frame the game thread then waits for the RSX, which times the RSX's part (ps3_timers_rsx_wait) */
+static uint64_t ps3_timer_window;
+#define PS3_TIMER_WINDOW_BEGIN() (ps3_timer_window = ps3_timers_rsx_wait(_ps3_timer_rsx_before))
+#define PS3_TIMER_SPLIT(timer) \
+	((void)ps3_timer_add((timer), ps3_timer_window), ps3_timer_window = ps3_timers_rsx_wait(timer))
+#else
+#define PS3_TIMER_WINDOW_BEGIN() ((void)0)
+#define PS3_TIMER_SPLIT(timer) ((void)0)
+#endif
+
 static void render_window(
 	short local_player_index,
 	const struct render_camera *camera,
@@ -311,6 +325,7 @@ static void render_window(
 	struct rasterizer_window_begin_parameters parameters;
 	short rendered_cluster_index;
 
+	PS3_TIMER_WINDOW_BEGIN();
 	profile_render_window_start(TRUE);
 	render.scene_index++;
 	memset(&parameters, 0, sizeof(parameters));
@@ -328,6 +343,7 @@ static void render_window(
 	structure_visibility_compute();
 	player_effect_get_screen_flash(local_player_index, &parameters.screen_flash);
 	rasterizer_window_begin(&parameters);
+	PS3_TIMER_SPLIT(_ps3_timer_window_visibility);
 
 	if (!bink_playback_in_progress())
 	{
@@ -336,8 +352,10 @@ static void render_window(
 		first_person_weapon_render_update();
 		lights_preprocess_scene();
 		render_objects();
+		PS3_TIMER_SPLIT(_ps3_timer_window_objects);
 		structure_render_preprocess();
 		structure_render_lightmaps();
+		PS3_TIMER_SPLIT(_ps3_timer_window_lightmaps);
 		rasterizer_lens_flares_submit_occlusion_tests();
 		render_object_shadows();
 		lights_render_diffuse();
@@ -359,6 +377,7 @@ static void render_window(
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
 		}
 		rasterizer_decals_end();
+		PS3_TIMER_SPLIT(_ps3_timer_window_lights);
 
 		structure_render_diffuse_texture();
 
@@ -379,6 +398,7 @@ static void render_window(
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
 		}
 		rasterizer_decals_end();
+		PS3_TIMER_SPLIT(_ps3_timer_window_diffuse);
 
 		lights_render_specular();
 		structure_render_specular_lightmaps();
@@ -387,6 +407,7 @@ static void render_window(
 		structure_render_reflections();
 		structure_render_transparent_geometry();
 		structure_render_fog();
+		PS3_TIMER_SPLIT(_ps3_timer_window_specular);
 		game_engine_post_rasterize_objects();
 		weather_particle_systems_render();
 		render_particles();
@@ -406,6 +427,7 @@ static void render_window(
 		structure_render_detail_objects();
 		rasterizer_transparent_geometry_draw(FALSE);
 		rasterizer_transparent_geometry_stop();
+		PS3_TIMER_SPLIT(_ps3_timer_window_effects);
 		structure_render_fog_screen();
 		rasterizer_lens_flares_draw();
 		interface_draw_screen();
@@ -413,6 +435,7 @@ static void render_window(
 		halo_screen_ui_offset(TRUE);
 		render_ui_widgets(local_player_index, &rasterizer_camera->viewport_bounds);
 		halo_screen_ui_offset(FALSE);
+		PS3_TIMER_SPLIT(_ps3_timer_window_interface);
 	}
 
 	bink_playback_render();
@@ -422,6 +445,7 @@ static void render_window(
 	rasterizer_debug_draw();
 	rasterizer_window_end();
 	profile_render_window_end();
+	PS3_TIMER_SPLIT(_ps3_timer_window_end);
 
 	return;
 }

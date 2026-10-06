@@ -282,7 +282,8 @@ key (blocker 4). The encoders follow PSL1GHT's cgcomp
   products, the mux, the [-1, 1] clamp), the final combiner, fog and alpha
   kill, with `nv2a_psh.c`'s semantics. The per-draw constants are inline
   constants: a copy of the program with the values patched in goes to the
-  frame's scratch when they change.
+  frame's scratch when they change. From 2026-10-06 an optimizing pass
+  shrinks each program before the encoding (ROADMAP.md, "Now", trap 35).
 - The PC check (`tools/ps3_rsx_shader_check.sh`, the image's host GCC and
   `cgcomp`): the 67 vertex shaders and 3000 random pixel shader keys, word
   for word against `cgcomp -a` (the relative bit aside), and their results

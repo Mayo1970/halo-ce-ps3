@@ -68,6 +68,23 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   which each map or BSP load empties (`cache_files.c` calls
   `d3d8_tag_cache_loaded`). Other vertex data is converted at each draw, as
   before. See "Found for later goals" (G7, a10).
+- The texture hash fix (Matt, 2026-10-06): hardware SUCCESS (Matt: "the
+  textures look right"). `d3d8_rsx.c` checks the texels of a texture in the
+  texture cache's memory only after the cache has loaded it again (trap
+  34). Other textures (the text cache, the loading screen) are still
+  checked every frame. The check fell from 9 to 15 ms a frame to 0.0; a10
+  runs at 29 to 30 frames per second in calm scenes, and the RSX limits the
+  heavy ones (24 to 26). See "Found for later goals" (G7, a10).
+- The pixel shader optimizer (Matt, 2026-10-06: "Yes, make the shader
+  optimizer."): built, waiting for the hardware test in a10.
+  `ps3_rsx_fp.c` optimizes each translated pixel shader before the
+  encoding: it folds the numbers and the clamps that the value ranges
+  prove, reads copies at their source, reuses equal computations, drops
+  what nothing reads, and packs the temporaries (trap 35). On the PC:
+  random keys 249 instructions on average before, 26 after; the
+  reflection pass 205 to 47 instructions and 23 to 5 temporaries; the
+  simplest shader 60 to 3. The probe frames are off; the three other
+  `[time]` lines stay.
 - Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
@@ -86,6 +103,22 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   - From G6: `DirectSound:` every 10 s (`dsound_ps3.c`): the voices that
     play, the packets decoded, the mixer's time per chunk, the port blocks
     played silent or partial.
+  - The timer build (Matt, 2026-10-06): three `[time]` lines every 300
+    frames (`port/ps3/src/ps3_timers.c`, `port/ps3/include/ps3_timers.h`),
+    in ms a frame on the game's thread: the game ticks (and ms a tick), the
+    render, the throttle wait, the present, the rest; in the render the
+    sound and the parts of each window (`render.c`); the Direct3D draws
+    (state, textures, texture hash, uploads, colours, vertices, indices);
+    the waits (vblank, flip, RSX).
+  - The RSX probe (Matt, 2026-10-06): a fourth `[time]` line. Every 30th
+    frame the game thread waits for the RSX at the frame's start, at each
+    window's start and parts (`render.c`) and after the render
+    (`ps3_timers_rsx_wait` in `ps3_gpu.c`, on `ps3_gpu_wait_idle`); the
+    line gives each wait in ms a probe frame. A wait is a low bound of the
+    RSX's time of that part: the RSX can start a part while the game thread
+    still sends it. The other lines leave the waits out ("probe waits").
+    Off from 2026-10-06: `TIMER_PROBE_FRAMES` is 0 in `ps3_timers.c` (30
+    probes again). A probe frame stalls about 70 ms.
 
 ## Goal stack
 
@@ -259,6 +292,68 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   - Next, not measured yet: the rest of the frame (game ticks, the game's
     render code, the texture hash, the colour conversions). Timers per
     phase would show it.
+  - Timer build run 2026-10-06 (a10, about 7500 frames, no fight): 18.9 to
+    29.9 frames per second, 33 to 53 ms a frame. In ms a frame: the texture
+    hash 8.8 to 15.3 (the largest part); the game ticks 2.8 to 4.7 (3 to 4
+    ms a tick); the colours 1.0 to 2.0; vertices 0.4 to 1.6; indices 0.5
+    to 1.8; the game's own render code about 6 to 9; the RSX wait 0.2 to
+    12.1 (in the 18.9 fps window the RSX needed about 50 ms a frame);
+    vblank and flip waits 0.
+  - Next by that data: the texture hash (skip it for the texture cache's
+    textures, which only disk reads fill), then the RSX time of heavy
+    scenes.
+  - 2026-10-06 (Matt: "Yes, do it"): the texture hash fix is built (see
+    "Now" and trap 34). Hardware run (a10, about 7000 frames): the hash
+    0.0 ms, uploads normal (12 in 600 frames after the load). Calm scenes:
+    29 to 30 frames per second, the game thread 12 to 16 ms a frame. Heavy
+    scene: 24 to 26 frames per second, 38.5 to 41.6 ms a frame; the game
+    thread 16 to 19 ms (ticks 3.8 to 4.4, render 12.1 to 15.3), then 17 to
+    23 ms of RSX wait: the RSX needs about 40 ms a frame there. Each frame:
+    450 to 520 draws, 110 to 117 pixel shader copies, about 40 vertex
+    program loads.
+  - Next by that data: the RSX. 2026-10-06 (Matt: "Yes, do it"): the RSX
+    probe is built (see "Now", diagnostics).
+  - RSX probe run 2026-10-06 (a10 heavy scene, 21 to 27 frames per second):
+    RSX ms in a probe frame: specular part (specular lightmaps,
+    reflections, mirrors, transparent level geometry, fog) 13.5 to 17.9,
+    effects 0.3 to 9.1, diffuse 4.3 to 5.7, lightmaps 3.6 to 4.6, lights
+    2.8 to 4.5, objects 0.9 to 2.5, the rest under 1. At a probe frame's
+    start the RSX still had 35 to 42 ms of earlier frames to do. Matt saw
+    the geometry jump in that build only: the probe frames (about 70 ms).
+  - The cause, found on the PC with `ps3_rsx_fp.c` (2026-10-06): the
+    pixel shader translation is not optimized. The simplest shader (one
+    texture times the vertex colour, 1 combiner) becomes 60 RSX
+    instructions and 38 inline constants with 23 temporaries; the
+    reflection pass's (`rasterizer_xbox_environment.c`, bumped cube map,
+    5 combiners) 205 instructions with 23 temporaries. Every input gets a
+    clamp, every combiner computes all its outputs and clamps them, and no
+    register is reused. The fix: an optimizing pass before the encoding
+    (dead code, constants, copies, register allocation), checked with
+    `tools/ps3_rsx_shader_check.sh`.
+  - 2026-10-06 (Matt: "Yes, make the shader optimizer."): the pass is built
+    (see "Now", trap 35). PC: random keys 249 to 26 instructions on
+    average, 3.1 temporaries on average (9 at most); the reflection pass
+    205 to 47 instructions (1332 to 264 words), 5 temporaries; the simplest
+    shader 60 to 3. With `KEYS=3000` the check shows 1 to 3 mismatches
+    against the NV2A reference on some seeds (`SEED=1`: key 1729). The
+    translation without the optimizer gives the same ones; not
+    investigated.
+- Widescreen and 60 frames per second (Matt asked, 2026-10-06): both are
+  possible, not started. Recommended order: the G7 performance work, then
+  widescreen, then 60 frames per second.
+  - Widescreen: the game code already takes a wider screen from
+    `halo_screen_width()` (HUD inset, menus, cinematics, viewport; the FOV
+    follows the viewport shape in `render_cameras.c`). On the PS3 it returns
+    640 (`d3d8_rsx.c`), and Present draws 640x480 4:3 in the middle. To do:
+    854 on a 16:9 TV, an 854x480 back buffer, Present to the full display.
+    Cost: about 33% more pixels for the RSX.
+  - 60 frames per second: the game ticks at 30 Hz.
+    `port/linux/game/render_interpolation.c` draws the frames between ticks
+    and is already in the PS3 build; `halo_interpolation_enabled` in
+    `port/ps3/xbox/port_stubs.c` returns 0. The vsync flips (three buffers)
+    give the cap at 60. The blocker: a frame must take 16.7 ms or less, and
+    a10 takes 33 to 53 ms (timer build run). Interpolation also adds CPU
+    work each frame.
 
 ## Decisions
 
@@ -436,6 +531,19 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 33. To find a black RSX picture, read pixels back after `rsxFinish`
     (`gcmGetConfiguration` gives the CPU address of RSX memory) and swap
     in one-instruction pixel shaders. G4's diagnostic builds did this.
+34. `d3d8_rsx.c` marks the header of each texture in the texture cache's
+    memory: it writes its own value in `Lock` after it checks the texels.
+    While the mark stays, it does not check them again.
+    `xbox_texture_cache.c` puts `Lock` to 0 for each texture it loads, so a
+    new texture is checked. Code that writes texels in that memory with
+    the CPU (Bink, once it decodes) must put `Lock` to 0 after each write.
+35. The pixel shader optimizer (`ps3_rsx_fp.c`) takes these values as 0 to
+    1: the texels (every RSX texture is A8R8G8B8 or DXT), the colour inputs
+    (`ps3_rsx_vp.c` saturates the colour outputs) and the colour uniforms
+    (c0, c1, the final combiner's, the fog colour). A signed or float
+    texture, or an unsaturated colour output, needs a change in `resolve`
+    and `bounds`. Only MOV, TEX and TXP read a texture coordinate input:
+    cgcomp's MUL, DP3 and DP4 read it without perspective correction.
 
 ## Commands
 
@@ -602,3 +710,33 @@ then `./build.sh pkg LOG_IP=<address>`.
   24 to 30 frames per second, no visible errors. The listener on UDP 18194
   is stopped. Matt asked about the sound on an SPE (flycastPS3's way); the
   log shows the sound is not the cost (see "Found for later goals").
+- 2026-10-06: The timer build (Matt: "Timer build"): `ps3_timers.c` and
+  `.h`, spans in `main.c`, `render.c`, `d3d8_rsx.c` and `ps3_gpu.c`.
+  `check` passes (0 `r2off`, `.got` 0x2c78). PKG of 00:47. Waiting for an
+  a10 run with its `[time]` lines.
+- 2026-10-06: Timer build run (Matt, a10, "There was no fight"): results
+  in "Found for later goals" (G7, a10). The listener is stopped.
+- 2026-10-06: Matt asked about widescreen and 60 frames per second. Both
+  are possible. The notes are in "Found for later goals". No code change.
+- 2026-10-06: The texture hash fix (Matt: "Yes, do it"): `d3d8_rsx.c`
+  (`texture_get`, `texture_cache_holds`, trap 34). The timers stay in.
+  `check` passes (0 `r2off`, `.got` 0x2c78). PKG of 01:02. Waiting for the
+  hardware test in a10.
+- 2026-10-06: Texture hash fix hardware SUCCESS (Matt, PKG of 01:02): the
+  textures look right, also in new areas. Results in "Found for later
+  goals" (G7, a10). The listener is stopped.
+- 2026-10-06: The RSX probe (Matt: "Yes, do it"): `ps3_timers.c` and `.h`,
+  `ps3_gpu.c` (`ps3_timers_rsx_wait`), `render.c`, `main.c`. `check`
+  passes (0 `r2off`, `.got` 0x2cb8). PKG of 01:20. Waiting for a run in
+  the heavy scene of a10.
+- 2026-10-06: RSX probe run (Matt, heavy scene): the pixel shaders cost
+  the RSX time; their translation is not optimized (see "Found for later
+  goals", G7, a10). The listener is stopped.
+- 2026-10-06: The pixel shader optimizer (Matt: "Yes, make the shader
+  optimizer."): `ps3_rsx_fp.c` (the pass before the encoding; the
+  temporaries count from the program), trap 35. The probe frames are off
+  (`ps3_timers.c`). PC: `tools/ps3_rsx_shader_check.sh` 0 failures (300
+  keys); with `KEYS=3000` only the old NV2A mismatches; 40000 random keys
+  give the same results with and without the pass. `check` passes (0
+  `r2off`, `.got` 0x2d68). PKG of 02:51. Waiting for the hardware test in
+  a10.

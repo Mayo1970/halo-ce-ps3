@@ -3,6 +3,7 @@ ps3gl. Only the game's thread calls it, once it has taken the RSX from the displ
 
 #include "ps3_gpu.h"
 #include "ps3_system.h"
+#include "ps3_timers.h"
 #include "ps3_video.h"
 
 #include <string.h>
@@ -698,6 +699,8 @@ static void frame_begin(void)
 	/* the half this frame uses: the RSX must have finished the frame before last */
 	if (!frame_finished(frame_index - 2))
 	{
+		uint64_t span = ps3_timer_now();
+
 		start = ps3_time_seconds();
 		while (!frame_finished(frame_index - 2))
 		{
@@ -710,6 +713,7 @@ static void frame_begin(void)
 			}
 			usleep(20);
 		}
+		ps3_timer_add(_ps3_timer_rsx_wait, span);
 	}
 	deferred_frees_run(0);
 	caches_invalidate();
@@ -736,11 +740,27 @@ void ps3_gpu_wait_idle(void)
 	}
 }
 
+uint64_t ps3_timers_rsx_wait(int part)
+{
+	uint64_t start = ps3_timer_now(), now;
+
+	if (!ps3_timer_probe || !ready)
+		return start;
+	ps3_gpu_wait_idle();
+	now = ps3_timer_now();
+	ps3_rsx_timers[part] += now - start;
+	return now;
+}
+
 void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height)
 {
+	uint64_t span;
+
 	if (!ready)
 		return;
+	span = ps3_timer_now();
 	ps3_video_begin_frame();
+	ps3_timer_add(_ps3_timer_flip_wait, span);
 	if (width && height)
 		blit_draw(offset, pitch, width, height);
 	/* the RSX writes it once this frame's draws are done (a command label can come early: ioq3) */

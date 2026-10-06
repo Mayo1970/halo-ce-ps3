@@ -281,12 +281,20 @@ static void main_game_render(
 /* ---------- globals */
 
 #ifdef HALO_PS3
+#include "ps3_timers.h"
+
 /* port: the main loop's place and passes, for the PS3's heartbeat (port/ps3/xbox/xbox_kernel.c) */
 volatile long ps3_main_loop_step = 0;
 volatile unsigned long ps3_main_loop_count = 0;
 #define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
+/* port: the timer build's spans (port/ps3/include/ps3_timers.h) */
+static uint64_t ps3_timer_loop, ps3_timer_sound;
+#define PS3_TIMER_BEGIN(span) ((span) = ps3_timer_now())
+#define PS3_TIMER_END(timer, span) ((void)ps3_timer_add((timer), (span)))
 #else
 #define PS3_MAIN_STEP(step) ((void)0)
+#define PS3_TIMER_BEGIN(span) ((void)0)
+#define PS3_TIMER_END(timer, span) ((void)0)
 #endif
 
 short global_difficulty_level = 1;
@@ -2628,7 +2636,9 @@ static void main_game_render(
 	lock_global_random_seed();
 	collision_log_continue_period(TRUE);
 	PS3_MAIN_STEP(501);
+	PS3_TIMER_BEGIN(ps3_timer_sound);
 	sound_render();
+	PS3_TIMER_END(_ps3_timer_sound, ps3_timer_sound);
 	PS3_MAIN_STEP(502);
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
@@ -2751,6 +2761,9 @@ void main_loop(
 	{
 #ifdef HALO_PS3
 		ps3_main_loop_count++;
+		ps3_timers_frame();
+		/* a probe frame first lets the RSX finish the earlier frames */
+		ps3_timers_rsx_wait(_ps3_timer_rsx_previous);
 #endif
 		PS3_MAIN_STEP(1);
 		if (!game_in_editor())
@@ -2929,7 +2942,12 @@ void main_loop(
 					}
 
 					PS3_MAIN_STEP(42);
+					PS3_TIMER_BEGIN(ps3_timer_loop);
 					game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
+					PS3_TIMER_END(_ps3_timer_ticks, ps3_timer_loop);
+#ifdef HALO_PS3
+					ps3_timer_game_ticks += game_time_get_elapsed();
+#endif
 					PS3_MAIN_STEP(43);
 
 					render_frame = main_globals.main_menu_scenario_loaded ||
@@ -2959,7 +2977,9 @@ void main_loop(
 					PS3_MAIN_STEP(50);
 					profile_render_start();
 					render_interpolation_frame_begin();
+					PS3_TIMER_BEGIN(ps3_timer_loop);
 					main_game_render((double)main_globals.seconds_elapsed);
+					PS3_TIMER_END(_ps3_timer_render, ps3_timer_loop);
 					PS3_MAIN_STEP(51);
 					render_interpolation_frame_end();
 					profile_render_end();
@@ -2969,17 +2989,26 @@ void main_loop(
 			{
 				PS3_MAIN_STEP(52);
 				profile_render_start();
+				PS3_TIMER_BEGIN(ps3_timer_loop);
 				main_pregame_render();
+				PS3_TIMER_END(_ps3_timer_render, ps3_timer_loop);
 				profile_render_end();
 			}
 
 			PS3_MAIN_STEP(60);
+#ifdef HALO_PS3
+			ps3_timers_rsx_wait(_ps3_timer_rsx_after);
+#endif
+			PS3_TIMER_BEGIN(ps3_timer_loop);
 			main_rasterizer_throttle();
+			PS3_TIMER_END(_ps3_timer_throttle, ps3_timer_loop);
 
 			if (render_frame && !debug_no_drawing)
 			{
 				PS3_MAIN_STEP(61);
+				PS3_TIMER_BEGIN(ps3_timer_loop);
 				main_present_frame();
+				PS3_TIMER_END(_ps3_timer_present, ps3_timer_loop);
 			}
 		}
 
