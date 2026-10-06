@@ -416,7 +416,12 @@ struct actor_perception_unit_view
 
 struct actor_perception_target_unit_view
 {
+#ifdef __BIG_ENDIAN__
+	/* port: the low byte of the unit's word damage_flags (+0xB6), which a big-endian word keeps last */
+	byte __unknown000[0xB7];
+#else
 	byte __unknown000[0xB6];
+#endif
 	byte active_region_flags;
 };
 
@@ -609,8 +614,13 @@ typedef char actor_perception_prop_view_dangerous_vehicle_driver_offset_assert[
 	offsetof(struct actor_perception_prop_view, dangerous_vehicle_driver) == 0x136 ? 1 : -1];
 typedef char actor_perception_status_unit_flags_offset_assert[
 	offsetof(struct actor_perception_status_unit_view, status_flags) == 0x1B4 ? 1 : -1];
+#ifdef __BIG_ENDIAN__
+typedef char actor_perception_target_unit_active_region_offset_assert[
+	offsetof(struct actor_perception_target_unit_view, active_region_flags) == 0xB7 ? 1 : -1];
+#else
 typedef char actor_perception_target_unit_active_region_offset_assert[
 	offsetof(struct actor_perception_target_unit_view, active_region_flags) == 0xB6 ? 1 : -1];
+#endif
 typedef char actor_target_weight_definition_melee_velocity_offset_assert[
 	offsetof(struct actor_definition, berserk.melee_leap_velocity) == 0x38C ? 1 : -1];
 typedef char actor_target_weight_variant_melee_range_offset_assert[

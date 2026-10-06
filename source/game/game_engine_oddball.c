@@ -1,110 +1,10 @@
-/*
-GAME_ENGINE_ODDBALL.C
-
-symbols in this file:
-000A1630 0010:
-	_oddball_engine_dispose (0000)
-000A1640 0010:
-	_oddball_engine_dispose_from_old_map (0000)
-000A1650 0020:
-	_oddball_engine_player_added (0000)
-000A1670 0010:
-	_oddball_engine_game_ending (0000)
-000A1680 0010:
-	_oddball_engine_game_starting (0000)
-000A1690 0010:
-	_oddball_engine_statistics_append (0000)
-000A16A0 0010:
-	_oddball_engine_handle_client_message (0000)
-000A16B0 0010:
-	_oddball_engine_handle_server_message (0000)
-000A16C0 0010:
-	_oddball_engine_pregame_post_rasterize (0000)
-000A16D0 0010:
-	_oddball_engine_post_rasterize (0000)
-000A16E0 00d0:
-	_oddball_add_score (0000)
-000A17B0 0040:
-	_oddball_add_time_with_ball (0000)
-000A17F0 0030:
-	_player_ball_count (0000)
-000A1820 0010:
-	_oddball_engine_player_damaged_player (0000)
-000A1830 0030:
-	_player_has_ball (0000)
-000A1860 0040:
-	_ball_available (0000)
-000A18A0 02e0:
-	_oddball_engine_display_score (0000)
-000A1B80 0010:
-	_oddball_engine_prespawn_player_update (0000)
-000A1B90 0040:
-	_oddball_weapon_drop (0000)
-000A1BD0 0040:
-	_oddball_get_score (0000)
-000A1C10 0020:
-	_oddball_ball_transfer_by_killing (0000)
-000A1C30 0020:
-	_accumulate_score_by_time (0000)
-000A1C50 0020:
-	_terminator_scoring_rules (0000)
-000A1C70 0020:
-	_oddball_test_flag (0000)
-000A1C90 0050:
-	_oddball_test_trait (0000)
-000A1CE0 0050:
-	_oddball_get_score_string (0000)
-000A1D30 0070:
-	_oddball_get_score_header_string (0000)
-000A1DA0 0050:
-	_oddball_get_team_score_string (0000)
-000A1DF0 0140:
-	_find_position_for_ball (0000)
-000A1F30 0090:
-	_create_the_ball (0000)
-000A1FC0 0120:
-	_oddball_engine_initialize_for_new_map (0000)
-000A20E0 0070:
-	_reset_ball (0000)
-000A2150 0090:
-	_update_ball_ownership (0000)
-000A21E0 01c0:
-	_oddball_engine_player_update (0000)
-000A23A0 00c0:
-	_oddball_engine_weapon_update (0000)
-000A2460 00d0:
-	_oddball_engine_update (0000)
-000A2530 01c0:
-	_oddball_engine_player_killed_player (0000)
-000A26F0 00b0:
-	_oddball_weapon_pickup (0000)
-0025BE74 002a:
-	??_C@_0CK@LKLFFONL@c?3?2halo?2SOURCE?2game?2game_engine_@ (0000)
-0025BEA0 0034:
-	??_C@_0DE@EJKHILOB@0?5?$CG?$CG?5?$CCthis?5map?5was?5not?5correctly@ (0000)
-0025BED8 0040:
-	??_C@_0EA@MPBOOMHB@?$CD?$CD?$CD?5failed?5to?5find?5any?5suitable?5@ (0000)
-0025BF18 0023:
-	??_C@_0CD@CKBFGHJI@?$CD?$CD?$CD?5failed?5to?5find?5the?5flag?5obje@ (0000)
-0025BF3C 0028:
-	??_C@_0CI@KJBBGHKH@?$CD?$CD?$CD?5failed?5to?5find?5ball?5spawn?5te@ (0000)
-0025BF64 0028:
-	??_C@_0CI@LAAKFGOG@?$CD?$CD?$CD?5failed?5to?5find?5ball?5spawn?5te@ (0000)
-0025BF8C 000a:
-	??_C@_09GMEHKGKL@ball_blue?$AA@ (0000)
-0025BF98 000c:
-	??_C@_0M@FNMEMKCB@target_blue?$AA@ (0000)
-0025BFA4 002d:
-	??_C@_0CN@DJFDFML@?$CBball_available?$CI?$CJ?5?$HM?$HM?5?$CIcapture_in@ (0000)
-002DE560 0088:
-	_oddball_engine (0000)
-0043EBA8 0104:
-	_oddball_globals (0000)
-*/
+/* GAME_ENGINE_ODDBALL.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/game/game_engine_oddball.c. */
 
 /* ---------- headers */
 
 #include "cseries/cseries.h"
+#include "memory/byte_swapping.h"
 #include "cseries/errors.h"
 #include "game/game_engine_place.h"
 #include "game/game_engine.h"
@@ -239,10 +139,8 @@ static struct oddball_globals oddball_globals = { 0 };
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
 
-/* port: the host's ball resets a client of the distributed netcode shows
-(each machine counts them, a client as it last had them from the host):
-all, and those of balls that had been touched; and the balls passed to
-a killer (juggernaut), the last to whom (absolute index) */
+/* port: the host's ball resets a client of the distributed netcode shows, counted on each machine (a client's as
+last from the host): all, touched balls', and passes to a killer (juggernaut), the last killer's absolute index */
 static struct
 {
 	byte resets;
@@ -503,8 +401,7 @@ static real_point3d find_position_for_ball(
 	struct scenario *scenario = global_scenario_get();
 	long flag_index = NONE;
 	/* BUG (original): after the fatal missing-spawn assertion, January returns
-	 * the untouched value. A corrected build should report failure explicitly.
-	 */
+	the untouched value. A corrected build should report failure explicitly. */
 	real_point3d position;
 
 	if (!game_engine_get_variant()->game_engine_variant.oddball.random_start)
@@ -682,8 +579,7 @@ static boolean oddball_engine_initialize_for_new_map(
 	long ball_index;
 
 	/* January performs this scenario touch even though the returned pointer is
-	 * not consumed here; its call and relocation are present in the target.
-	 */
+	not consumed here; its call and relocation are present in the target. */
 	global_scenario_get();
 	csmemset(&oddball_globals, 0, sizeof(oddball_globals));
 
@@ -732,11 +628,8 @@ static void oddball_engine_player_update(
 	long ball_count;
 
 	game_engine_state_message(player_index, NONE, NONE);
-	/* (a client of the distributed netcode has the host's carriers and
-	scores, game_engine_oddball_read_network_state, and shows the rest;
-	its own players' carrying it takes from the weapon in their hands,
-	which the host sends more often than its state, so the speed the ball
-	gives them follows a pickup or drop at once) */
+	/* (a distributed netcode client gets carriers and scores from game_engine_oddball_read_network_state; its
+	own players' carrying is their weapon's, which the host sends more often: the ball's speed follows at once) */
 	if (!network_game_distributed_client() ||
 		player->local_player_index != NONE)
 	{
@@ -1092,9 +985,7 @@ static void oddball_engine_player_killed_player(
 
 				if (capture_index != NONE)
 				{
-					/* January and HCEA both retain this mode re-query inside
-					 * the already transfer-only arm.
-					 */
+					/* January and HCEA both retain this mode re-query inside the already transfer-only arm. */
 					/* (port: a client shows the host's, whose state may come
 					before this copy of the kill: game_engine_oddball_read_network_state) */
 					if (!network_game_distributed_client())
@@ -1532,3 +1423,19 @@ boolean game_engine_oddball_read_network_state(
 	oddball_events.transfers = state.transfers;
 	return TRUE;
 }
+
+#ifdef __BIG_ENDIAN__
+/* port: the state in the PC builds' order, which they send (their memory's), and back */
+void game_engine_oddball_network_state_byte_swap(
+	byte *buffer,
+	long size)
+{
+	struct oddball_network_state *state = (struct oddball_network_state *)buffer;
+
+	if (size != (long)sizeof(*state))
+		return;
+	BYTE_SWAP_ARRAY(state->team_score);
+	BYTE_SWAP_ARRAY(state->individual_score);
+	BYTE_SWAP_ARRAY(state->ball_spawn_timer);
+}
+#endif

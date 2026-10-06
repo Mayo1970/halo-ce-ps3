@@ -384,4 +384,30 @@ void byte_swap_data_explicit(
 	return;
 }
 
+/* port: count parts of part_size bytes, each reversed byte by byte (any alignment: BYTE_SWAP_FIELD) */
+void byte_swap_parts(
+	void *data,
+	long part_size,
+	long count)
+{
+	byte *part = data;
+
+	while (count-- > 0)
+	{
+		byte *low = part;
+		byte *high = part + part_size - 1;
+
+		while (low < high)
+		{
+			byte value = *low;
+
+			*low++ = *high;
+			*high-- = value;
+		}
+		part += part_size;
+	}
+
+	return;
+}
+
 /* ---------- private code */

@@ -165,6 +165,11 @@ struct player_action_collection_definition player_action_collection_definition =
 
 /* ---------- public code */
 
+#ifdef __BIG_ENDIAN__
+/* network_distributed.c's: the PC builds' order, which they send (their memory's) */
+void network_distributed_byte_swap(void *message, word size, boolean native);
+#endif
+
 /* the distributed netcode's per-tick state (port/linux/game/network_distributed.c),
 unreliably to the host, as the game update is */
 boolean network_distributed_client_send(
@@ -177,6 +182,9 @@ boolean network_distributed_client_send(
 		return FALSE;
 	/* (the write swaps the header in place) */
 	csmemcpy(buffer, message, size);
+#ifdef __BIG_ENDIAN__
+	network_distributed_byte_swap(buffer, size, TRUE);
+#endif
 	/* (no address: the client's datagram socket is connected to the host,
 	network_connection_connect, and sends there) */
 	return network_game_client_write(network_game_client_get_connection(global_network_game_client),
@@ -194,6 +202,9 @@ boolean network_distributed_client_send_reliably(
 		return FALSE;
 	/* (the write swaps the header in place) */
 	csmemcpy(buffer, message, size);
+#ifdef __BIG_ENDIAN__
+	network_distributed_byte_swap(buffer, size, TRUE);
+#endif
 	return network_game_client_write(network_game_client_get_connection(global_network_game_client),
 		(message_header *)buffer, size, NULL, 1);
 }

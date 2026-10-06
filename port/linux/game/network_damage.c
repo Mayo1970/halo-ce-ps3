@@ -1,39 +1,5 @@
-/*
-NETWORK_DAMAGE.C
-
-The distributed netcode's damage (port/linux/NETCODE.md, stage 5, and what
-being hit looks and feels like on the clients).
-
-- The host deals all damage. Every tick it sends its clients the damage it
-  dealt to units: whom, with what, from where, how much, and to what
-  effect. A client replays what that damage does beside the harm (the
-  host's shields and health come with the units' states): a player's
-  screen flash and shake, the unit's flinch, pain sound, knockback and
-  stun, the scope it was knocked out of, and whom the HUD shows it was hit
-  by. A killing blow it replays whole, so that the body falls as the shot
-  had it and the kill is announced with the host's killer (an actor's, no
-  player's, counted by no one there).
-- A client deals no damage itself. What its own players' shots, grenades,
-  melee and vehicles hit it reports to the host, which deals it once it has
-  checked it: the report is of that machine's player, the damage one that
-  player's weapons (now or lately), grenades or the vehicle they drove
-  deal, of the shape the game gives it (at a point, a melee blow from the
-  striker, a collision from the vehicle), the target about where the host
-  had it when the shooter saw it (the host keeps a second of where
-  players' units and vehicles were, and looks back as far as the report
-  was made: the host's tick the client had last heard of then; one older
-  than that second is refused, as a burst of reports held back is), a
-  melee blow from where the host had the player and the target within
-  their reach, a collision from where the host had their vehicle, the
-  impact at the target, and no more reports than the weapon that deals
-  them fires (an explosion's hits are one, each object hit once). What the
-  shooter saw hit, hits. The host's own copies of a client's projectiles
-  deal nothing (the client's report does), unless that client has left
-  the game.
-- The damage to a unit goes to the machines of the players it concerns
-  (the unit's, its riders', the damage's owner's) and those sent the
-  unit's player this tick, which see it; a killing blow to all.
-*/
+/* NETWORK_DAMAGE.C: the distributed netcode's damage (port/linux/NETCODE.md, stage 5). The host deals it all, its
+clients' hits once their reports check out; clients replay what it does beside the harm (a killing blow whole). */
 
 #include "cseries.h"
 #include "game/game.h"
@@ -76,15 +42,12 @@ enum
 	MAXIMUM_DAMAGE_EVENTS_PER_TICK = 256,
 	MAXIMUM_HIT_REPORTS_PER_TICK = 256,
 	MAXIMUM_ENTRIES_PER_MESSAGE = 64,
-	/* the weapons a player has carried lately, whose damage the host takes
-	from them (a grenade lands, a rocket arrives, after its thrower has
-	died or dropped the launcher) */
+	/* the weapons a player has carried lately, whose damage the host takes from them (a grenade lands, a rocket
+	arrives, after its thrower has died or dropped the launcher) */
 	MAXIMUM_RECENT_WEAPONS = 8,
 	RECENT_WEAPON_TICKS = 10 * TICKS_PER_SECOND,
-	/* a player's hits: a bucket of this many seconds of fire, filling at a
-	second a second, a hit taking what one of its weapon's projectiles
-	takes to fire (at twice the weapon's fastest rate: a shotgun's
-	pellets, a spray); an explosion's hits are one, however many it hits */
+	/* a player's hits: a bucket of this many seconds of fire, filling a second a second, a hit taking what one
+	projectile (a pellet) takes to fire at twice the weapon's fastest rate; an explosion's hits are one */
 	HIT_REPORT_BURST_SECONDS = 3,
 	HIT_REPORT_RATE_MARGIN = 2,
 	/* the hits a second of what no trigger's rate says: melee, a
@@ -108,21 +71,17 @@ enum
 	/* ... looked back over beyond the host's tick a report was made at (the
 	frame drawn a tick behind, the report's own tick) */
 	TARGET_HISTORY_SLACK_TICKS = 3,
-	/* ... and how old a report may be (a slow link's round trip, a report
-	sent again): older, it is refused, as a burst after the network was lost
-	is; one older than the history is looked back over as far as it goes */
+	/* ... and how old a report may be (a slow link's round trip, a report sent again): older is refused,
+	as a burst after the network was lost is; one older than the history is looked back over as far as it goes */
 	REPORT_MAXIMUM_AGE_TICKS = 3 * TICKS_PER_SECOND,
 	/* the players whose machines a unit's damage goes to, told (the unit's,
 	its riders', its owner's): with more, it goes to every machine */
 	MAXIMUM_EVENT_PLAYERS = 8,
-	/* where each player's unit was, every so many ticks, and how many of
-	those are kept (a power of two: about thirteen seconds; what they fire
-	outlives the history: a rocket's flight, a grenade its thrower) */
+	/* where each player's unit was, every so many ticks, and how many of those are kept (a power of two:
+	about thirteen seconds; what they fire outlives the history: a rocket's flight, a grenade its thrower) */
 	PLAYER_TRAIL_INTERVAL_TICKS = 3,
-	/* ... looked over from no earlier than the report's machine's round
-	trip and this before now (a report made longer ago, sent again after a
-	loss, has its shooter where they were then; one that says it was made
-	long ago does not look further back than that) */
+	/* ... looked over from no earlier than the report's machine's round trip and this before now: a report resent
+	after a loss has its shooter where they were then; one claiming an older tick looks back no further */
 	PLAYER_TRAIL_REPORT_SLACK_TICKS = TICKS_PER_SECOND,
 	PLAYER_TRAIL_POINTS = 128,
 	PLAYER_TRAIL_TICKS = PLAYER_TRAIL_INTERVAL_TICKS * PLAYER_TRAIL_POINTS,
@@ -189,33 +148,27 @@ enum
 	_projectile_detonation_timer_starts_immediately = 0,
 };
 
-/* world units: how far the host may have the target from where the
-shooter saw it (with how far it moves in half a second), and the impact
-from the target */
+/* world units: how far the host may have the target from where the shooter saw it (with how far it moves in
+half a second), and the impact from the target */
 #define REPORT_TARGET_TOLERANCE 3.0f
 #define REPORT_TARGET_LEAD_TICKS 15.0f
 #define REPORT_IMPACT_TOLERANCE 2.0f
-/* ... and from where the host had a player's unit or vehicle then (with how
-far it moves in a few ticks: a client's copy runs a little ahead of the
-host's word on it), and further for a vehicle's (its size, and as far as a
-client's own vehicle is from the host's before it is put right,
-network_objects.c) */
+/* ... and from where the host had a player's unit or vehicle then, with a few ticks' move (a client's copy runs
+ahead), more for a vehicle (its size, and how far a client's own drifts until put right, network_objects.c) */
 #define REPORT_HISTORY_TOLERANCE 2.0f
 #define REPORT_HISTORY_LEAD_TICKS 3.0f
 #define REPORT_VEHICLE_TOLERANCE 4.0f
 /* ... a unit a vehicle runs into from the vehicle: their sizes, and the push
 it gives the unit (twice its speed, physics.c) and a tick of it */
 #define REPORT_COLLISION_LEAD_TICKS 3.0f
-/* ... and what a player fires from where the host had them (a client's
-player is where it says within a tolerance of the host's, a weapon's muzzle
-is off the unit; a vehicle's the vehicle's size more) */
+/* ... and what a player fires from where the host had them (a client's player is where it says within a
+tolerance of the host's, a weapon's muzzle is off the unit; a vehicle's the vehicle's size more) */
 #define REPORT_RANGE_TOLERANCE 6.0f
 /* how far apart the origin and the epicenter of what hits at a point are
 (one point, as the client had it) */
 #define REPORT_POINT_TOLERANCE 0.01f
-/* how far from the origin anything in a report is (world units), and the
-largest damage scale a client's hit has: a melee blow's, airborne
-(unit_update_melee), anything else's all of it */
+/* how far from the origin anything in a report is (world units), and the largest damage scale a client's hit has:
+a melee blow's, airborne (unit_update_melee), anything else's all of it */
 #define REPORT_WORLD_BOUND 32768.0f
 #define REPORT_MAXIMUM_MELEE_SCALE 1.5f
 
@@ -306,10 +259,8 @@ struct distributed_hit_report_message
 	struct distributed_hit_report reports[MAXIMUM_ENTRIES_PER_MESSAGE];
 };
 
-/* how far from its firer what a source deals goes off (world units), in
-how many ticks from when it is fired, and for how many of them what it
-fires is carried at its firer's own speed (a grenade thrown on the run); a
-distance below 0 where the tags do not bound it */
+/* how far from its firer what a source deals goes off (world units, below 0 if unbounded by the tags), in how many
+ticks after it is fired, and how many of those it is carried at its firer's speed (a grenade thrown on the run) */
 struct damage_reach
 {
 	real distance;
@@ -376,9 +327,8 @@ static struct damage_history_tick
 		boolean driving;
 	} objects[MAXIMUM_TRACKED_PLAYERS][2];
 } damage_history[TARGET_HISTORY_TICKS];
-/* ... and where each player's living unit was every few ticks, longer (NONE
-for no time: none), how fast it or its vehicle went, and the size of the
-vehicle it rode */
+/* ... and where each player's living unit was every few ticks, longer (NONE for no time: none),
+how fast it or its vehicle went, and the size of the vehicle it rode */
 static struct damage_trail_point
 {
 	long time;
@@ -386,9 +336,8 @@ static struct damage_trail_point
 	real speed;
 	real radius;
 } damage_trails[MAXIMUM_TRACKED_PLAYERS][PLAYER_TRAIL_POINTS];
-/* ... what each weapon or grenade deals, as the tags have it (their walk
-is long): the hits a second of a damage effect from it, how it deals it
-(the _damage_source flags), and how far from its firer */
+/* ... what each weapon or grenade deals, as the tags have it (their walk is long): the hits a second of a damage
+effect from it, how it deals it (the _damage_source flags), and how far from its firer */
 static struct damage_rate_cache_entry
 {
 	long source_index;
@@ -491,11 +440,8 @@ static boolean distributed_damage_is_recoil(
 		damage->epicenter.z == unit->object.bounding_sphere_center.z;
 }
 
-/* what the damage would show where this machine does not deal it, as
-object_cause_damage has it (damage.c): the material it strikes, or the
-shield's where the shield takes it, and how much is left of that, at the
-first of the object and what it rides that takes it (a projectile responds
-to it, projectiles.c; a client has the host's shields and health). */
+/* what damage not dealt here would show, as damage.c has it: the material struck or the shield's, what is left of
+it, at the first of it and what it rides to take it (projectiles.c responds; a client has the host's vitality) */
 static void distributed_damage_material(
 	struct damage_data *damage,
 	long object_index,
@@ -585,11 +531,8 @@ static void distributed_damage_material(
 	}
 }
 
-/* whether this machine deals the damage: a client none (it reports its own
-players' hits instead), the host all but its clients' players' (but for
-their reports); authorized: a client carrying out the host's word. Where it
-does not, what the damage would show is filled in (the damage is
-object_cause_damage's own). */
+/* whether this machine deals the damage: the host all but its clients' players' (from their reports), a client
+none unless authorized (doing the host's word). Else it fills in what object_cause_damage's damage would show */
 boolean network_damage_deals(
 	struct damage_data const *damage,
 	long object_index,
@@ -605,9 +548,8 @@ boolean network_damage_deals(
 
 		if (authorized)
 			return TRUE;
-		/* a weapon's own shake of this machine's own player firing it: its
-		screen effect at once (the host does not send it,
-		network_damage_player_effect), and nothing else of it */
+		/* a weapon's own shake of this machine's own player firing it: its screen effect at once (the host
+		does not send it, network_damage_player_effect), and nothing else of it */
 		unit = (struct unit_datum *)object_try_and_get_and_verify_type(object_index, _object_mask_unit);
 		if (unit && unit->unit.player_index != NONE && distributed_player_is_local(unit->unit.player_index) &&
 			distributed_living_unit(player_try_and_get(unit->unit.player_index)) == object_index &&
@@ -729,11 +671,8 @@ void network_damage_aftermath(
 	unit = (struct unit_datum *)object_try_and_get_and_verify_type(object_index, _object_mask_unit);
 	if (!unit)
 		return;
-	/* (the last events kept for killing blows: of a player's unit, whose
-	player the blow's aftermath has already taken from it, unit_died; or of
-	a biped no player's that was alive, an actor's: a body gibbed, or a
-	vehicle, whose riders the blow would kill again where it is replayed,
-	goes as other damage does) */
+	/* (the last events kept for killing blows: a player's unit, whose player the aftermath took, unit_died; or an
+	actor's living biped; a gibbed body, or a vehicle (a replay kills its riders again), goes as other damage) */
 	kill = TEST_FLAG(being_damaged_flags, _object_being_damaged_body_depleted_bit) &&
 		(victim_player_index != NONE ||
 			(TEST_FLAG(_object_mask_biped, unit->object.type) &&
@@ -802,13 +741,8 @@ static void distributed_reach_combine(
 	reach->carried_ticks = MAX(reach->carried_ticks, other->carried_ticks);
 }
 
-/* how far a projectile flies before it goes off or is gone, and how long
-it takes (projectiles.c): its range (its path no longer), and no longer than
-it takes at its slowest or its timer, when that starts at once; else as far
-as it goes at its fastest for as long as its timer runs (and falls, and is
-carried at its firer's speed). Unbounded where it has neither, where its
-timer starts once it bounces or rests, and where it sticks to what it hits,
-which carries it. */
+/* a projectile's flight (projectiles.c): its range, timed at its slowest or by a timer that starts at once; else
+its fastest over that timer (falling, carried at its firer's speed); unbounded with neither, or if it sticks */
 static void distributed_projectile_flight(
 	struct projectile_definition const *projectile,
 	struct damage_reach *flight)
@@ -857,9 +791,8 @@ static void distributed_projectile_flight(
 	}
 }
 
-/* how a projectile's impacts and detonations deal the damage (the
-_damage_source flags, none for not at all), and how far from its firer
-(combined into reach) */
+/* how a projectile's impacts and detonations deal the damage (the _damage_source flags, none for not at all),
+and how far from its firer (combined into reach) */
 static byte distributed_projectile_deals(long projectile_index, long damage_index, short depth,
 	struct damage_reach *reach);
 
@@ -916,9 +849,8 @@ static byte distributed_projectile_deals(
 	if (depth > MAXIMUM_TAG_DEPTH || !tag_index_is_group(projectile_index, PROJECTILE_DEFINITION_TAG))
 		return 0;
 	projectile = projectile_definition_get(projectile_index);
-	/* (its impact, and its detonation on what it sticks to, at a point,
-	projectiles.c; its effect is the one it detonates with: a grenade's, a
-	rocket's explosion) */
+	/* (its impact, and its detonation on what it sticks to, at a point, projectiles.c; its effect is the one it
+	detonates with: a grenade's, a rocket's explosion) */
 	if (projectile->projectile.impact_damage.index == damage_index ||
 		projectile->projectile.attached_detonation_damage.index == damage_index)
 	{
@@ -961,10 +893,8 @@ static byte distributed_projectile_deals(
 	return kinds;
 }
 
-/* how many hits a second the weapon deals of the damage, 0 for none; how it
-deals it (the _damage_source flags); and how far from its firer its
-projectiles do (combined into reach; a weapon's own detonation goes off
-where the weapon is, unbounded) */
+/* how many hits a second the weapon deals of the damage (0: none), how (the _damage_source flags), and how far
+from its firer its projectiles do (combined into reach; its own detonation goes off at the weapon: unbounded) */
 static real distributed_weapon_deals(
 	long weapon_definition_index,
 	long damage_index,
@@ -1021,9 +951,8 @@ static real distributed_weapon_deals(
 	return rate;
 }
 
-/* the source's (a weapon's, a grenade's projectile's) hits a second of the
-damage, how it deals it (the _damage_source flags), and how far from its
-firer, from its tags */
+/* the source's (a weapon's, a grenade's projectile's) hits a second of the damage, how it deals it
+(the _damage_source flags), and how far from its firer, from its tags */
 static real distributed_source_deals_uncached(
 	long source_index,
 	long damage_index,
@@ -1078,10 +1007,8 @@ static real distributed_source_deals(
 	return distributed_source_deals_uncached(source_index, damage_index, grenade, kinds, reach);
 }
 
-/* how many hits a second the player could deal of the damage: their
-weapons, lately, their grenades, the vehicle they drove lately; 0 when none
-of them deals it; how they deal it (the _damage_source flags); and how far
-from them what they fire deals it */
+/* how many hits a second the player could deal of the damage: their weapons and grenades, the vehicle they drove,
+lately (0: none); how they deal it (the _damage_source flags); and how far from them what they fire deals it */
 static real distributed_player_deals(
 	short player_index,
 	long damage_index,
@@ -1240,11 +1167,8 @@ static boolean distributed_history_near(
 	return distributed_distance_squared(position, history_position) <= reach * reach;
 }
 
-/* whether the host had the object (a player's unit or vehicle) within
-reach of the position at a tick in the last ticks; NONE when it has no such
-object now (not a player's: where it is now is what counts). Each tick is
-looked through only where the tick after had it (a player's unit, or their
-vehicle), unless it is not there. */
+/* whether the host had the object (a player's unit or vehicle) within reach of the position in the last ticks;
+NONE with no such object now (where it is now counts); each tick searched first where the tick after had it */
 static short distributed_target_seen(
 	long object_index,
 	real_point3d const *position,
@@ -1324,11 +1248,8 @@ static boolean distributed_player_was_near(
 	return FALSE;
 }
 
-/* whether the host had the player driving a vehicle at a tick in the last
-ticks within reach of the epicenter (its size and REPORT_VEHICLE_TOLERANCE
-more), and the target (where the report has it) within the vehicle's reach
-of the epicenter: their sizes and the push the vehicle gives it
-(physics.c) */
+/* whether the host had the player driving a vehicle in the last ticks near the epicenter (its size and
+REPORT_VEHICLE_TOLERANCE more), and the reported target as near as their sizes and its push (physics.c) */
 static boolean distributed_player_drove_into(
 	short player_index,
 	real_point3d const *epicenter,
@@ -1364,12 +1285,8 @@ static boolean distributed_player_drove_into(
 	return FALSE;
 }
 
-/* whether the host had the player (their living unit, or the vehicle it
-rode) within reach of the point since what they fired could have been:
-the reach's ticks before the host's tick the report was made at, and a
-little more (the whole trail for more); with how far they go in the ticks
-between two of the trail's and a few more (the report may come before the
-host has the player where they fired from) */
+/* whether the host had the player's unit or vehicle within reach of the point since it could have been fired: the
+reach's ticks before the report's tick and a bit, plus a trail step's move (the report may outrun the host) */
 static boolean distributed_player_could_fire(
 	long machine_index,
 	short player_index,
@@ -1546,11 +1463,8 @@ static boolean distributed_object_is_players(
 	}
 }
 
-/* whether the player has hits left for the report, which it takes (at the
-weapon's rate). An explosion's hits of a tick are one: a report of the same
-explosion as another of that player's that tick (its damage and epicenter)
-is free, when the damage has a reach (a cutoff radius), but no object is hit
-twice by one. */
+/* whether the player has hits left for the report, which it takes (at the weapon's rate). An explosion's hits
+of a tick are one: a repeat (same damage, epicenter) is free with a cutoff radius, but no object is hit twice */
 static boolean distributed_report_paid(
 	short player_index,
 	struct distributed_hit_report const *report,
@@ -1606,19 +1520,8 @@ static boolean distributed_report_paid(
 	return TRUE;
 }
 
-/* whether the host takes the report, which it makes the damage as the
-host deals it (the cheaper checks first, and the report paid for before the
-history is looked through: a flood of reports costs its sender no more than
-the hits it pays for). The report is of the shape the game gives the damage
-(_damage_source flags): what hits at a point there (its origin the
-epicenter), a melee blow from the striker (its origin their head, its
-epicenter their body, both where the host had them, and the target within
-their reach), a vehicle's collision from the vehicle its driver drove (its
-epicenter the vehicle, where the host had it, the target at it); its origin
-at the target in each, and what hits at a point within its reach of where
-the host had the player since it was fired; and area damage or not as the
-game deals it, an explosion's direction and scale from the epicenter to the
-target. */
+/* whether the host takes the report, made into the damage as the host deals it (port/linux/NETCODE.md, stage 5);
+cheaper checks first, paid for before the history is searched: a flood of reports costs the sender its hits */
 static boolean distributed_report_valid(
 	long machine_index,
 	struct distributed_hit_report const *report,
@@ -1663,10 +1566,8 @@ static boolean distributed_report_valid(
 	{
 		return FALSE;
 	}
-	/* made at a tick of the host's not later than now nor long before (one
-	held back is refused, as a burst after the network was lost is), and
-	looked back over from then: however long it took to come (sent again,
-	reliably), where the shooter saw the target */
+	/* made at a host tick not after now nor long ago (refused if held back, as a burst after a network loss is),
+	and looked back from then, however late it came (resent reliably), to where the shooter saw the target */
 	if (report->host_time == NONE || report->host_time > now || now - report->host_time > REPORT_MAXIMUM_AGE_TICKS)
 		return FALSE;
 	ticks = MIN(now - report->host_time + TARGET_HISTORY_SLACK_TICKS, TARGET_HISTORY_TICKS - 1);
@@ -1674,9 +1575,8 @@ static boolean distributed_report_valid(
 	rate = distributed_player_deals(player_index, report->damage.definition_index, &kinds, &fired_reach);
 	if (rate <= 0.0f)
 		return FALSE;
-	/* ... of its shape: at a point, else a melee blow, else a collision; and
-	area damage as the game deals it (the report's only when the damage is
-	dealt both ways) */
+	/* ... of its shape: at a point, else a melee blow, else a collision; and area damage as the game deals it
+	(the report's only when the damage is dealt both ways) */
 	if ((TEST_FLAG(kinds, _damage_source_impact_bit) || TEST_FLAG(kinds, _damage_source_area_bit)) &&
 		distributed_distance_squared(&report->damage.origin, &report->damage.epicenter) <=
 			REPORT_POINT_TOLERANCE * REPORT_POINT_TOLERANCE)
@@ -1719,9 +1619,8 @@ static boolean distributed_report_valid(
 	{
 		return FALSE;
 	}
-	/* a melee blow from where the host had the player (its origin their
-	head, its epicenter their body); a collision from the vehicle they
-	drove */
+	/* a melee blow from where the host had the player (its origin their head, its epicenter their body);
+	a collision from the vehicle they drove */
 	if (melee && (!distributed_player_was_near(player_index, &report->damage.epicenter, ticks) ||
 		!distributed_player_was_near(player_index, &report->damage.origin, ticks)))
 	{
@@ -1732,18 +1631,16 @@ static boolean distributed_report_valid(
 	{
 		return FALSE;
 	}
-	/* what hits at a point (a shot, an explosion) within its reach of where
-	the host had the player since it was fired, where the tags bound that
-	(no line of sight: a wall between is not looked for) */
+	/* what hits at a point (a shot, an explosion) within its reach of where the host had the player
+	since it was fired, where the tags bound that (no line of sight: a wall between is not looked for) */
 	if (!melee && !collision && fired_reach.distance >= 0.0f &&
 		!distributed_player_could_fire(machine_index, player_index, &report->damage.origin, &fired_reach,
 			report->host_time))
 	{
 		return FALSE;
 	}
-	/* the target about where the host had it when the shooter saw it: a
-	player's unit or vehicle as far back as the report was made, else (what
-	no player has) about where it is */
+	/* the target about where the host had it when the shooter saw it: a player's unit or vehicle as far back
+	as the report was made, else (what no player has) about where it is */
 	seen = distributed_target_seen(report->object_index, &report->target_position, ticks);
 	if (seen == FALSE)
 		return FALSE;
@@ -1767,11 +1664,8 @@ static boolean distributed_report_valid(
 		return FALSE;
 	damage->flags &= REPORT_DAMAGE_FLAGS;
 	SET_FLAG(damage->flags, _damage_area_of_effect_bit, area);
-	/* ... an explosion's direction and scale as the game gives them
-	(damage.c's area_of_effect_cause_damage_to_object): from the epicenter
-	to the target's centre where the shooter saw it, and the less of the
-	report's and its fall off over that, unless it does not fall off; any
-	other's direction one long */
+	/* ... an explosion's direction and scale as damage.c's area_of_effect_cause_damage_to_object gives them:
+	from the epicenter to the target's centre as reported, capped by fall off; any other's direction one long */
 	if (area && !melee && !collision)
 	{
 		real_point3d origin;
@@ -1834,11 +1728,8 @@ void network_damage_handle_reports(
 	}
 }
 
-/* where each damage event of this tick goes: a player effect to its
-player's machine; damage to a unit to the machines of the players it
-concerns (the unit's and its riders', as the history has them this tick)
-and of those sent them this tick (who see them), and its owner's; a killing
-blow to all (NONE) */
+/* where each damage event of this tick goes: a player effect to its player's machine; damage to a unit to the
+machines of its player, riders and owner, and of those sent them (who see them); a killing blow to all (NONE) */
 static void distributed_note_event_destinations(
 	void)
 {
@@ -2133,3 +2024,75 @@ void network_damage_new_game(
 	for (player_index = 0; player_index < DAMAGE_RATE_CACHE_SIZE; player_index++)
 		damage_rate_cache[player_index].source_index = NONE;
 }
+
+#ifdef __BIG_ENDIAN__
+/* ---------- byte order: the PC builds send the entries as their memory has them (network_distributed.h) */
+
+static void distributed_damage_byte_swap(
+	struct distributed_damage *damage)
+{
+	BYTE_SWAP_FIELD(damage->definition_index);
+	BYTE_SWAP_FIELD(damage->flags);
+	BYTE_SWAP_FIELD(damage->owner_team_index);
+	BYTE_SWAP_FIELD(damage->owner_object_index);
+	BYTE_SWAP_REALS(damage->origin);
+	BYTE_SWAP_REALS(damage->epicenter);
+	BYTE_SWAP_REALS(damage->direction);
+	BYTE_SWAP_FIELD(damage->scale);
+	BYTE_SWAP_FIELD(damage->multiplier);
+	BYTE_SWAP_FIELD(damage->material_effect_scale);
+	BYTE_SWAP_FIELD(damage->material_type);
+}
+
+static void distributed_damage_event_byte_swap(
+	void *entry)
+{
+	struct distributed_damage_event *event = entry;
+
+	BYTE_SWAP_FIELD(event->object_index);
+	distributed_damage_byte_swap(&event->damage);
+	BYTE_SWAP_FIELD(event->being_damaged_flags);
+	BYTE_SWAP_FIELD(event->shield_damage);
+	BYTE_SWAP_FIELD(event->body_damage);
+	BYTE_SWAP_FIELD(event->body_damage_multiplier);
+	BYTE_SWAP_FIELD(event->total_damage);
+	BYTE_SWAP_FIELD(event->body_part);
+	BYTE_SWAP_FIELD(event->node_index);
+	BYTE_SWAP_FIELD(event->region_index);
+	BYTE_SWAP_FIELD(event->material_index);
+	BYTE_SWAP_FIELD(event->killer_score);
+}
+
+static void distributed_hit_report_byte_swap(
+	void *entry)
+{
+	struct distributed_hit_report *report = entry;
+
+	BYTE_SWAP_FIELD(report->object_index);
+	distributed_damage_byte_swap(&report->damage);
+	BYTE_SWAP_REALS(report->target_position);
+	BYTE_SWAP_REALS(report->object_normal);
+	BYTE_SWAP_FIELD(report->node_index);
+	BYTE_SWAP_FIELD(report->region_index);
+	BYTE_SWAP_FIELD(report->material_index);
+	BYTE_SWAP_FIELD(report->host_time);
+}
+
+void network_damage_byte_swap(
+	byte type,
+	byte *entries,
+	short count,
+	byte const *end)
+{
+	if (type == _distributed_message_damage_events)
+	{
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_damage_event),
+			distributed_damage_event_byte_swap);
+	}
+	else if (type == _distributed_message_hit_reports)
+	{
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_hit_report),
+			distributed_hit_report_byte_swap);
+	}
+}
+#endif

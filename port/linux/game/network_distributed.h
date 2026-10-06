@@ -1,18 +1,12 @@
-/*
-NETWORK_DISTRIBUTED.H
-
-What the distributed netcode's modules share (port/linux/NETCODE.md):
-network_distributed.c (the messages, the players, the game's state),
-network_objects.c (the game's objects: who has which, where they are, what
-units carry) and network_damage.c (damage: the host's, replayed on its
-clients, and the clients' hits, reported to the host).
-*/
+/* NETWORK_DISTRIBUTED.H: what the distributed netcode's modules share (port/linux/NETCODE.md): messages, players
+and game state (network_distributed.c), objects (network_objects.c), damage and hits (network_damage.c). */
 
 #ifndef __NETWORK_DISTRIBUTED_H
 #define __NETWORK_DISTRIBUTED_H
 #pragma once
 
 #include "bungie_net/common/message_header.h"
+#include "memory/byte_swapping.h"
 #include "networking/network_connection.h"
 
 /* ---------- constants */
@@ -78,11 +72,8 @@ enum
 	_distributed_to_host_reliably,
 };
 
-/* how far part of an error is closed rather than jumped (world units): the
-host's copy of a client's own player's unit or vehicle, and a client's copy
-of the host's units and objects, which it moves half of the way there each
-tick, drawn as it goes; further, it is put there, drawn gliding
-(network_objects_reconcile). Later Halo engines do the same. */
+/* how far an error closes halfway a tick, drawn as it goes, rather than jumped and drawn gliding (world units,
+network_objects_reconcile). HOST_*: the host's copies of a client's own; REMOTE_*: a client's of the host's */
 #define HOST_BLEND_DISTANCE 0.25f
 #define HOST_VEHICLE_BLEND_DISTANCE 0.5f
 #define REMOTE_BLEND_DISTANCE 1.0f
@@ -125,9 +116,8 @@ typedef char distributed_vector_size_assert[sizeof(struct distributed_vector) ==
 
 /* ---------- macros */
 
-/* the entries of a type that fit one unreliable message, in a tick's batch
-(its header, and the message's size and header but for its message header);
-a longer message is split where a batch is full */
+/* the entries of a type that fit one unreliable message in a tick's batch (less the batch's header, the message's
+size and header but for its message header); a longer message is split where a batch is full */
 #define DATAGRAM_ENTRIES(type) \
 	((short)((DATAGRAM_MAXIMUM_SIZE - 2 * sizeof(struct distributed_message_header) - sizeof(word) + \
 		sizeof(message_header)) / sizeof(type)))
@@ -167,9 +157,8 @@ long distributed_latest_host_time(void);
 /* (a client) how long the host takes to have this machine's players and
 tell it back, in ticks (0 before it is measured) */
 real distributed_own_round_trip_ticks(void);
-/* a player's ping (the round trip of its machine's messages to the host and
-back, as the host measures it) in milliseconds: 0 for the host's own
-players, NONE before it is known */
+/* a player's ping (the round trip of its machine's messages to the host and back, as the host measures it) in
+milliseconds: 0 for the host's own players, NONE before it is known */
 long distributed_player_ping(short player_index);
 /* (the host, in its tick) the client machine a player is on, NONE for none
 (the host's own players') */
@@ -177,9 +166,8 @@ long distributed_player_machine(short player_index);
 /* (the host, in its tick) whether the client's players can see the player
 (or the player is its own, or it has none alive to see with) */
 boolean distributed_machine_sees_player(long machine_index, short player_index);
-/* what a message says, checked: a number finite; a point's parts finite
-and within bound of the origin; an object's index whole (its identifier
-never 0, which any object at the index matches) */
+/* what a message says, checked: a number finite; a point's parts finite and within bound of the origin;
+an object's index whole (its identifier never 0, which any object at the index matches) */
 boolean distributed_real_valid(real value);
 boolean distributed_point_valid(real_point3d const *point, real bound);
 boolean distributed_object_index_valid(long object_index);
@@ -234,5 +222,18 @@ void network_damage_client_tick(void);
 void network_damage_handle_events(void const *entries, short count);
 void network_damage_handle_reports(long machine_index, void const *entries, short count);
 word network_damage_entry_size(byte type);
+
+#ifdef __BIG_ENDIAN__
+/* ---------- byte order: the PC builds send the messages as their memory has them (little-endian) */
+
+/* a whole message, its header's game time and entries (a batch's too), from this machine's order
+(native) or to it */
+void network_distributed_byte_swap(void *message, word size, boolean native);
+/* each of count entries of entry_size bytes that fit before end, by swap */
+void distributed_entries_byte_swap_each(byte *entries, byte const *end, short count, word entry_size,
+	void (*swap)(void *entry));
+void network_objects_byte_swap(byte type, byte *entries, short count, byte const *end);
+void network_damage_byte_swap(byte type, byte *entries, short count, byte const *end);
+#endif
 
 #endif // __NETWORK_DISTRIBUTED_H

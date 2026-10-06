@@ -354,8 +354,14 @@ struct shader_transparent_chicago
 	struct tag_reference lens_flare;
 	struct tag_block extra_layers;
 	struct tag_block maps;
+#ifdef __BIG_ENDIAN__
+	/* port: the low word of the tag's long extra flags, which a big-endian long keeps last */
+	word pad62;
+	word extra_flags;
+#else
 	word extra_flags;
 	word pad62;
+#endif
 };
 
 struct shader_transparent_chicago_definition
@@ -364,8 +370,13 @@ struct shader_transparent_chicago_definition
 	struct shader_transparent_chicago chicago;
 };
 
+#ifdef __BIG_ENDIAN__
+typedef char shader_transparent_chicago_extra_flags_offset_assert[
+	offsetof(struct shader_transparent_chicago_definition, chicago.extra_flags) == 0x62 ? 1 : -1];
+#else
 typedef char shader_transparent_chicago_extra_flags_offset_assert[
 	offsetof(struct shader_transparent_chicago_definition, chicago.extra_flags) == 0x60 ? 1 : -1];
+#endif
 
 struct shader_transparent_glass_definition
 {

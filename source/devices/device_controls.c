@@ -1,32 +1,5 @@
-/*
-DEVICE_CONTROLS.C
-
-symbols in this file:
-00083D10 0010:
-	_controls_initialize (0000)
-00083D20 0010:
-	_controls_dispose (0000)
-00083D30 0010:
-	_controls_initialize_for_new_map (0000)
-00083D40 0010:
-	_controls_dispose_from_old_map (0000)
-00083D50 0070:
-	_control_place (0000)
-00083DC0 0030:
-	_control_new (0000)
-00083DF0 0010:
-	_control_delete (0000)
-00083E00 0030:
-	_control_update (0000)
-00083E30 0130:
-	_control_toggle (0000)
-00083F60 0040:
-	_control_touched (0000)
-00083FA0 0040:
-	_control_destroyed (0000)
-00259634 0029:
-	??_C@_0CJ@LFHDKHDO@c?3?2halo?2SOURCE?2devices?2device_co@ (0000)
-*/
+/* DEVICE_CONTROLS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/devices/device_controls.c. */
 
 /* ---------- headers */
 
@@ -46,8 +19,14 @@ struct scenario_control_datum
 {
 	struct scenario_object_datum object;
 	struct scenario_device_datum device;
+#ifdef __BIG_ENDIAN__
+	/* port: the low word of the tag's long flags, which a big-endian long keeps last */
+	short unused;
+	word flags;
+#else
 	word flags;
 	short unused;
+#endif
 	short custom_name_index;
 };
 
@@ -188,10 +167,8 @@ static void control_toggle(
 		case 3:
 			desired_value= definition->control.call_value;
 			break;
-		/* desired_value is left unassigned only by this default arm. Not reached unassigned: the
-		 * arm's assertion failure calls system_exit, which does not return in January
-		 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-		 * Source-policy approval pending (2026-09-27 audit). */
+		/* desired_value stays unassigned only here, and never read: the assertion's system_exit does not return in
+		 * January (0x47c960 jumps to halt_and_catch_fire 0x4f21c0). Source-policy approval pending (2026-09-27 audit). */
 		default:
 			display_assert(
 				NULL,

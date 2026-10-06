@@ -23,6 +23,15 @@ enum
 #define SWAP2(q) (((q)>>8) | (((q)<<8)&0xff00))
 #define SWAP4(q) (((q)>>24) | (((q)>>8)&0xff00) | (((q)<<8)&0x00ff0000) | (((q)<<24)&0xff000000))
 
+/* port: a field reversed in place at any alignment (the PC builds' little-endian network data on a
+big-endian host): a scalar, an array of scalars, or every real or short of an aggregate */
+#define BYTE_SWAP_SCALAR(size) ((void)sizeof(char[(size) <= 4 ? 1 : -1]))
+#define BYTE_SWAP_FIELD(field) (BYTE_SWAP_SCALAR(sizeof(field)), byte_swap_parts(&(field), sizeof(field), 1))
+#define BYTE_SWAP_ARRAY(field) \
+	(BYTE_SWAP_SCALAR(sizeof((field)[0])), byte_swap_parts((field), sizeof((field)[0]), NUMBEROF(field)))
+#define BYTE_SWAP_REALS(field) byte_swap_parts(&(field), sizeof(real), sizeof(field) / sizeof(real))
+#define BYTE_SWAP_SHORTS(field) byte_swap_parts(&(field), sizeof(short), sizeof(field) / sizeof(short))
+
 /* ---------- types */
 
 typedef long byte_swap_code;
@@ -42,5 +51,6 @@ void byte_swap_memory(void *memory, long count, byte_swap_code code);
 long byte_swap_codes_size(char *name, byte_swap_code *codes);
 void byte_swap_data(struct byte_swap_definition *definition, void *data, long data_count);
 void byte_swap_data_explicit(char *name, long size, byte_swap_code *codes, long data_count, void *data);
+void byte_swap_parts(void *data, long part_size, long count);
 
 #endif // __BYTE_SWAPPING_H

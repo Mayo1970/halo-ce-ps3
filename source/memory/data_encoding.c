@@ -1,68 +1,5 @@
-/*
-DATA_ENCODING.C
-
-symbols in this file:
-00109470 0070:
-	_data_encode_new (0000)
-001094E0 0130:
-	_data_encode_memory (0000)
-00109610 0100:
-	_data_encode_integer (0000)
-00109710 0100:
-	_data_encode_structures (0000)
-00109810 0240:
-	_data_encode_array (0000)
-00109A50 00a0:
-	_data_encode_string (0000)
-00109AF0 0070:
-	_data_decode_new (0000)
-00109B60 00f0:
-	_data_decode_structures (0000)
-00109C50 0130:
-	_data_decode_memory (0000)
-00109D80 0070:
-	_data_decode_byte (0000)
-00109DF0 0080:
-	_data_decode_short (0000)
-00109E70 0080:
-	_data_decode_long (0000)
-00109EF0 0030:
-	_data_decode_int64 (0000)
-00109F20 0070:
-	_data_decode_integer (0000)
-00109F90 0170:
-	_data_decode_array (0000)
-0010A100 0050:
-	_data_decode_string (0000)
-0027D428 0026:
-	??_C@_0CG@DKDENLGI@c?3?2halo?2SOURCE?2memory?2data_encod@ (0000)
-0027D450 004f:
-	??_C@_0EP@IBADKJMK@state?5?$CG?$CG?5state?9?$DObuffer?5?$CG?$CG?5state?9@ (0000)
-0027D4A0 0010:
-	??_C@_0BA@MMBBIMAK@maximum_value?$DO0?$AA@ (0000)
-0027D4B0 000e:
-	??_C@_0O@DLMDCMCD@bs_definition?$AA@ (0000)
-0027D4C0 0012:
-	??_C@_0BC@JKGHEGPN@source_structures?$AA@ (0000)
-0027D4D4 0022:
-	??_C@_0CC@ENPGOLI@element_count?$DM?$DNUNSIGNED_SHORT_MA@ (0000)
-0027D4F8 0021:
-	??_C@_0CB@ICNNLDBF@element_count?$DM?$DNUNSIGNED_CHAR_MAX@ (0000)
-0027D51C 0011:
-	??_C@_0BB@LOCFNCAH@element_count?$DO?$DN0?$AA@ (0000)
-0027D530 000d:
-	??_C@_0N@MOKGBPFF@source_array?$AA@ (0000)
-0027D540 0032:
-	??_C@_0DC@POGPGOIK@state?9?$DOoffset?$CLstring_length?$CL1?$DM?$DNs@ (0000)
-0027D574 0013:
-	??_C@_0BD@IAHGFBAA@structure_count?$DO?$DN0?$AA@ (0000)
-0027D588 0050:
-	??_C@_0FA@EJBJLMFJ@state?5?$CG?$CG?5state?9?$DObuffer?5?$CG?$CG?5state?9@ (0000)
-0027D5D8 0018:
-	??_C@_0BI@EADHMJMM@maximum_element_count?$DO0?$AA@ (0000)
-0027D5F0 0018:
-	??_C@_0BI@PJCDPPLJ@element_count_reference?$AA@ (0000)
-*/
+/* DATA_ENCODING.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/memory/data_encoding.c. */
 
 /* ---------- headers */
 
@@ -126,8 +63,7 @@ boolean data_encode_memory(
 		break;
 	default:
 		/* BUG (original): if system_exit returns, memory_size remains
-		 * uninitialized. All known callers use a valid element size.
-		 */
+		uninitialized. All known callers use a valid element size. */
 		display_assert(NULL, "c:\\halo\\SOURCE\\memory\\data_encoding.c", 51, TRUE);
 		system_exit(-1);
 		break;
@@ -143,8 +79,11 @@ boolean data_encode_memory(
 		else
 			csmemset(destination, 0, memory_size);
 
+#ifndef __BIG_ENDIAN__
+		/* port: the wire's order is big-endian, a big-endian host's own (PS3 and PC play together) */
 		if (element_size != 1)
 			byte_swap_memory(destination, element_count, element_size);
+#endif
 		state->offset += memory_size;
 	}
 	else
@@ -219,7 +158,9 @@ boolean data_encode_structures(
 		{
 			destination = state->buffer + state->offset;
 			csmemcpy(destination, source_structures, memory_size);
+#ifndef __BIG_ENDIAN__
 			byte_swap_data(bs_definition, destination, structure_count);
+#endif
 			state->offset += memory_size;
 		}
 		else
@@ -377,7 +318,9 @@ void *data_decode_structures(
 		structures = state->buffer + state->offset;
 		if (memory_size)
 		{
+#ifndef __BIG_ENDIAN__
 			byte_swap_data(bs_definition, structures, structure_count);
+#endif
 			state->offset += memory_size;
 		}
 	}
@@ -418,10 +361,8 @@ void *data_decode_memory(
 		memory_size = count<<3;
 		break;
 	default:
-		/* BUG (original): if system_exit returns, memory_size remains
-		 * uninitialized. A corrected build should assign memory_size = count
-		 * before leaving this case.
-		 */
+		/* BUG (original): if system_exit returns, memory_size remains uninitialized.
+		A corrected build should assign memory_size = count before leaving this case. */
 		display_assert(NULL, "c:\\halo\\SOURCE\\memory\\data_encoding.c", 265, TRUE);
 		system_exit(-1);
 		break;
@@ -430,10 +371,12 @@ void *data_decode_memory(
 	if (state->offset+memory_size<=state->buffer_size && !state->overflow)
 	{
 		memory = state->buffer+state->offset;
+#ifndef __BIG_ENDIAN__
 		if (element_size!=1)
 		{
 			byte_swap_memory(memory, count, element_size);
 		}
+#endif
 		state->offset += memory_size;
 	}
 	else
@@ -528,10 +471,8 @@ void *data_decode_array(
 	case -8:
 		element_count = (long)data_decode_int64(state);
 		break;
-	/* element_count is left unassigned only by this default arm. Not reached unassigned: the
-	 * arm's assertion failure calls system_exit, which does not return in January
-	 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-	 * Source-policy approval pending (2026-09-27 audit). */
+	/* element_count is unassigned only in this default arm, whose assert's system_exit never returns in
+	January (0x47c960 jumps to halt_and_catch_fire 0x4f21c0). Source-policy approval pending (2026-09-27 audit). */
 	default:
 		display_assert(NULL, "c:\\halo\\SOURCE\\memory\\data_encoding.c", 370, TRUE);
 		system_exit(-1);

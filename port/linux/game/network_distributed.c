@@ -1,55 +1,5 @@
-/*
-NETWORK_DISTRIBUTED.C
-
-The distributed netcode's own messages (port/linux/NETCODE.md): the game's
-"data" message kind (message header type 2, which the Xbox game never sent),
-beside its packets, and handled here (network_*_message_handler.c).
-
-The host decides; its clients predict their own players and show the
-rest as the host has it:
-
-- The game's objects (units, vehicles, weapons, equipment) are the host's,
-  at the same datum index on every machine (network_objects.c): the host
-  says which it has, where they are and what units carry.
-- Every tick, a client sends the host its own players' input, each tick's
-  buttons again with the next three ticks' (a press is lost only with four
-  datagrams in a row), and the host takes each tick's buttons once. The
-  host sends every client the other players' input as its tick ran it, the
-  same way, and the clients drive those players with it
-  (player_queues_new.c).
-- Every tick, a client sends the host where its own players' units are (it
-  predicts them from its own input); the host takes that as they are,
-  within a tolerance, as later Halo engines do, at its next tick.
-- Every tick, the host sends every client every player's unit: which unit
-  the player has, alive or not, the seat it rides, its shields and health
-  (down, recharging, the damage they show), and where it is (dead: who
-  killed it, which a client announces when its copy dies). A client binds,
-  kills, seats and places its copies to match (it decides no deaths or
-  spawns itself), and its own only when far off (a respawn, a teleport).
-  Players far from a client's own, or out of their sight, are sent to it
-  (their units and their input) less often, but at once when they come into
-  sight, and their input every tick while their buttons change.
-- Twice a second, and with every kill, the host sends the players'
-  statistics (kills, deaths, ...) that changed, and once a second a few
-  more round them all, which clients take as they are; a machine that has
-  loaded, all of them.
-- The host sends the game type's state (the scores, the flags, the balls
-  and the hill) when it changes (looked at five times a second), once a
-  second, and to a machine that has loaded, which clients take as it is
-  (game_engine_write_network_state).
-- Damage is the host's: a client reports its own players' hits, which the
-  host checks and deals, and replays the damage the host deals for its
-  effects (network_damage.c).
-
-The unreliable messages of a tick to a machine go in as few datagrams (a
-batch) as they fill, and each carries its tick (its header's game time):
-one that arrives after a newer of its kind is dropped. Vectors travel in 16
-bits a part, and a unit's state and a player's input only with the parts
-that are not their defaults.
-
-Players are named by their absolute index, which is the same on every
-machine (their datum identifiers need not be).
-*/
+/* NETWORK_DISTRIBUTED.C: the distributed netcode's messages, players and game state (port/linux/NETCODE.md).
+They are the game's "data" messages (header type 2, unused on Xbox), passed here by network_*_message_handler.c. */
 
 #include "cseries.h"
 #include "cseries/errors.h"
@@ -99,17 +49,11 @@ unsigned long p2p_peer_endpoint_address(unsigned long virtual_address);
 unsigned long system_milliseconds(void);
 void console_warning(const char *format, ...);
 
-/* the host: a client's game run faster than its clock (a speed hack, which
-speeds up the machine's own clock: nothing on it can tell), found by its
-ticks, which its messages are stamped with, going by faster than the
-host's own clock's time, and ahead of the host's (a client's clock never
-is: it starts at the host's, and only ever jumps forward to it, when it is
-behind; a host that stalled has every client ahead, their ticks going by as
-fast as time). Measured over each window this long (milliseconds)... */
+/* the host: a client's speed hack shows as its messages' ticks going by faster than the host's clock, and ahead
+of the host's (an honest client is never both: NETCODE.md). Measured over each window this long (ms)... */
 #define CLIENT_CLOCK_WINDOW_MILLISECONDS 2000
-/* ... faster than this many times as fast as time, and this many ticks
-ahead of the host at its end: its players' predictions not taken (the
-host's copies go as its own ticks have them) ... */
+/* ... faster than this many times as fast as time, and this many ticks ahead of the host at its end: its players'
+predictions not taken (the host's copies go as its own ticks have them) ... */
 #define CLIENT_CLOCK_FAST_RATE 1.1f
 #define CLIENT_CLOCK_AHEAD_TICKS 15
 /* ... and so many windows in a row, dropped */
@@ -141,9 +85,8 @@ enum
 	STATISTICS_REFRESH_PLAYERS = 16,
 	/* the game type's state looked at, and sent unchanged */
 	GAME_STATE_INTERVAL_TICKS = 6,
-	/* ... when it changes (reliably: no refresh), no more often than this
-	(the king's and the ball's scores change every tick), but the game's end
-	at once */
+	/* ... when it changes (reliably: no refresh), no more often than this (the king's and the ball's scores
+	change every tick), but the game's end at once */
 	GAME_STATE_MINIMUM_TICKS = 2 * GAME_STATE_INTERVAL_TICKS,
 	MAXIMUM_GAME_STATE_SIZE = 0xF00,
 	MAXIMUM_STATISTICS_PER_MESSAGE = 64,
@@ -153,9 +96,8 @@ enum
 	/* a ping not known */
 	UNKNOWN_PING = 0xFFFF,
 	MAXIMUM_PICKUPS_PER_TICK = 64,
-	/* ticks a client's own player may ride where the host says it does not
-	(or the other way round) before it is put where the host has it: its
-	own prediction reaches the host and comes back in about a round trip */
+	/* ticks a client's own player may ride where the host says it does not (or the other way round) before it is
+	put where the host has it: its own prediction reaches the host and comes back in about a round trip */
 	SEAT_DISAGREEMENT_TICKS = 15,
 	/* the machines, and the host: a client's messages' sender */
 	MAXIMUM_SENDERS = HALO_PORT_MAXIMUM_NETWORK_MACHINES + 1,
@@ -178,13 +120,11 @@ enum
 	/* ... and the most of a client's round trip it takes a client's player
 	in the air to be ahead of its copy by (distributed_on_foot_ceiling) */
 	PREDICTION_CEILING_LEAD_TICKS = 15,
-	/* ... how long it measures predictions from one it took, the anchor,
-	before it takes a newer as the anchor (the jitter and the blend granted
-	once a second, not once a tick) */
+	/* ... how long it measures predictions from one it took, the anchor, before it takes a newer as the anchor
+	(the jitter and the blend granted once a second, not once a tick) */
 	PREDICTION_ANCHOR_TICKS = TICKS_PER_SECOND,
-	/* ... and how long it remembers how fast its own copy of a client's
-	player went (an anchor's second, and the client's round trip: a client
-	learns of an explosion that throws its player a round trip late) */
+	/* ... and how long it remembers how fast its own copy of a client's player went (an anchor's second, and the
+	client's round trip: a client learns of an explosion that throws its player a round trip late) */
 	PREDICTION_SPEED_TICKS = PREDICTION_ANCHOR_TICKS + MAXIMUM_ROUND_TRIP_TICKS,
 };
 
@@ -233,10 +173,8 @@ enum
 	_distributed_unit_part_killer_bit,
 };
 
-/* world units: how far a client's own player's unit may be from the host's
-before the host takes it no longer, and before the client is put where the
-host has it (no further than that: between the two they would disagree for
-good, the host's player somewhere its own is not) */
+/* world units: how far a client's own player's unit may be from the host's before the host stops taking it, and
+(no further than that) before the client is put where the host has it: in between, they would disagree for good */
 #define HOST_ACCEPT_TOLERANCE 3.5f
 #define REMOTE_CORRECTION_TOLERANCE 0.05f
 #define LOCAL_CORRECTION_TOLERANCE 3.0f
@@ -244,26 +182,16 @@ good, the host's player somewhere its own is not) */
 own player's unit moves at most (world units a tick) */
 #define UNIT_WORLD_BOUND 32768.0f
 #define MAXIMUM_PREDICTED_SPEED 2.0f
-/* ... on foot: this many times as fast as a player runs and jumps, or as
-fast as the host's ticks threw its copy lately, whichever is more; and how
-much further a tick than that it may be (world units a tick) */
+/* ... on foot: this many times as fast as a player runs and jumps, or as fast as the host's ticks threw its copy
+lately, whichever is more; and how much further a tick than that it may be (world units a tick) */
 #define PREDICTED_ON_FOOT_SPEED_SCALE 2.0f
 #define PREDICTED_ON_FOOT_SPEED_MARGIN 0.05f
-/* ... and how much higher than a jump takes it above where the host last
-had it on the ground it may be (world units: steps climbed in the ticks a
-prediction is late, where the host and the client have the ground) */
+/* ... and how much higher than a jump takes it above where the host last had it on the ground it may be (world
+units: steps climbed in the ticks a prediction is late, where the host and the client have the ground) */
 #define PREDICTED_RISE_TOLERANCE 1.0f
 
-/* how far players are from a client's own (world units) before the host
-sends them to it (their units and their input) every second tick, every
-third, and every fourth; one no cluster of the client's players' can see
-(the map's potentially visible set), or dead, every sixth. The set errs on
-the side of seeing: a player comes into view in it before any line of sight
-does, and is sent at once when they do, as a player whose buttons have
-changed in the ticks their input carries is sent every tick. A player a client's player
-aims near is sent at least every second tick, and every tick through a
-scope (a sniper sees a far player as well as a near one, as Ares does).
-(Cosines of the half angles.) */
+/* how far players are from a client's own (world units) before the host sends them every 2nd, 3rd, 4th tick;
+unseen (PVS) or dead, every 6th; aimed near (cosines), at least every 2nd, scoped every tick; NETCODE.md */
 #define NEAR_PLAYER_DISTANCE 25.0f
 #define MIDDLE_PLAYER_DISTANCE 60.0f
 #define FAR_PLAYER_DISTANCE 120.0f
@@ -332,10 +260,8 @@ typedef char distributed_player_input_size_assert[
 typedef char distributed_player_input_action_offset_assert[
 	offsetof(struct distributed_player_input, action) == 12 ? 1 : -1];
 
-/* a player's input as the host ran it, as this machine has it: the host's
-update (the same for every player of a tick) goes once a message, and on
-the wire the ticks' buttons before the latest only where they differ from
-the tick after (distributed_relayed_action_write) */
+/* a player's input as the host ran it, as kept here; on the wire (distributed_relayed_action_write) the host's
+update (shared by a tick's players) once a message, earlier ticks' buttons only where they differ from the next */
 struct distributed_relayed_action
 {
 	byte player_index;
@@ -352,16 +278,14 @@ struct distributed_relayed_action
 	byte primary_trigger;
 };
 
-/* a relayed action's parts on the wire: which of the ticks' buttons before
-the latest it has (bit h - 1 for tick h), the others those of the tick
-after */
+/* a relayed action's parts on the wire: which of the ticks' buttons before the latest it has
+(bit h - 1 for tick h), the others those of the tick after */
 typedef char distributed_relayed_action_parts_assert[DISTRIBUTED_INPUT_HISTORY - 1 <= 8 ? 1 : -1];
 
 enum
 {
-	/* a unit state's bytes on the wire: its player, flags and parts, the
-	most it has, and a relayed action's (past the update each message has
-	first) */
+	/* a unit state's bytes on the wire: its player, flags and parts, the most it has, and a relayed action's
+	(past the update each message has first) */
 	DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE = 3,
 	DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE = 3 + 4 + (4 + 2) + (12 + 3 * 6) + 2 + 2 * 2 + 4 * 2 +
 		2 * NUMBER_OF_PLAYER_POWERUPS + 2 + 1,
@@ -424,9 +348,8 @@ its header but for its message header */
 #define BATCH_MESSAGE_OVERHEAD \
 	((word)(sizeof(word) + sizeof(struct distributed_message_header) - sizeof(message_header)))
 
-/* messages of entries of a size of their own, to one machine (or the host),
-each as long as the batch has room for (distributed_packer_add): nothing
-else goes into that batch while it packs */
+/* messages of entries of a size of their own, to one machine (or the host), each as long as the batch has
+room for (distributed_packer_add): nothing else goes into that batch while it packs */
 struct distributed_packer
 {
 	short sender;
@@ -478,10 +401,8 @@ static struct
 	long taken_time;
 	long taken_host_time;
 } distributed_predictions[MAXIMUM_TRACKED_PLAYERS];
-/* the host: the anchor, where it took each client's player to be (one
-taken, a newer once a second: the next may be no further from it than the
-player moves in the client's ticks since), at which of the client's ticks
-and its own; and when it last took one, and where that left its unit */
+/* the host: the anchor, where it took each client's player to be, at which client tick and its own (a newer each
+second; the next no further than they move in the client's ticks since); its last take: when, where it left them */
 static struct
 {
 	boolean valid;
@@ -492,15 +413,8 @@ static struct
 	long taken_host_time;
 	real_point3d taken_host_position;
 } distributed_accepted[MAXIMUM_TRACKED_PLAYERS];
-/* ... what its own ticks did to its copy of each client's player's unit on
-foot, beyond the client's word it took (an explosion's throw, a jump): how
-fast they sent it, and how fast up, the most of this span of
-PREDICTION_SPEED_TICKS and of the one before; the unit (NONE: none on
-foot), the velocity it took (what its next tick started from) and whether
-the unit was on the ground then; where it last had the unit on the ground
-(or where it started: a new life, a ride's end, a teleporter) and the
-highest it has had it since; and those speeds kept through a flight begun
-while it had them (a throw's flight outlasting the span) */
+/* ... what its ticks did to its copy of each client's player on foot beyond the client's word (a throw, a jump):
+top speed and rise in this span, the last, a flight begun then; velocity taken; last ground height, top since */
 static struct distributed_host_speed
 {
 	long time;
@@ -550,10 +464,8 @@ static struct distributed_viewer
 	real_point3d position;
 	real_vector3d aim;
 } distributed_viewers[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_LOCAL_PLAYERS];
-/* the host, this tick: every player's unit and input, what each client is
-sent of each player (decided before the damage, which goes where the
-players it hurt do), and the client each player is on (NONE for none: the
-host's own) */
+/* the host, this tick: every player's unit and input, what each client is sent of each player (decided before the
+damage, which goes where the players it hurt do), and the client each player is on (NONE: the host's own) */
 enum
 {
 	_distributed_send_state_bit = 0,
@@ -580,10 +492,8 @@ static long distributed_game_state_time;
 /* the latest tick of each kind of unreliable message had from each sender
 (a machine, or the host), NONE for none */
 static long distributed_received_times[MAXIMUM_SENDERS][NUMBER_OF_DISTRIBUTED_MESSAGES];
-/* the host: each client machine's clock, measured (CLIENT_CLOCK_WINDOW_MILLISECONDS):
-its latest tick, and its tick and the host's time as the window began
-(NONE: none begun); how many windows in a row it went fast, and whether
-the last did */
+/* the host: each client machine's clock, measured (CLIENT_CLOCK_WINDOW_MILLISECONDS): its latest tick, its tick
+and the host's time as the window began (NONE: none begun); the fast windows in a row, and whether the last was */
 /* the host: each client machine's Discord user, as it told it, the text
 kept only of what is allowed (p2p_discord_sanitize) */
 static struct distributed_client_identity distributed_client_identities[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
@@ -805,9 +715,8 @@ static void distributed_batch_flush(
 	batch->size = 0;
 }
 
-/* the bytes a message's entries (past its header) have in the machine's
-batch now; when fewer than minimum, the batch is sent first, and they are
-an empty batch's */
+/* the bytes a message's entries (past its header) have in the machine's batch now; when fewer than minimum, the
+batch is sent first, and they are an empty batch's */
 static word distributed_batch_room(
 	short sender,
 	word minimum)
@@ -843,11 +752,8 @@ static void distributed_batch_append(
 	batch->size += (word)(BATCH_MESSAGE_OVERHEAD + entries_size);
 }
 
-/* where a message's bytes past its message header go: a machine's batch,
-sent at the tick's end (or sooner, full). A message of entries of
-entry_size bytes each is split where a batch is full, the rest going in
-the next; one not to be split (entry_size 0) goes whole, and one larger
-than a datagram, which is a mistake, is dropped. */
+/* a message's bytes past its message header into a machine's batch, sent at the tick's end (or sooner, full); its
+entries of entry_size bytes split where a batch is full (0: whole); one over a datagram, a mistake, is dropped */
 static void distributed_batch_add(
 	short sender,
 	void const *message,
@@ -1171,9 +1077,8 @@ short distributed_client_machines(
 	return index;
 }
 
-/* (the host) a machine has loaded the game: if it is new at its index (its
-players are not those the index had), none of the old machine's state, and
-TRUE (it has none of the game's either); FALSE for one that asks again */
+/* (the host) a machine has loaded the game: if it is new at its index (its players are not those the index had),
+none of the old machine's state, and TRUE (it has none of the game's either); FALSE for one that asks again */
 static boolean distributed_machine_loaded(
 	long machine_index)
 {
@@ -1337,13 +1242,8 @@ static void distributed_state_from_player(
 	}
 }
 
-/* the state's bytes on the wire (at most DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE):
-its player, flags and parts, then (alive) its unit, the vehicle and seat it
-rides, (placed) where it is, how fast it moves and which way it faces,
-(predicted) the client's tick, its shields and health, the damage they
-show, its powerups and camouflage, or (dead) who killed it; what is its
-default is left out (distributed_unit_state_read). The predicted tick is
-its own client's alone (own). */
+/* the state's bytes on the wire (at most DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE), what is at its default left out
+(distributed_unit_state_read): player, flags and parts first; the predicted tick to its own client alone (own) */
 static word distributed_unit_state_write(
 	struct distributed_unit_state const *state,
 	boolean own,
@@ -1499,10 +1399,8 @@ static word distributed_unit_state_read(
 	return (word)(cursor - buffer);
 }
 
-/* moves the unit toward the state (at position) if it is further than
-tolerance from it: within blend_distance part of the way, further all of it,
-no faster than maximum_speed across and up and maximum_fall_speed down (0
-for any); FALSE for a state that cannot be */
+/* moves the unit toward the state (at position) if further than tolerance: within blend_distance part of the way,
+further all of it, at most maximum_speed across and up, maximum_fall_speed down (0: any); FALSE: invalid state */
 static boolean distributed_apply_state(
 	long unit_index,
 	struct distributed_unit_state const *state,
@@ -1572,11 +1470,8 @@ static void distributed_note_own_positions(
 	}
 }
 
-/* (a client) its own player's unit where the host has it, if that is
-further than a tolerance from where this machine had it at the tick the
-host has it at (its own prediction come back): moved by the difference,
-keeping what it has done since (no rubber band a round trip long); without
-that tick, from where it is */
+/* (a client) its own player's unit moved by how far the host has it from where it was here at its predicted tick,
+if over a tolerance, keeping what it did since (no rubber band a round trip long); no tick: from where it is */
 static void distributed_correct_own_unit(
 	struct player_datum const *player,
 	long unit_index,
@@ -1711,29 +1606,15 @@ struct distributed_on_foot_bound
 	and how far above where it had it then it may be (world units) */
 	real top_height;
 	real rise;
-	/* ... in the air, the speed up it may have left the ground at and the
-	height it may have had then, and the ticks the host's copy has been in
-	the air (none on the ground): as high as a thing thrown up so, falling
-	since (distributed_on_foot_ceiling) */
+	/* ... in the air, the speed up it may have left the ground at and the height it may have had then, and the
+	ticks the host's copy has been in the air (none on the ground), for distributed_on_foot_ceiling */
 	real rise_speed;
 	real rise_base;
 	long airborne_ticks;
 };
 
-/* (the host) how fast a client's player's unit on foot may go, a tick, and
-how high: across and up twice as fast as the player runs and jumps (their
-speed in the game, double speed), or as fast as the host's own ticks sent
-its copy lately (an explosion's throw, which the client learns of a round
-trip late), whichever is more, no more than MAXIMUM_PREDICTED_SPEED; down
-as fast as that and a fall from the highest it has had it since it was on
-the ground (distributed_on_foot_fall_speed); up no higher above where it
-last had it on the ground than a jump takes it (or a run up a slope, and
-the legs drawn up) and what its ticks threw it up. What its ticks sent it
-is its speed less as much as the velocity it took of the client was faster
-than the player goes of their own, and up what its tick added to that, but
-a jump's: a client that says it goes faster than that gains nothing by it
-(its gravity on a copy said to hover and fall, its turn at a wall), nor
-any height. */
+/* (the host) how fast and high a client's player on foot may go: twice their run and jump, or what the host's
+ticks lately threw its copy past the client's word (lying gains nothing), at most MAXIMUM_PREDICTED_SPEED */
 static void distributed_on_foot_bound(
 	short player_index,
 	long unit_index,
@@ -1873,10 +1754,8 @@ static void distributed_on_foot_bound(
 		bound->rise = UNIT_WORLD_BOUND;
 }
 
-/* (the host) how fast a client's player's unit on foot may fall at a
-height (world units a tick): as fast as it goes across, and as fast as a
-fall from the highest the host has had it since it was on the ground, no
-more than MAXIMUM_PREDICTED_SPEED */
+/* (the host) how fast a client's player's unit on foot may fall at a height (world units a tick): as fast as
+it goes across and a fall from the highest the host had it since grounded, at most MAXIMUM_PREDICTED_SPEED */
 static real distributed_on_foot_fall_speed(
 	struct distributed_on_foot_bound const *bound,
 	real height)
@@ -1889,12 +1768,8 @@ static real distributed_on_foot_fall_speed(
 	return MIN(speed, MAXIMUM_PREDICTED_SPEED);
 }
 
-/* (the host) how far above where the host last had a client's player's
-unit on the ground it may be: a jump's height (or a throw's), and in the
-air no higher than a thing thrown up at that speed falls to since (the
-ticks its copy has been in the air, less the client's round trip and
-jitter, which are the client's ahead): no hovering in the air, nor coming
-down slowly */
+/* (the host) how far above where it last had a client's player on the ground they may be: a jump's or throw's
+height; in the air, what a thing thrown up so falls to since, less the client's lead: no hovering or slow fall */
 static real distributed_on_foot_ceiling(
 	short player_index,
 	struct distributed_on_foot_bound const *bound)
@@ -1916,9 +1791,8 @@ static real distributed_on_foot_ceiling(
 	return rise;
 }
 
-/* (the host) whether a client's player's unit on foot goes from one point
-to the other in the ticks: across and up no further than at its speed, down
-no further than it falls to there, a little more a tick (and a blend) */
+/* (the host) whether a client's player's unit on foot goes from one point to the other in the ticks: across
+and up no further than at its speed, down no further than it falls to there, a little more a tick (and a blend) */
 static boolean distributed_on_foot_move_valid(
 	struct distributed_on_foot_bound const *bound,
 	real_point3d const *from,
@@ -1959,9 +1833,8 @@ static void distributed_take_prediction(
 		long ticks = MIN(distributed_predictions[player_index].time - distributed_accepted[player_index].time,
 			now - distributed_accepted[player_index].host_time + PREDICTION_JITTER_TICKS);
 
-		/* (the host's own unit moved further than a unit moves since the
-		last taken, which only the host moves it by: taken from where it
-		is, a new anchor, and its height where it starts) */
+		/* (the host's own unit moved further than a unit moves since the last taken, which only the host moves it
+		by: taken from where it is, a new anchor, and its height where it starts) */
 		if (!distributed_on_foot_move_valid(bound, &distributed_accepted[player_index].taken_host_position,
 			&object->object.position, now - distributed_accepted[player_index].taken_host_time))
 		{
@@ -1976,9 +1849,8 @@ static void distributed_take_prediction(
 			return;
 		}
 	}
-	/* (no higher above where the host last had it on the ground than a
-	jump, or a throw its ticks gave it, takes it, and in the air falling:
-	past that the host's copy falls as its ticks have it) */
+	/* (no higher above where the host last had it on the ground than a jump, or a throw its ticks gave it,
+	takes it, and in the air falling: past that the host's copy falls as its ticks have it) */
 	if (!(state->position.z - distributed_host_speeds[player_index].ground_height <=
 		distributed_on_foot_ceiling(player_index, bound)))
 	{
@@ -2005,17 +1877,8 @@ static void distributed_take_prediction(
 	}
 }
 
-/* (the host) the clients' players where they say, within a tolerance: a
-little off closed by half, more put there. Each accepted moves the host's
-unit, and the next is measured from there, so a client could take its
-player HOST_ACCEPT_TOLERANCE further each tick: a prediction is also no
-further from the anchor (one taken, a newer once a second) than the player
-moves in the client's ticks since (distributed_on_foot_bound, and a little
-more), those no more than the host's since and a little jitter, no higher
-than it climbs or jumps; its velocity is no faster. A teleporter moves the
-host's own unit too, further than it moves since the last taken: it is
-measured from where the host has it only, a new anchor (as it is after a
-new life, or a ride). */
+/* (the host) clients' players where they say, within a tolerance and no further from the anchor than they move
+since (distributed_on_foot_bound), lest they gain it each tick; a teleporter makes a new anchor (NETCODE.md) */
 static void distributed_apply_predictions(
 	void)
 {
@@ -2037,9 +1900,8 @@ static void distributed_apply_predictions(
 			unit_index = NONE;
 		if (distributed_accepted[player_index].valid && distributed_accepted[player_index].unit_index != unit_index)
 			distributed_accepted[player_index].valid = FALSE;
-		/* (how fast it may go, a tick, what the host's tick did to its own
-		copy noted before the client's word is taken; riding or dead, noted
-		afresh on foot) */
+		/* (how fast it may go, a tick, what the host's tick did to its own copy noted before the client's word is
+		taken; riding or dead, noted afresh on foot) */
 		if (unit_index != NONE)
 			distributed_on_foot_bound(player_index, unit_index, &bound);
 		else
@@ -2118,9 +1980,8 @@ static void distributed_handle_unit_state(
 			unit_kill(unit_index);
 	}
 	unit_index = state->unit_index;
-	/* the seat it rides: a client's own player's, once it has ridden
-	otherwise for longer than its prediction takes to reach the host and
-	come back */
+	/* the seat it rides: a client's own player's, once it has ridden otherwise for longer than its prediction
+	takes to reach the host and come back */
 	{
 		struct unit_datum *unit = unit_get(unit_index);
 		long vehicle_index = unit->object.parent_object_index != NONE && unit->unit.parent_seat_index != NONE ?
@@ -2347,11 +2208,8 @@ static boolean distributed_relayed_action_from(
 	return changed;
 }
 
-/* the action's bytes on the wire (at most
-DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE): its player and parts, the
-choices, facing, sticks and trigger, the latest tick's buttons, and those of
-the ticks before only where they differ from the tick after's
-(distributed_relayed_action_read) */
+/* the action's bytes on the wire (at most DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE): its player and parts, its
+input, then earlier ticks' buttons only where they differ from the next (distributed_relayed_action_read) */
 static word distributed_relayed_action_write(
 	struct distributed_relayed_action const *relayed,
 	byte *buffer)
@@ -2421,18 +2279,8 @@ static word distributed_relayed_action_read(
 	return (word)(cursor - buffer);
 }
 
-/* (the host) what each client is sent this tick of every player: their unit,
-and their input as its last tick ran it (with the buttons of the ticks
-before it). Those near the client's own players every tick, those further,
-or out of their sight, less often (NEAR_PLAYER_DISTANCE), and those dead or
-not yet spawned as those out of sight; whose life, seat or shields' state
-changed, or who came into sight, at once; whose buttons changed lately,
-their input every tick; one who has left the game, only a change. A
-client's own players' units every tick, their input never (it has its own),
-and no dead player's input (it drives nothing). A client whose players are
-dead watches from where they last were alive. Decided before the damage is
-sent (network_damage.c), which goes where the players it hurt do; sent
-after it (distributed_host_send_players). */
+/* (the host) what each client gets this tick of every player's unit and input (NEAR_PLAYER_DISTANCE): decided
+before network_damage.c's damage, which follows the players it hurt; sent after (distributed_host_send_players) */
 static void distributed_host_plan_players(
 	void)
 {
@@ -2730,10 +2578,8 @@ static void distributed_handle_actions(
 
 /* ---------- deaths */
 
-/* a player died (game_engine_player_killed, before it announces who killed
-whom): the host notes who killed them for its clients; on a client, whose
-copy of the death knows nothing of the killer, the host's killer, as this
-machine has them */
+/* a player died (game_engine_player_killed, before it announces who killed whom): the host notes the killer for
+its clients; a client, whose copy of the death knows no killer, takes the host's, as this machine has them */
 void network_distributed_player_killed(
 	long *killing_player_index,
 	long *killing_object_index,
@@ -2931,9 +2777,8 @@ static void distributed_send_pings(
 	}
 }
 
-/* the players' statistics that changed since they were last sent, and when
-refreshing, STATISTICS_REFRESH_PLAYERS more whatever they are, round them
-all (a client that lost a change has it again within eight seconds) */
+/* the players' statistics that changed since they were last sent, and when refreshing, STATISTICS_REFRESH_PLAYERS
+more whatever they are, round them all (a client that lost a change has it again within eight seconds) */
 static void distributed_send_statistics(
 	boolean refresh)
 {
@@ -3019,9 +2864,8 @@ static void distributed_send_all_statistics(
 
 /* ---------- the game type's state */
 
-/* the game type's state (larger than a datagram: reliably) to a machine
-that has loaded, or (NONE) to every client when it changed (at most every
-other look, unless the game ended) */
+/* the game type's state (larger than a datagram: reliably) to a machine that has loaded, or (NONE) to every
+client when it changed (at most every other look, unless the game ended) */
 static void distributed_send_game_state(
 	long machine_index)
 {
@@ -3160,12 +3004,8 @@ void network_distributed_tick(
 				distributed_deaths[player_index].valid = FALSE;
 			}
 		}
-		/* the clients' players where they say they are, then the objects
-		first (created before anything names them), the damage dealt this
-		tick before the units it hurt and killed (but where the units go
-		decided first: the damage goes where the players it hurt do), and a
-		kill's statistics before the kill, so that a client announcing it
-		counts it (a double kill, a killing spree) */
+		/* predictions, then objects (made before anything names them), damage after the players' plan (it follows
+		them) but before their units, a kill's statistics before it (a client counts a double kill, a spree) */
 		distributed_apply_predictions();
 		network_objects_apply_vehicle_predictions();
 		network_objects_host_tick();
@@ -3283,10 +3123,8 @@ static void distributed_machine_player_names(
 		snprintf(names, size, "machine #%ld", machine_index);
 }
 
-/* (a client) its Discord user, as its Discord told it (none without one:
-not running, or internet play off), to the host: once it is a machine the
-host takes messages of (its ready sent: network_objects_client_tick), and
-again when it changes (Discord connecting later), looked at once a second */
+/* (a client) its Discord user (none: not running, or internet play off) to the host, once its ready is sent
+(network_objects_client_tick), and again when it changes (Discord connecting later), looked at once a second */
 void distributed_client_send_identity(
 	void)
 {
@@ -3368,11 +3206,8 @@ static void distributed_printable(
 	destination[length] = 0;
 }
 
-/* (the host) a line in a list of players (CHEATERS_FILE, BANS_FILE): when,
-their address, Discord user and names, and why; separated by tabs, each
-part kept to the characters allowed and their lengths (what a player could
-tell: their Discord user and names). The Discord user of the machine at
-the index, if it is one in the game (NONE: none) */
+/* (the host) a line in CHEATERS_FILE or BANS_FILE: when, address, Discord user (machine_index's, if in the game),
+names and why, by tabs, each kept to allowed characters and lengths (players tell their Discord user and names) */
 static void distributed_write_player_record(
 	char const *file_name,
 	char const *address,
@@ -3430,10 +3265,8 @@ static void distributed_log_cheater(
 	distributed_write_player_record(BANS_FILE, address, machine_index, names, reason);
 }
 
-/* (the host: network_server_manager.c) whether a machine of this address
-(host byte order; an internet play peer's by its real one) is banned: its
-address one of BANS_FILE's (each line's "ip=", which a host may add or
-take out by hand) */
+/* (the host: network_server_manager.c) whether a machine of this address (host byte order; an internet play
+peer's by its real one) is banned: its address one of BANS_FILE's "ip=" lines (a host may edit them by hand) */
 boolean network_distributed_banned(
 	unsigned long address,
 	char const *hardware_id)
@@ -3479,10 +3312,8 @@ boolean network_distributed_banned(
 	return banned;
 }
 
-/* (the host: network_server_manager.c, its ban command) a machine banned
-by the host: its line in BANS_FILE, and every machine told (the Discord
-user of the machine at the index, if it is one in the game; its address,
-host byte order) */
+/* (the host: network_server_manager.c, its ban command) a machine banned by the host: its line in BANS_FILE, and
+every machine told (the Discord user of machine_index, if in the game; address in host byte order) */
 void network_distributed_ban(
 	long machine_index,
 	unsigned long address,
@@ -3517,10 +3348,8 @@ void network_distributed_ban(
 	}
 }
 
-/* (the host) a client machine's tick, which one of its messages is
-stamped with: its clock measured, each window, against the host's; one
-whose game runs fast (distributed_client_clock) has its players'
-predictions refused, and if it goes on, is dropped */
+/* (the host) a client machine's tick, stamped on one of its messages: its clock measured each window against the
+host's; a fast one (distributed_client_clock) has its players' predictions refused, and if it lasts, is dropped */
 static void distributed_note_client_clock(
 	long machine_index,
 	long tick)
@@ -3602,9 +3431,305 @@ boolean distributed_machine_clock_fast(
 		distributed_client_clocks[machine_index].fast;
 }
 
+#ifdef __BIG_ENDIAN__
+/* ---------- byte order (network_distributed.h) */
+
+/* game_engine.c's */
+void game_engine_network_state_byte_swap(byte *buffer, long size);
+
+void distributed_entries_byte_swap_each(
+	byte *entries,
+	byte const *end,
+	short count,
+	word entry_size,
+	void (*swap)(void *entry))
+{
+	while (count-- > 0 && end - entries >= entry_size)
+	{
+		swap(entries);
+		entries += entry_size;
+	}
+}
+
+/* count parts of part_size bytes at the cursor, reversed, and past them; FALSE past the end */
+static boolean distributed_swap_take(
+	byte **cursor,
+	byte const *end,
+	short part_size,
+	short count)
+{
+	long size = (long)part_size * count;
+
+	if (end - *cursor < size)
+		return FALSE;
+	byte_swap_parts(*cursor, part_size, count);
+	*cursor += size;
+	return TRUE;
+}
+
+/* a unit state's bytes on the wire (distributed_unit_state_write), 0 for none that make one */
+static word distributed_unit_state_byte_swap(
+	byte *buffer,
+	byte const *end)
+{
+	struct distributed_unit_state const *state = NULL;
+	byte *cursor = buffer + DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE;
+	byte flags;
+	byte parts;
+
+	if (end - buffer < DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE)
+		return 0;
+	flags = buffer[1];
+	parts = buffer[2];
+	if (TEST_FLAG(flags, _distributed_unit_alive_bit))
+	{
+		if (!distributed_swap_take(&cursor, end, sizeof(state->unit_index), 1))
+			return 0;
+		if (TEST_FLAG(parts, _distributed_unit_part_riding_bit) &&
+			(!distributed_swap_take(&cursor, end, sizeof(state->vehicle_index), 1) ||
+				!distributed_swap_take(&cursor, end, sizeof(state->seat_index), 1)))
+		{
+			return 0;
+		}
+		if (TEST_FLAG(flags, _distributed_unit_placed_bit) &&
+			(!distributed_swap_take(&cursor, end, sizeof(real), sizeof(state->position) / sizeof(real)) ||
+				!distributed_swap_take(&cursor, end, sizeof(short),
+					(sizeof(state->velocity) + sizeof(state->forward)) / sizeof(short)) ||
+				(TEST_FLAG(parts, _distributed_unit_part_up_bit) &&
+					!distributed_swap_take(&cursor, end, sizeof(short), sizeof(state->up) / sizeof(short)))))
+		{
+			return 0;
+		}
+		if (TEST_FLAG(flags, _distributed_unit_predicted_bit) &&
+			!distributed_swap_take(&cursor, end, sizeof(state->predicted_time), 1))
+		{
+			return 0;
+		}
+		if (!distributed_swap_take(&cursor, end, sizeof(word), 2) ||
+			(TEST_FLAG(parts, _distributed_unit_part_damage_bit) && !distributed_swap_take(&cursor, end, sizeof(word), 4)) ||
+			(TEST_FLAG(parts, _distributed_unit_part_powerups_bit) &&
+				!distributed_swap_take(&cursor, end, sizeof(short), NUMBEROF(state->powerup_durations))) ||
+			(TEST_FLAG(parts, _distributed_unit_part_camouflage_bit) && !distributed_swap_take(&cursor, end, 1, 2)))
+		{
+			return 0;
+		}
+	}
+	else if (TEST_FLAG(parts, _distributed_unit_part_killer_bit) && !distributed_swap_take(&cursor, end, 1, 1))
+	{
+		return 0;
+	}
+	return (word)(cursor - buffer);
+}
+
+/* a relayed action's bytes on the wire (distributed_relayed_action_write), 0 for none that make one */
+static word distributed_relayed_action_byte_swap(
+	byte *buffer,
+	byte const *end)
+{
+	struct distributed_relayed_action const *relayed = NULL;
+	byte *cursor = buffer + 2;
+	byte parts;
+	short history;
+
+	if (end - buffer < 2)
+		return 0;
+	parts = buffer[1];
+	/* (the choices, the facing, the sticks and trigger, the latest tick's buttons) */
+	if (!distributed_swap_take(&cursor, end, 1, 3) ||
+		!distributed_swap_take(&cursor, end, sizeof(relayed->yaw), 2) ||
+		!distributed_swap_take(&cursor, end, 1, 3) ||
+		!distributed_swap_take(&cursor, end, sizeof(relayed->control_flags[0]), 1))
+	{
+		return 0;
+	}
+	for (history = 1; history < DISTRIBUTED_INPUT_HISTORY; history++)
+	{
+		if (TEST_FLAG(parts, history - 1) &&
+			!distributed_swap_take(&cursor, end, sizeof(relayed->control_flags[history]), 1))
+		{
+			return 0;
+		}
+	}
+	return (word)(cursor - buffer);
+}
+
+static void distributed_player_statistics_byte_swap(
+	void *entry)
+{
+	struct distributed_player_statistics *player = entry;
+	struct game_statistics *statistics = &player->statistics;
+
+	BYTE_SWAP_FIELD(player->player_index);
+	BYTE_SWAP_FIELD(statistics->sort_key);
+	BYTE_SWAP_FIELD(statistics->games_played);
+	BYTE_SWAP_FIELD(statistics->games_won);
+	BYTE_SWAP_FIELD(statistics->kills_in_a_row);
+	BYTE_SWAP_FIELD(statistics->multiple_kills);
+	BYTE_SWAP_FIELD(statistics->last_kill_time);
+	BYTE_SWAP_ARRAY(statistics->kills);
+	BYTE_SWAP_ARRAY(statistics->assists);
+	BYTE_SWAP_FIELD(statistics->friendly_fire_kills);
+	BYTE_SWAP_FIELD(statistics->deaths);
+	BYTE_SWAP_FIELD(statistics->suicides);
+	BYTE_SWAP_FIELD(statistics->shots_fired);
+	BYTE_SWAP_FIELD(statistics->shots_hit);
+	BYTE_SWAP_FIELD(statistics->seconds_online);
+	BYTE_SWAP_FIELD(statistics->killed_teammate_since_last_death);
+	BYTE_SWAP_FIELD(statistics->custom_data_size);
+	/* (every game type's statistics are shorts) */
+	BYTE_SWAP_SHORTS(statistics->multiplayer_statistics);
+}
+
+static void distributed_pickup_byte_swap(
+	void *entry)
+{
+	struct distributed_pickup *pickup = entry;
+
+	BYTE_SWAP_FIELD(pickup->count);
+	BYTE_SWAP_FIELD(pickup->definition_index);
+}
+
+static void distributed_player_input_byte_swap(
+	void *entry)
+{
+	struct distributed_player_input *input = entry;
+
+	BYTE_SWAP_FIELD(input->tick);
+	BYTE_SWAP_FIELD(input->host_time);
+	BYTE_SWAP_FIELD(input->action.control_flags);
+	BYTE_SWAP_REALS(input->action.desired_facing);
+	BYTE_SWAP_REALS(input->action.throttle);
+	BYTE_SWAP_FIELD(input->action.primary_trigger);
+	BYTE_SWAP_FIELD(input->action.desired_weapon_index);
+	BYTE_SWAP_FIELD(input->action.desired_grenade_index);
+	BYTE_SWAP_FIELD(input->action.desired_zoom_level);
+	BYTE_SWAP_ARRAY(input->control_flags);
+}
+
+static void distributed_player_ping_byte_swap(
+	void *entry)
+{
+	struct distributed_player_ping *ping = entry;
+
+	BYTE_SWAP_FIELD(ping->milliseconds);
+}
+
+/* a message's entries (past its header) that fit before end */
+static void distributed_message_entries_byte_swap(
+	byte type,
+	short count,
+	byte *entries,
+	byte const *end)
+{
+	short index;
+
+	switch (type)
+	{
+	case _distributed_message_player_prediction:
+	case _distributed_message_unit_states:
+		for (index = 0; index < count; index++)
+		{
+			word size = distributed_unit_state_byte_swap(entries, end);
+
+			if (!size)
+				break;
+			entries += size;
+		}
+		break;
+	case _distributed_message_relayed_actions:
+		/* (the host's update first) */
+		if (!distributed_swap_take(&entries, end, sizeof(long), 1))
+			break;
+		for (index = 0; index < count; index++)
+		{
+			word size = distributed_relayed_action_byte_swap(entries, end);
+
+			if (!size)
+				break;
+			entries += size;
+		}
+		break;
+	case _distributed_message_player_statistics:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_player_statistics),
+			distributed_player_statistics_byte_swap);
+		break;
+	case _distributed_message_pickups:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_pickup),
+			distributed_pickup_byte_swap);
+		break;
+	case _distributed_message_player_inputs:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_player_input),
+			distributed_player_input_byte_swap);
+		break;
+	case _distributed_message_pings:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_player_ping),
+			distributed_player_ping_byte_swap);
+		break;
+	case _distributed_message_game_state:
+		/* (whether the game is over, then the game type's state: this machine's game type) */
+		if (distributed_swap_take(&entries, end, sizeof(long), 1))
+			game_engine_network_state_byte_swap(entries, (long)(end - entries));
+		break;
+	case _distributed_message_inventories:
+	case _distributed_message_object_changes:
+	case _distributed_message_object_states:
+	case _distributed_message_vehicle_prediction:
+		network_objects_byte_swap(type, entries, count, end);
+		break;
+	case _distributed_message_damage_events:
+	case _distributed_message_hit_reports:
+		network_damage_byte_swap(type, entries, count, end);
+		break;
+	}
+	/* (none have the others: objects synchronized and client ready no entries, a notice and an identity
+	text) */
+}
+
+void network_distributed_byte_swap(
+	void *message,
+	word size,
+	boolean native)
+{
+	struct distributed_message_header *header = message;
+	byte *cursor = (byte *)message + sizeof(*header);
+	byte const *end = (byte const *)message + size;
+
+	/* (the message header is the connection's: network_connection_write) */
+	if (size < sizeof(*header))
+		return;
+	BYTE_SWAP_FIELD(header->game_time);
+	if (header->type != _distributed_message_batch)
+	{
+		distributed_message_entries_byte_swap(header->type, header->count, cursor, end);
+		return;
+	}
+	/* a batch: each message's size, then its header but for its message header, and its entries */
+	while (end - cursor >= (long)sizeof(word))
+	{
+		word length;
+		byte *entries;
+
+		if (native)
+			csmemcpy(&length, cursor, sizeof(length));
+		byte_swap_parts(cursor, sizeof(word), 1);
+		if (!native)
+			csmemcpy(&length, cursor, sizeof(length));
+		cursor += sizeof(word);
+		if (length > end - cursor || length < sizeof(*header) - sizeof(message_header))
+			break;
+		entries = cursor + sizeof(*header) - sizeof(message_header);
+		byte_swap_parts(cursor + offsetof(struct distributed_message_header, game_time) - sizeof(message_header),
+			sizeof(header->game_time), 1);
+		if (cursor[0] != _distributed_message_batch)
+			distributed_message_entries_byte_swap(cursor[0], cursor[1], entries, cursor + length);
+		cursor += length;
+	}
+}
+#endif
+
 /* a message of the distributed kind; machine_index is the sender's on the
 host, NONE on a client */
-void network_distributed_handle_message(
+static void distributed_handle_message(
 	long machine_index,
 	word const *message,
 	word size)
@@ -3625,7 +3750,8 @@ void network_distributed_handle_message(
 
 		while (offset + sizeof(word) <= size)
 		{
-			word buffer[(sizeof(message_header) + DATAGRAM_MAXIMUM_SIZE + 1) / sizeof(word)];
+			/* (4-aligned: the entries are read in place, and the PS3's CPU faults on a misaligned float) */
+			long buffer[(sizeof(message_header) + DATAGRAM_MAXIMUM_SIZE + sizeof(long) - 1) / sizeof(long)];
 			word length;
 
 			csmemcpy(&length, (byte const *)message + offset, sizeof(word));
@@ -3640,7 +3766,7 @@ void network_distributed_handle_message(
 			offset += length;
 			/* (no batch in a batch) */
 			if (((struct distributed_message_header const *)buffer)->type != _distributed_message_batch)
-				network_distributed_handle_message(machine_index, buffer, (word)(sizeof(message_header) + length));
+				distributed_handle_message(machine_index, (word const *)buffer, (word)(sizeof(message_header) + length));
 		}
 		return;
 	}
@@ -3801,9 +3927,8 @@ void network_distributed_handle_message(
 		/* (its count 1: the client asks again, having failed to make one of
 		the host's objects) */
 		network_objects_client_asked(machine_index, header.count != 0);
-		/* (a machine new at its index, which may have joined the game in
-		progress: every player's statistics and the game type's state, after
-		the objects it names) */
+		/* (a machine new at its index, which may have joined the game in progress: every player's statistics and
+		the game type's state, after the objects it names) */
 		if (loaded)
 		{
 			distributed_send_all_statistics(machine_index);
@@ -3844,4 +3969,23 @@ void network_distributed_handle_message(
 		break;
 	}
 	}
+}
+
+/* (the handlers' entry: a PC's message to this machine's order first, once for a batch) */
+void network_distributed_handle_message(
+	long machine_index,
+	word const *message,
+	word size)
+{
+#ifdef __BIG_ENDIAN__
+	/* (4-aligned, as the batch's copies: entries are read in place) */
+	long buffer[HALO_PORT_MAXIMUM_NETWORK_MESSAGE_SIZE / sizeof(long)];
+
+	if (size > sizeof(buffer))
+		return;
+	csmemcpy(buffer, message, size);
+	network_distributed_byte_swap(buffer, size, FALSE);
+	message = (word const *)buffer;
+#endif
+	distributed_handle_message(machine_index, message, size);
 }

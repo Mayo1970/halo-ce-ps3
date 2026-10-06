@@ -4,6 +4,7 @@ upstream halo-ce-universal copy of source/game/game_engine_ctf.c. */
 /* ---------- headers */
 
 #include "cseries/cseries.h"
+#include "memory/byte_swapping.h"
 #include "cseries/cseries_windows.h"
 #include "cseries/errors.h"
 #include "game_engine.h"
@@ -1551,3 +1552,22 @@ boolean game_engine_ctf_read_network_state(
 	}
 	return TRUE;
 }
+
+#ifdef __BIG_ENDIAN__
+/* port: the state in the PC builds' order, which they send (their memory's), and back */
+void game_engine_ctf_network_state_byte_swap(
+	byte *buffer,
+	long size)
+{
+	struct ctf_network_state *state = (struct ctf_network_state *)buffer;
+
+	if (size != (long)sizeof(*state))
+		return;
+	BYTE_SWAP_ARRAY(state->weapon_indices);
+	BYTE_SWAP_ARRAY(state->scores);
+	BYTE_SWAP_ARRAY(state->flag_warning_ticks);
+	BYTE_SWAP_FIELD(state->flag_swap_timer);
+	BYTE_SWAP_ARRAY(state->flag_indices);
+	BYTE_SWAP_ARRAY(state->flag_team_indices);
+}
+#endif

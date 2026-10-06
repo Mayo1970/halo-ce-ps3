@@ -1,46 +1,5 @@
-/*
-NETWORK_OBJECTS.C
-
-The distributed netcode's objects (port/linux/NETCODE.md, stages 3 and 4).
-
-The game's objects that matter to more than the eye (units, vehicles,
-weapons and equipment) are the host's, and every machine has them at the
-same datum index (identifier and all), so that any message can name one:
-
-- The host tells its clients (reliably) of each object it makes, with what
-  it is, where, and how it looks, and of each it deletes; a client makes
-  and deletes its copies to match, at the host's index. A client that has
-  loaded asks for the host's objects all over and is told when it has them
-  all; from then on it deletes any such object it has that the host has not
-  told it of (what its own simulation made: a dying unit's grenades, a
-  vehicle's weapons), and nothing but the host's word deletes the host's.
-- A client places the game's objects when its map loads as the host did,
-  at the same indices: the host's word on those finds them already there.
-  Past loading, its own objects (projectiles, effects' objects: what only
-  it sees) take indices from the upper half of the array, which the host's
-  do not reach in practice; a host's object that does comes first.
-- Every tick the host sends where its moving objects are (vehicles, items,
-  bodies), each client those near its players every tick and those further
-  less often, with each as it comes to rest, and to every client a few of
-  those at rest, round the lot; a client moves its copies there, a little
-  off half of the way each tick, further (or come to rest) drawn gliding from
-  where they were rather than jumping (render_interpolation.c).
-  A client's own player's vehicle is its own, as its own player's unit is:
-  it sends the host where it drives it at which of its ticks, which the host
-  takes within what the vehicle can have moved at its next tick, and tells
-  the client which of its ticks it has it at; the client moves it by how far
-  that is from where it had it at that tick, only when far off.
-- Ten times a second, the host sends what a unit carries when that has
-  changed (and once a second whatever it is): which weapons, slot for slot,
-  their ammunition, the weapon in hand and the grenades; a client moves its
-  copies of those weapons in and out of its copies of the units to match (it
-  decides no pickups, swaps or drops itself). A change of weapons or
-  grenades goes to every client at once, one of ammunition alone to the
-  unit's own client at once and to the others as often as the unit's place
-  is sent them. A client's own player spends its own ammunition and grenades:
-  it takes the host's count only once the host has had a round trip to see
-  what it did.
-*/
+/* NETWORK_OBJECTS.C: the host's units, vehicles, weapons and equipment, at the same datum index everywhere, so
+a message can name one: made, deleted, moved and what units carry (port/linux/NETCODE.md, stages 3 and 4) */
 
 #include "cseries.h"
 #include "game/game.h"
@@ -112,18 +71,15 @@ enum
 	EMPTY_INVENTORY_TICKS = 3 * INVENTORY_REFRESH_TICKS,
 	/* the host's objects at rest sent each tick, round them all */
 	RESTING_STATES_PER_TICK = 4,
-	/* a client asks for the host's objects again until it has them (a host
-	still loading misses the asking), after this, twice as long each time
-	up to the most */
+	/* a client asks for the host's objects again until it has them (a host still loading misses the asking),
+	after this, twice as long each time up to the most */
 	CLIENT_READY_INTERVAL_TICKS = TICKS_PER_SECOND,
 	CLIENT_READY_MAXIMUM_INTERVAL_TICKS = 4 * TICKS_PER_SECOND,
-	/* the host tells a machine all its objects again at most once in this
-	long, asked again (a client that failed to make one: asked again sooner,
-	they are on their way; a flood of asking is not answered in full) */
+	/* the host tells a machine all its objects again at most once in this long, asked again (a client that
+	failed to make one: asked again sooner, they are on their way; a flood of asking is not answered in full) */
 	HOST_OBJECTS_RESEND_TICKS = 10 * TICKS_PER_SECOND,
-	/* a client that failed to make one of the host's objects asks for them
-	all again this long after, twice as long each time it fails again up to
-	the most */
+	/* a client that failed to make one of the host's objects asks for them all again this long after, twice as
+	long each time it fails again up to the most */
 	CLIENT_RETRY_TICKS = HOST_OBJECTS_RESEND_TICKS + TICKS_PER_SECOND,
 	CLIENT_RETRY_MAXIMUM_TICKS = 60 * TICKS_PER_SECOND,
 	/* a client's own objects, from here up */
@@ -135,9 +91,8 @@ enum
 	/* the objects the host has at the same indices everywhere */
 	NETWORKED_OBJECT_TYPES =
 		_object_mask_biped | _object_mask_vehicle | _object_mask_weapon | _object_mask_equipment,
-	/* how often the host sends a client a moving object further from its
-	players than each distance below (every tick nearer), and the vehicle the
-	client drives itself */
+	/* how often the host sends a client a moving object further from its players than each distance below
+	(every tick nearer), and the vehicle the client drives itself */
 	MAXIMUM_OBJECT_PERIOD_TICKS = 4,
 	OWN_VEHICLE_PERIOD_TICKS = 3,
 	/* a client: where the vehicles its own players drive were, the last
@@ -152,25 +107,20 @@ enum
 	/* ... and the most of a client's round trip it takes a client's vehicle
 	in the air to be ahead of its copy by */
 	VEHICLE_PREDICTION_CEILING_LEAD_TICKS = 15,
-	/* ... how long it measures predictions from one it took, the anchor,
-	before it takes a newer as the anchor (the jitter and the blend granted
-	once a second, not once a tick) */
+	/* ... how long it measures predictions from one it took, the anchor, before it takes a newer as the anchor
+	(the jitter and the blend granted once a second, not once a tick) */
 	VEHICLE_PREDICTION_ANCHOR_TICKS = TICKS_PER_SECOND,
-	/* ... and how long, with none taken, it keeps the anchor, and tells the
-	client which of its ticks it has the vehicle at (longer: from where it
-	has the vehicle only, a ride begun again) */
+	/* ... and how long, with none taken, it keeps the anchor, and tells the client which of its ticks it has
+	the vehicle at (longer: from where it has the vehicle only, a ride begun again) */
 	VEHICLE_PREDICTION_REFERENCE_TICKS = 2 * TICKS_PER_SECOND,
-	/* ... and how long it remembers how fast its own ticks sent a client's
-	vehicle (an anchor's second, and the longest round trip: a client learns
-	of an explosion that throws its vehicle a round trip late) */
+	/* ... and how long it remembers how fast its own ticks sent a client's vehicle (an anchor's second, and the
+	longest round trip: a client learns of an explosion that throws its vehicle a round trip late) */
 	VEHICLE_PREDICTION_SPEED_TICKS = VEHICLE_PREDICTION_ANCHOR_TICKS + 2 * TICKS_PER_SECOND,
-	/* a client: how long a biped the host says is dead, no player's, may
-	live on here before it is killed with nothing to show (the host's
-	killing blow, unreliable, shows it; lost, nothing else would) */
+	/* a client: how long a biped the host says is dead, no player's, may live on here before it is killed with
+	nothing to show (the host's killing blow, unreliable, shows it; lost, nothing else would) */
 	DEAD_BIPED_FALLBACK_TICKS = TICKS_PER_SECOND / 2,
-	/* a client: its own player's ammunition and grenades are the host's once
-	the host has had this long past a round trip to see what it did with
-	them (the host's inventories go every INVENTORY_INTERVAL_TICKS) */
+	/* a client: its own player's ammunition and grenades are the host's once the host has had this long past a
+	round trip to see what it did with them (the host's inventories go every INVENTORY_INTERVAL_TICKS) */
 	OWN_INVENTORY_MARGIN_TICKS = 2,
 	/* ... the round trip without one measured, and the most */
 	DEFAULT_OWN_ROUND_TRIP_TICKS = 6,
@@ -183,9 +133,8 @@ enum
 	MAXIMUM_INVENTORY_GRENADES = 16,
 };
 
-/* the distances from a client's nearest player (world units) past which
-the host sends it a moving object every second tick, every third and every
-fourth (as it sends players, network_distributed.c) */
+/* the distances from a client's nearest player (world units) past which the host sends it a moving object
+every second tick, every third and every fourth (as it sends players, network_distributed.c) */
 #define NEAR_OBJECT_DISTANCE 25.0f
 #define MIDDLE_OBJECT_DISTANCE 60.0f
 #define FAR_OBJECT_DISTANCE 120.0f
@@ -207,9 +156,8 @@ would disagree for good) */
 tick) */
 #define MAXIMUM_PREDICTED_VEHICLE_SPEED 3.0f
 #define MAXIMUM_PREDICTED_VEHICLE_ANGULAR_SPEED 1.0f
-/* ... how much further a tick than it goes (twice its tag's top speed, or
-as fast as the host's ticks sent its copy lately) it may be (world units a
-tick) */
+/* ... how much further a tick than it goes (twice its tag's top speed, or as fast as the host's ticks sent its
+copy lately) it may be (world units a tick) */
 #define PREDICTED_VEHICLE_SPEED_MARGIN 0.1f
 /* the teams a flag's or ball's owner team names (game_engine_ctf.c's
 NUMBER_OF_CTF_TEAMS, game_engine_oddball.c's MAXIMUM_ODDBALLS) */
@@ -316,9 +264,8 @@ static long objects_host_told_count;
 /* ... whether each was moving at the last tick (one come to rest is sent
 once more, to every client) */
 static boolean objects_host_state_moving[MAXIMUM_TRACKED_OBJECTS];
-/* ... what each unit's inventory was last sent as (in all, and its weapons
-and grenades), when to every client, and when its ammunition alone last
-changed (NONE: not since); when it last carried anything (NONE: never) */
+/* ... what each unit's inventory was last sent as (in all, and its weapons and grenades), when to every client,
+and when its ammunition alone last changed (NONE: not since); when it last carried anything (NONE: never) */
 static struct
 {
 	unsigned long checksum;
@@ -327,9 +274,8 @@ static struct
 	long ammunition_time;
 	long carried_time;
 } objects_host_inventories[MAXIMUM_TRACKED_OBJECTS];
-/* ... each client machine, found once a tick: where its players' living
-units are, those units, and the vehicles they drive (with the player's
-absolute index) */
+/* ... each client machine, found once a tick: where its players' living units are, those units, and the
+vehicles they drive (with the player's absolute index) */
 static struct
 {
 	short count;
@@ -351,14 +297,8 @@ static struct
 	long time;
 	long player_indices[MAXIMUM_LOCAL_PLAYERS];
 } objects_host_machines[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
-/* ... each client's player's latest vehicle prediction, taken at the next
-tick; the vehicle it last took (NONE: none), at which of the client's ticks
-and its own, and where that left the host's copy; and the anchor
-predictions are measured from: one it took, at which of the client's ticks
-and its own, and where the client had it; the velocity it took (what its
-next tick started from); and how fast its own ticks sent the vehicle beyond
-the client's word, the most of this span of VEHICLE_PREDICTION_SPEED_TICKS
-and of the one before */
+/* ... each client's player's latest vehicle prediction, taken next tick; the last taken (where it left the host's
+copy) and the anchor (where the client had it), with their ticks; the velocity taken; its own ticks' top speeds */
 static struct
 {
 	boolean valid;
@@ -394,15 +334,13 @@ static struct
 	long object_index;
 	long time;
 } objects_client_dead[MAXIMUM_TRACKED_OBJECTS];
-/* ... its own objects made since the last tick (of any kind: those of the
-kinds the host has go), and whether to look through all the objects
-instead (the host's all told, too many made, or made where it cannot say) */
+/* ... its own objects made since the last tick (of any kind: those of the kinds the host has go), and whether
+to look through all the objects instead (the host's all told, too many made, or made where it cannot say) */
 static long objects_client_new_objects[MAXIMUM_CLIENT_NEW_OBJECTS];
 static short objects_client_new_object_count;
 static boolean objects_client_check_all;
-/* ... the lowest of its own indices that may be free (those below it
-taken), and the object array's count when it last made an object (NONE:
-not known; another count, an object deleted since: from the first) */
+/* ... the lowest of its own indices that may be free (those below it taken), and the object array's count when
+it last made an object (NONE: not known; another count, an object deleted since: from the first) */
 static long objects_client_local_free_index;
 static long objects_client_object_count;
 /* ... where the vehicles its own players drive were at its last ticks */
@@ -412,9 +350,8 @@ static struct distributed_own_vehicle
 	long vehicle_index;
 	real_point3d position;
 } objects_client_own_vehicles[MAXIMUM_LOCAL_PLAYERS][OWN_VEHICLE_POSITION_TICKS];
-/* ... what its own players' units carried at the last tick, and when they
-last threw a grenade of each kind, and fired or reloaded each weapon
-(NONE: not while it has had it) */
+/* ... what its own players' units carried at the last tick, and when they last threw a grenade of each kind,
+and fired or reloaded each weapon (NONE: not while it has had it) */
 static struct distributed_own_inventory
 {
 	long unit_index;
@@ -486,10 +423,8 @@ long network_objects_new_object_index(
 	long object_count = object_header_data->actual_count;
 	long absolute_index;
 
-	/* (every object is made just after this: one more since the last, and
-	none has been deleted, the indices below the lowest free one are still
-	taken; an object made or deleted otherwise, and they are looked through
-	from the first again) */
+	/* (every object is made just after this: one more since the last, none was deleted, so the indices below the
+	lowest free one are still taken; an object made or deleted otherwise: looked through from the first again) */
 	if (objects_client_object_count == NONE || object_count != objects_client_object_count + 1)
 		objects_client_local_free_index = LOCAL_OBJECTS_FIRST_INDEX;
 	objects_client_object_count = object_count;
@@ -530,9 +465,8 @@ long network_objects_new_object_index(
 	return NONE;
 }
 
-/* whether a client is making the host's object: which the host has made as
-the game type has it (object_new does not remap it again), with its own
-parts (a unit's initial weapons are the host's objects too) */
+/* whether a client is making the host's object: which the host has made as the game type has it (object_new
+does not remap it again), with its own parts (a unit's initial weapons are the host's objects too) */
 boolean network_objects_creating_host_object(
 	void)
 {
@@ -599,9 +533,8 @@ static boolean distributed_vector_valid(
 	return distributed_real_valid(vector->i) && distributed_real_valid(vector->j) && distributed_real_valid(vector->k);
 }
 
-/* whether a message's transform can be: the position finite and within the
-world, the axes a rotation (made exactly one in valid_forward, valid_up),
-the velocities finite */
+/* whether a message's transform can be: the position finite and within the world, the axes a rotation (made
+exactly one in valid_forward, valid_up), the velocities finite */
 static boolean distributed_transform_valid(
 	real_point3d const *position,
 	real_vector3d const *forward,
@@ -877,10 +810,8 @@ static void distributed_host_update_objects(
 	}
 }
 
-/* a client has loaded the game: every object the host has, to it alone,
-and word that that is all of them; asked again, only the word (they are on
-their way ahead of it), unless it failed to make one since it last asked
-(again) */
+/* a client has loaded the game: every object the host has, to it alone, and word that that is all; asked again,
+only the word (they are on their way ahead of it), unless it failed to make one since it last asked (again) */
 void network_objects_client_asked(
 	long machine_index,
 	boolean again)
@@ -935,9 +866,8 @@ void network_objects_client_asked(
 		(word)sizeof(message.header));
 }
 
-/* the host's object at an absolute index whose state goes to its clients
-(not players' living units, which have their own messages, nor what is
-attached or carried), NONE for none */
+/* the host's object at an absolute index whose state goes to its clients (not players' living units, which
+have their own messages, nor what is attached or carried), NONE for none */
 static long distributed_host_placed_object(
 	long absolute_index)
 {
@@ -1001,9 +931,8 @@ static void distributed_host_find_viewers(
 	}
 }
 
-/* how often (ticks) the host sends that client machine an object where it
-is, moving: by its nearest player; every tick to one with none in the
-world (dead, it watches anyone) */
+/* how often (ticks) the host sends that client machine an object where it is, moving: by its nearest player;
+every tick to one with none in the world (dead, it watches anyone) */
 static short distributed_host_object_period(
 	short machine_number,
 	real_point3d const *position)
@@ -1036,12 +965,8 @@ enum
 	_host_state_to_all,
 };
 
-/* where the moving objects are, to each client those near its players
-every tick, those further less often, and the vehicle it drives itself
-(which it has already) every few ticks, with which of its ticks the host
-has it at; to every client each as it comes to rest, and a few at rest,
-round them all (one whose last move was lost is put right when its turn
-comes) */
+/* where the moving objects are: to each client, nearer its players more often, its own vehicle every few ticks, at
+which of its ticks the host has it; to all, each come to rest and a few at rest, in turn (a lost move put right) */
 static void distributed_host_send_states(
 	void)
 {
@@ -1218,11 +1143,8 @@ enum
 	_host_inventory_ammunition_lately,
 };
 
-/* what every unit carries, when that has changed or not been sent for a
-while: a change of weapons or grenades to every client at once, one of
-ammunition alone to the unit's own client at once and to the others by how
-near their players are, as the host sends them objects (those further off
-see its shots less) */
+/* what every unit carries, changed or not sent lately: weapons or grenades to every client at once, ammunition
+alone to the unit's own client at once and to the others as often as objects (further off see its shots less) */
 static void distributed_host_send_inventories(
 	void)
 {
@@ -1318,9 +1240,8 @@ static void distributed_host_send_inventories(
 				}
 				else
 				{
-					/* (another's: every round near its players, further every
-					second to fourth, in the unit's turn, which comes once in
-					the rounds after each change that its period spans) */
+					/* (another's: every round near its players, further every second to fourth, in the unit's
+					turn, which comes once in the rounds after each change that its period spans) */
 					short period = distributed_host_object_period(machine_number, &origins[index]);
 
 					if ((round + absolute_index) % period != 0 ||
@@ -1380,9 +1301,8 @@ void network_objects_handle_vehicle_prediction(
 	}
 }
 
-/* (the host) where a client's player's vehicle, which that player drives,
-left the ground (network_objects_vehicle_below_ceiling): noted each tick,
-from the host's copy */
+/* (the host) where a client's player's vehicle, which that player drives, left the ground
+(network_objects_vehicle_below_ceiling): noted each tick, from the host's copy */
 static void network_objects_note_vehicle_ground(
 	short player_index)
 {
@@ -1413,13 +1333,8 @@ static void network_objects_note_vehicle_ground(
 	}
 }
 
-/* (the host) whether a client's player's vehicle that does not fly (nor
-floats) may be where they say it is: on the ground anywhere its speed
-takes it; in the air no higher above where it left the ground than a thing
-thrown up as fast as it went up then (and a tolerance) falls to since (the
-ticks since, less the client's round trip, no more than
-VEHICLE_PREDICTION_CEILING_LEAD_TICKS, and jitter, which are the client's
-ahead): no flying, nor hovering */
+/* (the host) whether a client's vehicle that neither flies nor floats is, in the air, below what a thing thrown up
+as fast as it left the ground falls to since, less the client's lead (its round trip, jitter): no hovering */
 static boolean network_objects_vehicle_below_ceiling(
 	short player_index,
 	long vehicle_index,
@@ -1450,22 +1365,8 @@ static boolean network_objects_vehicle_below_ceiling(
 	return position->z - objects_host_vehicle_predictions[player_index].ground_height <= ceiling;
 }
 
-/* ... taken as they are, within a tolerance, if that machine's player
-still drives it: a little off closed by half, more put there. Each taken
-moves the host's copy, and the next is measured from there, so a client
-could take its vehicle HOST_VEHICLE_ACCEPT_TOLERANCE further each tick: a
-prediction is also no further from the anchor (one taken, a newer once a
-second) than the vehicle goes in the client's ticks since (after it, and no
-more than the host's since and a little jitter), with a margin, and no
-faster: as fast as twice its tag's top speed, or as the host's own ticks
-sent its copy lately (thrown), whichever is faster. What they sent it is
-its speed less as much as the velocity it took of the client was faster
-than twice the top speed: a client that says it goes faster gains nothing
-by it (its gravity on a copy said to hover and fall). A teleporter moves
-the host's copy too, further than it goes since the last taken: it is
-measured from where the host has it only, a new anchor. In the air it is
-no higher than network_objects_vehicle_below_ceiling says. Which of the
-client's ticks the host has it at is noted, to tell the client. */
+/* ... taken within a tolerance if that machine's player still drives it, no further from the anchor than it goes
+since (else the tolerance adds up), its speed not raised by the client's word (port/linux/NETCODE.md, stage 4) */
 void network_objects_apply_vehicle_predictions(
 	void)
 {
@@ -1558,9 +1459,8 @@ void network_objects_apply_vehicle_predictions(
 			dx = vehicle->object.position.x - from->x;
 			dy = vehicle->object.position.y - from->y;
 			dz = vehicle->object.position.z - from->z;
-			/* (the host's copy moved further than it goes since the last
-			taken, which only the host moves it by: taken from where it is,
-			a new anchor) */
+			/* (the host's copy moved further than it goes since the last taken, which only the host moves it by:
+			taken from where it is, a new anchor) */
 			if (!(dx * dx + dy * dy + dz * dz <= reach * reach))
 			{
 				anchored = FALSE;
@@ -1593,10 +1493,8 @@ void network_objects_apply_vehicle_predictions(
 
 			network_objects_reconcile(state->object_index, &state->position, &forward, &up, &velocity,
 				&angular_velocity, HOST_VEHICLE_BLEND_DISTANCE);
-			/* (a copy at rest runs no physics, and so neither falls nor
-			counts its ticks in the air: one the client moved from where it
-			came to rest (a little at a time too), or says moves, wakes, and
-			settles again if it is still) */
+			/* (a copy at rest runs no physics, so neither falls nor counts its ticks in the air: one the client moved
+			from where it came to rest (a little at a time too), or says moves, wakes, and settles again if still) */
 			if (!TEST_FLAG(vehicle->object.flags, _object_at_rest_bit))
 			{
 				objects_host_vehicle_predictions[player_index].rest_vehicle_index = NONE;
@@ -1690,10 +1588,8 @@ static void distributed_client_delete(
 		long child_index;
 		short weapon_slot;
 
-		/* (the host's weapons it carries out: deleted with it otherwise, one
-		the host's unit had let go of before (its inventory not here yet)
-		would be gone here for good; the host's word deletes those it deleted
-		with its unit) */
+		/* (the host's weapons it carries out: deleted with it otherwise, one the host's unit let go of first (its
+		inventory not here yet) would be gone here for good; the host's word deletes those it deleted with its unit) */
 		for (weapon_slot = 0; weapon_slot < MAXIMUM_WEAPONS_PER_UNIT; weapon_slot++)
 		{
 			if (unit->unit.weapon_object_indices[weapon_slot] != NONE &&
@@ -1721,9 +1617,8 @@ static void distributed_client_delete(
 			network_player_detach_unit(unit->unit.player_index);
 		}
 	}
-	/* (a player's action on it, the prompt the hud draws: deleted between
-	ticks, it would draw on with the object gone until the next tick looked
-	again) */
+	/* (a player's action on it, the prompt the hud draws: deleted between ticks, it would draw on with the object
+	gone until the next tick looked again) */
 	{
 		struct data_iterator iterator;
 		struct player_datum *player;
@@ -1743,10 +1638,8 @@ static void distributed_client_delete(
 	objects_client_deleting = FALSE;
 }
 
-/* a create failed (the object pool full, its place not to be had): all of
-them again from the host, a while after (asked again, flagged: the host
-tells them all only then, not on each asking while they are on their way),
-longer each time it fails again */
+/* a create failed (the object pool full, its place not to be had): all of them again from the host, a while after
+(asked again, flagged: the host tells them all only then, not on each asking), longer each time it fails again */
 static void distributed_client_create_failed(
 	void)
 {
@@ -1777,9 +1670,8 @@ static boolean distributed_client_own_object(
 	return unit_index != NONE && distributed_player_is_local(unit_get(unit_index)->unit.player_index);
 }
 
-/* whether the host's object can be made: of the kinds the host has, its
-definition a tag of the group its type says, at a whole index, of a team
-the game has, where the world is (its axes made a rotation in forward, up) */
+/* whether the host's object can be made: of the kinds the host has, its definition a tag of the group its type
+says, at a whole index, of a team the game has, where the world is (its axes made a rotation in forward, up) */
 static boolean distributed_client_change_valid(
 	struct distributed_object_change const *change,
 	real_vector3d *forward,
@@ -1899,9 +1791,8 @@ static void distributed_client_create(
 		long existing_index = ((long)header->identifier << 16) | absolute_index;
 		struct object_datum *existing = object_try_and_get(existing_index);
 
-		/* placed here when the map loaded, as on the host, or told of
-		before: the same object, where the host has it (unless carried, or
-		this machine's own) */
+		/* placed here when the map loaded, as on the host, or told of before: the same object, where the host has
+		it (unless carried, or this machine's own) */
 		if (existing_index == change->object_index && existing &&
 			existing->definition_index == change->definition_index)
 		{
@@ -2003,11 +1894,8 @@ void network_objects_handle_synchronized(
 	objects_client_synchronized = TRUE;
 }
 
-/* a vehicle this machine's own player drives where the host has it, the
-host saying at which of this machine's ticks (its prediction come back):
-moved by how far that is from where this machine had it at that tick, if
-further than a tolerance, keeping what it has done since (no rubber band a
-round trip long); FALSE without that tick */
+/* its own player's vehicle as the host has it at one of its ticks (its prediction come back): moved by the error
+from where it had it then, past a tolerance, keeping what it did since (no rubber band); FALSE without that tick */
 static boolean distributed_client_correct_own_vehicle(
 	long vehicle_index,
 	long player_index,
@@ -2066,10 +1954,8 @@ static boolean distributed_client_correct_own_vehicle(
 	return TRUE;
 }
 
-/* (a client) a biped, no player's (a player's the units' states kill), the
-host says is dead, alive here: its killing blow, unreliable, kills it; lost,
-nothing else would. Killed with nothing to show or count of it once the host
-has said so for a while. */
+/* (a client) a biped, no player's (a player's the units' states kill), the host says is dead, alive here: its
+killing blow, unreliable, kills it; lost, it dies with nothing to show or count after DEAD_BIPED_FALLBACK_TICKS */
 static void distributed_client_dead_biped(
 	long object_index)
 {
@@ -2181,9 +2067,8 @@ void network_objects_handle_states(
 	}
 }
 
-/* what this machine's own player's unit carries now noted (it is that
-player's: local_player_index); compared with what it carried at the last,
-when it threw a grenade and fired or reloaded a weapon, noted too */
+/* what this machine's own player's unit carries now noted (it is that player's: local_player_index); compared
+with what it carried at the last, when it threw a grenade and fired or reloaded a weapon, noted too */
 static void distributed_client_note_own_inventory(
 	struct distributed_own_inventory *own,
 	long unit_index,
@@ -2251,9 +2136,8 @@ static void distributed_client_note_own_inventory(
 	}
 }
 
-/* whether the host has had a round trip (and the time its inventories take
-to go) since this machine last did that with its own player's unit (at
-time, NONE for never): what the host says of it then has what it did */
+/* whether the host has had a round trip (and the time its inventories take to go) since this machine last did
+that with its own player's unit (at time, NONE for never): what the host says of it then has what it did */
 static boolean distributed_client_own_settled(
 	long time)
 {
@@ -2297,10 +2181,8 @@ static void distributed_client_apply_inventory(
 			own = &objects_client_own_inventories[local_player_index];
 		}
 	}
-	/* picked up, swapped or dropped on the host: the same weapons here,
-	slot for slot (the host's own objects, moved in and out as
-	unit_add_weapon_to_inventory and unit_drop_current_weapon do, without
-	their rules: the host has applied them) */
+	/* picked up, swapped or dropped on the host: the same weapons here, slot for slot (the host's objects, moved as
+	unit_add_weapon_to_inventory and unit_drop_current_weapon do, without their rules: the host applied them) */
 	for (weapon_slot = 0; weapon_slot < MAXIMUM_WEAPONS_PER_UNIT; weapon_slot++)
 	{
 		long wanted_index = inventory->weapon_indices[weapon_slot];
@@ -2331,10 +2213,8 @@ static void distributed_client_apply_inventory(
 	{
 		unit->unit.desired_weapon_index = inventory->current_weapon_index;
 	}
-	/* the ammunition (as much as the weapon's magazines hold): a client's
-	own player spends its own as it fires and reloads (the host's count
-	trails it), so it is the host's only once the host has had a round trip
-	to see what it did with the weapon; then whatever the host's is */
+	/* the ammunition (no more than the magazines hold): a client's own player spends its own as it fires and reloads
+	(the host's count trails it): the host's, whatever it is, once the host has had a round trip to see what it did */
 	for (weapon_slot = 0; weapon_slot < MAXIMUM_WEAPONS_PER_UNIT; weapon_slot++)
 	{
 		long weapon_index = unit->unit.weapon_object_indices[weapon_slot];
@@ -2364,10 +2244,8 @@ static void distributed_client_apply_inventory(
 		}
 		weapon->weapon.age = (real)inventory->age[weapon_slot] / AGE_SCALE;
 	}
-	/* the grenades (no more than a unit carries): a client's own player
-	throws its own, so the host's count is taken when it is lower, and when
-	higher (a pickup) only once the host has had a round trip to see the last
-	it threw */
+	/* the grenades (no more than a unit carries): a client's own player throws its own, so the host's count is taken
+	when it is lower, and when higher (a pickup) only once the host has had a round trip to see the last it threw */
 	{
 		short grenade_type;
 
@@ -2404,10 +2282,8 @@ void network_objects_client_picked_up_weapon(
 	picked_up->time = game_time_get();
 }
 
-/* the weapons its own players picked up readied once they have them, as
-unit_add_weapon_to_inventory readies a pickup where it decides it (not
-while firing): the client chooses its players' weapons in hand
-(distributed_client_apply_inventory), and the host follows */
+/* weapons its own players picked up, readied once they have them as unit_add_weapon_to_inventory readies a pickup
+(not while firing): a client chooses its weapons in hand (distributed_client_apply_inventory); the host follows */
 static void distributed_client_ready_picked_up_weapons(
 	void)
 {
@@ -2556,10 +2432,8 @@ static void distributed_client_note_own_inventories(
 	}
 }
 
-/* the objects of the kinds the host has that it has not told of go (what
-this machine's own simulation made): those it made since the last tick, or
-all of them once the host has told it all (or when it cannot say which it
-made) */
+/* the objects of the kinds the host has that it has not told of go (what this machine's own simulation made):
+those it made since the last tick, or all of them once the host has told it all (or when it cannot say which) */
 static void distributed_client_remove_own_objects(
 	void)
 {
@@ -2688,3 +2562,74 @@ void network_objects_new_game(
 		}
 	}
 }
+
+#ifdef __BIG_ENDIAN__
+/* ---------- byte order: the PC builds send the entries as their memory has them (network_distributed.h) */
+
+static void distributed_object_change_byte_swap(
+	void *entry)
+{
+	struct distributed_object_change *change = entry;
+
+	BYTE_SWAP_FIELD(change->object_index);
+	BYTE_SWAP_FIELD(change->definition_index);
+	BYTE_SWAP_FIELD(change->owner_team_index);
+	BYTE_SWAP_FIELD(change->variant_number);
+	BYTE_SWAP_REALS(change->position);
+	BYTE_SWAP_REALS(change->forward);
+	BYTE_SWAP_REALS(change->up);
+	BYTE_SWAP_REALS(change->translational_velocity);
+	BYTE_SWAP_REALS(change->angular_velocity);
+	BYTE_SWAP_REALS(change->change_colors);
+}
+
+static void distributed_object_state_byte_swap(
+	void *entry)
+{
+	struct distributed_object_state *state = entry;
+
+	BYTE_SWAP_FIELD(state->object_index);
+	BYTE_SWAP_FIELD(state->time);
+	BYTE_SWAP_REALS(state->position);
+	BYTE_SWAP_SHORTS(state->forward);
+	BYTE_SWAP_SHORTS(state->up);
+	BYTE_SWAP_SHORTS(state->translational_velocity);
+	BYTE_SWAP_SHORTS(state->angular_velocity);
+}
+
+static void distributed_inventory_byte_swap(
+	void *entry)
+{
+	struct distributed_inventory *inventory = entry;
+
+	BYTE_SWAP_FIELD(inventory->unit_index);
+	BYTE_SWAP_ARRAY(inventory->weapon_indices);
+	BYTE_SWAP_SHORTS(inventory->rounds_total);
+	BYTE_SWAP_SHORTS(inventory->rounds_loaded);
+	BYTE_SWAP_ARRAY(inventory->age);
+}
+
+void network_objects_byte_swap(
+	byte type,
+	byte *entries,
+	short count,
+	byte const *end)
+{
+	switch (type)
+	{
+	case _distributed_message_object_changes:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_object_change),
+			distributed_object_change_byte_swap);
+		break;
+	case _distributed_message_object_states:
+	case _distributed_message_vehicle_prediction:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_object_state),
+			distributed_object_state_byte_swap);
+		break;
+	case _distributed_message_inventories:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_inventory),
+			distributed_inventory_byte_swap);
+		break;
+	}
+}
+#endif

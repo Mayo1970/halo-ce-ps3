@@ -11,6 +11,7 @@ upstream halo-ce-universal copy of source/networking/network_server_message_hand
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
+#include "memory/byte_swapping.h"
 #include "networking/network_connection.h"
 #include "networking/network_game_globals.h"
 #include "networking/network_game_manager.h"
@@ -24,6 +25,10 @@ upstream halo-ce-universal copy of source/networking/network_server_message_hand
 
 /* port/linux/game/network_distributed.c's */
 void network_distributed_handle_message(long machine_index, word const *message, word size);
+#ifdef __BIG_ENDIAN__
+/* (the PC builds' order, which they send: their memory's) */
+void network_distributed_byte_swap(void *message, word size, boolean native);
+#endif
 
 /* ---------- constants */
 
@@ -163,6 +168,8 @@ struct message_server_game_advertise
 	word flags;
 	byte join_game_token[JOIN_GAME_TOKEN_LENGTH];
 };
+typedef char message_server_game_advertise_size_assert[
+	sizeof(struct message_server_game_advertise) == 0x114 ? 1 : -1];
 
 struct message_client_join_game_request
 {
@@ -316,6 +323,38 @@ static boolean network_game_server_handle_message_client_switch_to_pregame(
 /* ---------- globals */
 
 /* ---------- private code */
+
+#ifdef __BIG_ENDIAN__
+/* port: the advertisement and the settings record in the PC builds' order (their memory's, which they send) */
+static void game_advertisement_byte_swap(
+	struct message_server_game_advertise *advertisement)
+{
+	BYTE_SWAP_FIELD(advertisement->port);
+	BYTE_SWAP_FIELD(advertisement->version);
+	BYTE_SWAP_FIELD(advertisement->platform);
+	BYTE_SWAP_ARRAY(advertisement->game_name);
+	BYTE_SWAP_FIELD(advertisement->map.version);
+	BYTE_SWAP_FIELD(advertisement->engine_type);
+	BYTE_SWAP_FIELD(advertisement->machine_count);
+	BYTE_SWAP_FIELD(advertisement->player_count);
+	BYTE_SWAP_FIELD(advertisement->maximum_player_count);
+	BYTE_SWAP_FIELD(advertisement->variant_setting);
+	BYTE_SWAP_FIELD(advertisement->flags);
+}
+
+static void const *network_game_settings_for_wire(
+	void const *game,
+	long game_size)
+{
+	static struct network_game wire_game;
+
+	if (game_size != (long)sizeof(wire_game))
+		return game;
+	csmemcpy(&wire_game, game, sizeof(wire_game));
+	network_game_byte_swap(&wire_game, TRUE);
+	return &wire_game;
+}
+#endif
 
 /* port: a name from the wire (a machine's or a player's, from anyone joining) kept to what draws as one line
 of text (player_name_clean); one with nothing left that the host's ban command can type gets the default */
@@ -506,6 +545,9 @@ boolean network_game_server_send_game_settings_to_client_machine(
 	struct message_server_game_settings_update message;
 	long offset;
 
+#ifdef __BIG_ENDIAN__
+	game = network_game_settings_for_wire(game, game_size);
+#endif
 	for (offset = 0; offset < game_size; offset += sizeof(message.data))
 	{
 		void *encoded_message;
@@ -600,6 +642,9 @@ boolean network_distributed_server_send_to_machine(
 	network_connection_get_address(connection, &address, NULL);
 	address.port = NETWORK_GAME_CLIENT_PORT;
 	csmemcpy(buffer, message, size);
+#ifdef __BIG_ENDIAN__
+	network_distributed_byte_swap(buffer, size, TRUE);
+#endif
 	return network_game_server_write(network_game_server_get_connection(server), buffer, size, &address, 0);
 }
 
@@ -626,6 +671,9 @@ boolean network_distributed_server_send_to_machine_reliably(
 	if (!connection || !network_connection_active(connection))
 		return FALSE;
 	csmemcpy(buffer, message, size);
+#ifdef __BIG_ENDIAN__
+	network_distributed_byte_swap(buffer, size, TRUE);
+#endif
 	return network_game_server_write(connection, buffer, size, NULL, 1);
 }
 
@@ -655,6 +703,9 @@ boolean network_distributed_server_send_to_all_reliably(
 			if (connection && network_connection_active(connection) && size <= sizeof(buffer))
 			{
 				csmemcpy(buffer, message, size);
+#ifdef __BIG_ENDIAN__
+				network_distributed_byte_swap(buffer, size, TRUE);
+#endif
 				result &= network_game_server_write(connection, buffer, size, NULL, 1);
 			}
 		}
@@ -774,6 +825,9 @@ boolean network_game_server_send_game_settings_to_all_machines(
 		"c:\\halo\\SOURCE\\networking\\network_server_message_handler.c",
 		0x1C8,
 		server);
+#ifdef __BIG_ENDIAN__
+	game = network_game_settings_for_wire(game, game_size);
+#endif
 
 	/* every piece goes out even if one fails for a machine, or the others would keep the old settings
 	(a machine whose connection failed is closed, and skipped when the update is sent again) */
@@ -1434,6 +1488,9 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 			}
 
 			network_game_generate_join_game_token(advertisement.join_game_token);
+#ifdef __BIG_ENDIAN__
+			game_advertisement_byte_swap(&advertisement);
+#endif
 			reply = create_network_game_message(
 				_message_server_game_advertise,
 				&advertisement,

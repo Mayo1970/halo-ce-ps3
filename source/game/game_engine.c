@@ -1,538 +1,5 @@
-/*
-GAME_ENGINE.C
-
-symbols in this file:
-00096780 0020:
-	_game_globals_get_weapon (0000)
-000967A0 0070:
-	_game_engine_get_team_score (0000)
-00096810 0020:
-	_linear_to_non_linear_alpha (0000)
-00096830 0020:
-	_game_engine_dispose (0000)
-00096850 0040:
-	_initialize_player_multiplayer_data (0000)
-00096890 0120:
-	_game_engine_build_lighting (0000)
-000969B0 0020:
-	_game_engine_dispose_from_old_map (0000)
-000969D0 0020:
-	_game_engine_game_ending (0000)
-000969F0 0020:
-	_game_engine_game_starting (0000)
-00096A10 0040:
-	_players_in_game (0000)
-00096A50 0020:
-	_game_engine_statistics_append (0000)
-00096A70 0020:
-	_game_engine_handle_client_message (0000)
-00096A90 0020:
-	_game_engine_handle_server_message (0000)
-00096AB0 0030:
-	_sort_statistic_buffer (0000)
-00096AE0 0050:
-	_sort_statistic_buffer_ranking (0000)
-00096B30 0010:
-	_is_place_tied (0000)
-00096B40 0010:
-	_place_get_position (0000)
-00096B50 0050:
-	_get_place_string (0000)
-00096BA0 0070:
-	_drawline (0000)
-00096C10 0020:
-	_get_selected_color (0000)
-00096C30 0050:
-	_get_postgame_hilite_colors (0000)
-00096C80 0060:
-	_find_closest_player_callback (0000)
-00096CE0 0020:
-	_game_engine_post_rasterize_objects (0000)
-00096D00 0030:
-	_can_delete_item (0000)
-00096D30 0100:
-	_game_engine_update_purge (0000)
-00096E30 00a0:
-	_update_weapon_inventory (0000)
-00096ED0 0150:
-	_game_engine_update_weapons (0000)
-00097020 00b0:
-	_item_collection_get_total (0000)
-000970D0 0050:
-	_game_engine_load_stage (0000)
-00097120 0030:
-	_game_engine_playlist_begin (0000)
-00097150 0060:
-	_game_engine_get_current_stage (0000)
-000971B0 0030:
-	_game_engine_end_game (0000)
-000971E0 0020:
-	_game_engine_allow_pick_up (0000)
-00097200 0050:
-	_game_engine_player_damaged_player (0000)
-00097250 00a0:
-	_game_engine_player_is_odd_man_out (0000)
-000972F0 0040:
-	_game_engine_player_is_out_of_lives (0000)
-00097330 0100:
-	_game_engine_should_spawn_player (0000)
-00097430 0070:
-	_game_engine_player_get_team_index (0000)
-000974A0 0040:
-	_game_engine_prespawn_player_update (0000)
-000974E0 0010:
-	_game_engine_running (0000)
-000974F0 0020:
-	_game_engine_can_score (0000)
-00097510 0020:
-	_game_engine_force_single_screen (0000)
-00097530 0030:
-	_get_blink_alpha (0000)
-00097560 0010:
-	_game_engine_press_start_to_begin (0000)
-00097570 00f0:
-	_nearby_vehicle (0000)
-00097660 0100:
-	_game_engine_rasterize_message (0000)
-00097760 00e0:
-	_game_engine_picking_up (0000)
-00097840 0080:
-	_goal_matches_player (0000)
-000978C0 00a0:
-	_game_engine_player_get_custom_motion_sensor_positions (0000)
-00097960 0030:
-	_get_flag_definition_index (0000)
-00097990 0030:
-	_get_ball_definition_index (0000)
-000979C0 0040:
-	_game_engine_switch_to_postgame (0000)
-00097A00 0010:
-	_game_engine_get_variant (0000)
-00097A10 0020:
-	_game_engine_get_goal_in_use (0000)
-00097A30 0060:
-	_game_engine_get_goal_position (0000)
-00097A90 0080:
-	_game_engine_set_goal_position (0000)
-00097B10 0020:
-	_game_engine_clear_goal_position (0000)
-00097B30 00d0:
-	_game_engine_render_nav_points (0000)
-00097C00 0020:
-	_game_engine_infinite_grenades_internal (0000)
-00097C20 0030:
-	_game_engine_infinite_grenades (0000)
-00097C50 0020:
-	_game_engine_has_teams (0000)
-00097C70 0030:
-	_game_engine_display_team_indicators (0000)
-00097CA0 0030:
-	_game_engine_has_shield (0000)
-00097CD0 0060:
-	_weapon_definition_index_to_list_index (0000)
-00097D30 0030:
-	_list_index_to_weapon_definition_index (0000)
-00097D60 00c0:
-	_game_engine_remap_vehicle (0000)
-00097E20 0190:
-	_game_engine_remap_weapon (0000)
-00097FB0 0070:
-	_game_engine_man_out (0000)
-00098020 0030:
-	_game_engine_state_message (0000)
-00098050 0090:
-	_game_engine_player_get_change_color (0000)
-000980E0 0070:
-	_game_engine_player_has_flag (0000)
-00098150 0050:
-	_game_engine_player_depower_active_camo (0000)
-000981A0 00e0:
-	_get_place_name (0000)
-00098280 0170:
-	_game_engine_get_place (0000)
-000983F0 0040:
-	_game_engine_hud_draw_motion_sensor (0000)
-00098430 0020:
-	_game_engine_test_flag (0000)
-00098450 0020:
-	_game_engine_test_trait (0000)
-00098470 00a0:
-	_netgame_flag_verify_no_team_duplicates (0000)
-00098510 0070:
-	_netgame_flag_verify_team_range (0000)
-00098580 0070:
-	_game_engine_playlist_next (0000)
-000985F0 0090:
-	_build_game_variant_slayer (0000)
-00098680 0090:
-	_build_game_variant_slayer_pro (0000)
-00098710 0090:
-	_build_game_variant_elimination (0000)
-000987A0 0090:
-	_build_game_variant_phantoms (0000)
-00098830 0090:
-	_build_game_variant_endurance (0000)
-000988C0 0090:
-	_build_game_variant_rockets (0000)
-00098950 0090:
-	_build_game_variant_snipers (0000)
-000989E0 0090:
-	_build_game_variant_team_slayer (0000)
-00098A70 0090:
-	_build_game_variant_oddball (0000)
-00098B00 0090:
-	_build_game_variant_team_oddball (0000)
-00098B90 0090:
-	_build_game_variant_reverse_tag (0000)
-00098C20 00a0:
-	_build_game_variant_accumulation (0000)
-00098CC0 00a0:
-	_build_game_variant_juggernaut (0000)
-00098D60 00a0:
-	_build_game_variant_stalker (0000)
-00098E00 0080:
-	_build_game_variant_king (0000)
-00098E80 0090:
-	_build_game_variant_king_pro (0000)
-00098F10 0080:
-	_build_game_variant_crazy_king (0000)
-00098F90 0090:
-	_build_game_variant_team_king (0000)
-00099020 0090:
-	_build_game_variant_ctf (0000)
-000990B0 0090:
-	_build_game_variant_ctf_pro (0000)
-00099140 0090:
-	_build_game_variant_invasion (0000)
-000991D0 0090:
-	_build_game_variant_iron_ctf (0000)
-00099260 0090:
-	_build_game_variant_race (0000)
-000992F0 0090:
-	_build_game_variant_rally (0000)
-00099380 0090:
-	_build_game_variant_team_race (0000)
-00099410 0090:
-	_build_game_variant_team_rally (0000)
-000994A0 0030:
-	_game_engine_override_map_name (0000)
-000994D0 0020:
-	_game_engine_override_game_variant (0000)
-000994F0 01a0:
-	_rasterize_in_game_score_draw_line (0000)
-00099690 0060:
-	_game_engine_hud_draw_messages (0000)
-000996F0 0080:
-	_game_engine_player_has_stealth_weapon (0000)
-00099770 0110:
-	_game_engine_weapon_fired (0000)
-00099880 0030:
-	_test_any_gamepad_button (0000)
-000998B0 00c0:
-	_ticks_to_unicode_time_string (0000)
-00099970 0060:
-	_game_engine_flag_reset (0000)
-000999D0 01b0:
-	_game_engine_variant_cleanup (0000)
-00099B80 0010:
-	_game_engine_allow_pause (0000)
-00099B90 0270:
-	_game_engine_predict_resources (0000)
-00099E00 0020:
-	_game_engine_draw_object_in_motion_sensor (0000)
-00099E20 0020:
-	_game_engine_allow_dynamic_lighting (0000)
-00099E40 0020:
-	_game_engine_allow_integrated_lights (0000)
-00099E60 0030:
-	_game_engine_force_autopickup (0000)
-00099E90 0060:
-	_game_engine_initialize (0000)
-00099EF0 0100:
-	_multiple_teams_alive (0000)
-00099FF0 00f0:
-	_team_has_players (0000)
-0009A0E0 0020:
-	_game_engine_should_end_game (0000)
-0009A100 0080:
-	_adjust_score_for_ranking (0000)
-0009A180 0230:
-	_populate_statistic_buffer (0000)
-0009A3B0 0080:
-	_game_engine_get_player_place (0000)
-0009A430 0060:
-	_postgame_statistic_get_rating (0000)
-0009A490 01f0:
-	_select_players_to_display (0000)
-0009A680 01c0:
-	_find_closest_player_index (0000)
-0009A840 0100:
-	_internal_rasterize_target_name (0000)
-0009A940 0920:
-	_internal_rasterize_score (0000)
-0009B260 0080:
-	_random_item (0000)
-0009B2E0 0020:
-	_game_engine_get_type (0000)
-0009B300 00a0:
-	_match_game_type (0000)
-0009B3A0 0150:
-	_game_engine_update_item_spawn (0000)
-0009B4F0 0070:
-	_game_engine_update_player_no_shield (0000)
-0009B560 0060:
-	_game_engine_update_player_always_invis (0000)
-0009B5C0 00e0:
-	_game_engine_update_non_deterministic (0000)
-0009B6A0 0040:
-	_multiplayer_message_internal (0000)
-0009B6E0 0090:
-	_multiplayer_message (0000)
-0009B770 0010:
-	_game_show_score_one_player (0000)
-0009B780 0060:
-	_game_show_score_team (0000)
-0009B7E0 00d0:
-	_game_show_score_you_ally_enemy (0000)
-0009B8B0 0080:
-	_game_show_score_extended (0000)
-0009B930 0020:
-	_game_show_score (0000)
-0009B950 0110:
-	_find_netgame_flags (0000)
-0009BA60 0040:
-	_find_netgame_flag (0000)
-0009BAA0 0130:
-	_handle_custom_starting_equipment (0000)
-0009BBD0 0150:
-	_game_engine_postspawn_player_update (0000)
-0009BD20 00d0:
-	_game_engine_get_damage_multiplier (0000)
-0009BDF0 03e0:
-	_game_engine_update_teleporter (0000)
-0009C1D0 0170:
-	_game_engine_get_distance_rating_for_spawn (0000)
-0009C340 0120:
-	_game_engine_get_friendly_bonus (0000)
-0009C460 00b0:
-	_default_starting_location_rate_function (0000)
-0009C510 0060:
-	_game_engine_get_starting_location_rating (0000)
-0009C570 0220:
-	_game_engine_get_variant_by_name (0000)
-0009C790 0130:
-	_game_engine_remap_equipment (0000)
-0009C8C0 0070:
-	_game_engine_remap_object_definition (0000)
-0009C930 0140:
-	_game_engine_get_state_message (0000)
-0009CA70 00c0:
-	_game_engine_did_player_win_default (0000)
-0009CB30 0030:
-	_game_engine_did_player_win (0000)
-0009CB60 0080:
-	_game_engine_did_team_win (0000)
-0009CBE0 0040:
-	_netgame_flag_verify_team_exists (0000)
-0009CC20 0060:
-	_netgame_verify_spawn_points (0000)
-0009CC80 0070:
-	_netgame_verify_equipment (0000)
-0009CCF0 0280:
-	_game_engine_verify_current_map (0000)
-0009CF70 0010:
-	_game_engine_playlist_initialize (0000)
-0009CF80 0080:
-	_game_engine_initialize_for_new_map (0000)
-0009D000 0140:
-	_game_engine_player_added (0000)
-0009D140 0480:
-	_game_engine_generate_title_string (0000)
-0009D5C0 09e0:
-	_game_engine_post_rasterize_post_game (0000)
-0009DFA0 02f0:
-	_game_engine_update (0000)
-0009E290 0340:
-	_game_engine_player_killed (0000)
-0009E5D0 00a0:
-	_game_engine_nonplayer_post_rasterize (0000)
-0009E670 0350:
-	_game_engine_rasterize_in_game_score (0000)
-0009E9C0 0140:
-	_game_engine_post_rasterize_in_game (0000)
-0009EB00 0060:
-	_game_engine_post_rasterize (0000)
-0025B190 0008:
-	__real@3ffe666660000000 (0000)
-0025B198 0002:
-	??_C@_11LOCGONAA@?$AA?$AA@ (0000)
-0025B19C 0019:
-	??_C@_0BJ@IAIEOKNM@ui?2multiplayer_game_text?$AA@ (0000)
-0025B1B8 001d:
-	??_C@_0BN@BLHEDFPC@weapon_is_flag?$CIweapon_index?$CJ?$AA@ (0000)
-0025B1D8 0022:
-	??_C@_0CC@HKAICMNO@c?3?2halo?2SOURCE?2game?2game_engine?4@ (0000)
-0025B1FC 003c:
-	??_C@_0DM@INOFLLBD@?$CIitem?9?$DOobject?4scale?5?$DO?$DN?50?45f?$CJ?5?$CG?$CG?5@ (0000)
-0025B238 0014:
-	??_C@_0BE@PEGHDBAP@NULL?5?$CB?$DN?5game_engine?$AA@ (0000)
-0025B24C 0014:
-	??_C@_0BE@CKCLKIJA@variant?5?$CG?$CG?5map_name?$AA@ (0000)
-0025B260 001a:
-	??_C@_0BK@EKPIBKAB@dead_player_index?5?$CB?$DN?5NONE?$AA@ (0000)
-0025B27C 000c:
-	??_C@_0M@CLNODINK@game_engine?$AA@ (0000)
-0025B288 0008:
-	__real@3f53104b57cf969e (0000)
-0025B290 0007:
-	??_C@_06IEOJBDIK@object?$AA@ (0000)
-0025B298 0097:
-	??_C@_0JH@PNHLNBOL@?$CBallow_pick_up?5?$HM?$HM?5?$CBTEST_FLAG?$CIwea@ (0000)
-0025B330 001a:
-	??_C@_0BK@LOIEOAAE@global_goal?$FLindex?$FN?4in_use?$AA@ (0000)
-0025B34C 0004:
-	__real@3f2147ae (0000)
-0025B350 0015:
-	??_C@_0BF@MOJDLNAG@NONE?5?$CB?$DN?5lookup_index?$AA@ (0000)
-0025B368 001d:
-	??_C@_0BN@OIBHHACP@place?4place?5?$DM?5maximum_places?$AA@ (0000)
-0025B388 002c:
-	??_C@_0CM@IEEKPKHB@?$CI?$CBall_tied?5?$HM?$HM?5?$CItied?$CJ?$CJ?5?$HM?$HM?5?$CI1?5?$DN?$DN?5g@ (0000)
-0025B3B4 001e:
-	??_C@_0BO@HPNHAHOG@levels?2test?2carousel?2carousel?$AA@ (0000)
-0025B3D4 000c:
-	??_C@_1M@CDCAHPKB@?$AA?$CF?$AAs?$AA?3?$AA?$CF?$AAs?$AA?$AA@ (0000)
-0025B3E0 0008:
-	??_C@_17PMDFIHDK@?$AA0?$AA?$CF?$AAd?$AA?$AA@ (0000)
-0025B3E8 0006:
-	??_C@_15KNBIKKIN@?$AA?$CF?$AAd?$AA?$AA@ (0000)
-0025B3F0 0004:
-	??_C@_13HOIJIPNN@?$AA?5?$AA?$AA@ (0000)
-0025B3F8 0046:
-	??_C@_0EG@GDPJDEHO@NETGAME?5CODE?5FAILURE?3?5game_engin@ (0000)
-0025B440 001b:
-	??_C@_0BL@FBPHGMEB@player?9?$DOteam_index?5?$CB?$DN?5NONE?$AA@ (0000)
-0025B45C 0013:
-	??_C@_0BD@JDPLED@player_index?$CB?$DNNONE?$AA@ (0000)
-0025B470 002b:
-	??_C@_0CL@DLMKKJM@player_count?5?$DM?5MULTIPLAYER_MAXIM@ (0000)
-0025B49C 0022:
-	??_C@_0CC@FPLNHLNP@place?$DMMULTIPLAYER_MAXIMUM_PLAYER@ (0000)
-0025B4C0 0013:
-	??_C@_0BD@EGHPGJBP@found?5local?5player?$AA@ (0000)
-0025B4D4 001d:
-	??_C@_0BN@LMCPNAFN@player_count?$DN?$CFd?0?5maxcount?$DN?$CFd?$AA@ (0000)
-0025B4F8 0008:
-	__real@3fc0bf25a0000000 (0000)
-0025B500 0015:
-	??_C@_0BF@IHIEPAI@NONE?5?$CB?$DN?5player_index?$AA@ (0000)
-0025B518 0016:
-	??_C@_0BG@OJNPNGFL@failed?5to?5teleport?5?$CFd?$AA@ (0000)
-0025B530 0008:
-	__real@3fe3333340000000 (0000)
-0025B538 000a:
-	??_C@_09DOOCKEDN@team_king?$AA@ (0000)
-0025B544 0005:
-	??_C@_04PJOEONHN@king?$AA@ (0000)
-0025B54C 0008:
-	??_C@_07LIOCHKOH@ironctf?$AA@ (0000)
-0025B554 0004:
-	??_C@_03JHHHHEKD@ctf?$AA@ (0000)
-0025B558 0008:
-	??_C@_07JHGHBFJP@oddball?$AA@ (0000)
-0025B560 000d:
-	??_C@_0N@JBNPINGA@accumulation?$AA@ (0000)
-0025B570 000d:
-	??_C@_0N@CPCFMJOB@team_oddball?$AA@ (0000)
-0025B580 0008:
-	??_C@_07IAHNGGND@stalker?$AA@ (0000)
-0025B588 000c:
-	??_C@_0M@MLMHALFL@elimination?$AA@ (0000)
-0025B594 000c:
-	??_C@_0M@NOCMPHHF@team_slayer?$AA@ (0000)
-0025B5A0 0007:
-	??_C@_06CBFFIGEC@slayer?$AA@ (0000)
-0025B5A8 0006:
-	??_C@_05GCEFBECL@rally?$AA@ (0000)
-0025B5B0 000a:
-	??_C@_09KMEIIIPA@team_race?$AA@ (0000)
-0025B5BC 0005:
-	??_C@_04GLEOMBLA@race?$AA@ (0000)
-0025B5C4 0004:
-	__real@3f0ccccd (0000)
-0025B5C8 003b:
-	??_C@_0DL@MBPNEOKF@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B604 003b:
-	??_C@_0DL@FDFHGCGI@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B640 003e:
-	??_C@_0DO@GDPJBCBM@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B680 003d:
-	??_C@_0DN@GLOHFEFE@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B6C0 003a:
-	??_C@_0DK@COLEDOMN@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B700 0047:
-	??_C@_0EH@GJGBEMDH@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B748 0047:
-	??_C@_0EH@BMGHBGKH@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B790 004a:
-	??_C@_0EK@DHDLIGMN@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B7E0 0049:
-	??_C@_0EJ@FACIONE@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B830 004f:
-	??_C@_0EP@CGHPHLAM@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B880 004f:
-	??_C@_0EP@MJLNBADC@NETGAME?5MAP?5FAILURE?3?5failed?5to?5f@ (0000)
-0025B8D0 0039:
-	??_C@_0DJ@MPJKFIIJ@NETGAME?5MAP?5FAILURE?3?5duplicate?5r@ (0000)
-0025B90C 0031:
-	??_C@_0DB@KDFIELID@NETGAME?5MAP?5FAILURE?3?5missing?5rac@ (0000)
-0025B940 0034:
-	??_C@_0DE@KIBANADL@NETGAME?5MAP?5FAILURE?3?5missing?5odd@ (0000)
-0025B974 0031:
-	??_C@_0DB@IKODHNKI@NETGAME?5MAP?5FAILURE?3?5missing?5hil@ (0000)
-0025B9A8 0035:
-	??_C@_0DF@EHBELDKM@NETGAME?5MAP?5FAILURE?3?5ctf?5flag?5ou@ (0000)
-0025B9E0 0032:
-	??_C@_0DC@DCAAPLNK@NETGAME?5MAP?5FAILURE?3?5duplicate?5c@ (0000)
-0025BA14 0030:
-	??_C@_0DA@LKKJMHEH@NETGAME?5MAP?5FAILURE?3?5missing?5ctf@ (0000)
-0025BA48 0057:
-	??_C@_0FH@ODDMDCIB@failed?5to?5initialize?5custome?5gam@ (0000)
-0025BAA0 000d:
-	??_C@_0N@MABFIMPF@title_string?$AA@ (0000)
-0025BAB0 001e:
-	??_C@_1BO@NNCACCCJ@?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?$CF?$AAd?$AA?$AA@ (0000)
-0025BAD0 001a:
-	??_C@_1BK@JPAKMPFP@?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?$CF?$AAd?$AA?$AA@ (0000)
-0025BAEC 0016:
-	??_C@_1BG@EEDCCJKF@?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?$CF?$AAd?$AA?$AA@ (0000)
-0025BB04 0012:
-	??_C@_1BC@DGONEHBJ@?$AA?5?$AA?7?$AA?5?$AA?7?$AA?5?$AA?7?$AA?$CF?$AAs?$AA?$AA@ (0000)
-0025BB18 000e:
-	??_C@_1O@HAEHHN@?$AA?5?$AA?7?$AA?5?$AA?7?$AA?$CF?$AAs?$AA?$AA@ (0000)
-0025BB28 000a:
-	??_C@_19GCIMBEIF@?$AA?5?$AA?7?$AA?$CF?$AAs?$AA?$AA@ (0000)
-0025BB34 0026:
-	??_C@_1CG@MDCDIADO@?$AA?7?$AA?$CF?$AAs?$AA?7?$AA?$CF?$AAs?$AA?7?$AA?$CF?$AAs?$AA?7?$AA?$CF?$AAs?$AA?7?$AA?$CF?$AAs?$AA?7?$AA?$CF?$AAs?$AA?$AA@ (0000)
-0025BB5C 0012:
-	??_C@_0BC@FNEEDLLE@ambient_computers?$AA@ (0000)
-0025BB70 0012:
-	??_C@_0BC@GOFPLFEH@ambient_machinery?$AA@ (0000)
-0025BB84 000f:
-	??_C@_0P@PLBDAHNN@ambient_nature?$AA@ (0000)
-0025BB94 0014:
-	??_C@_1BE@EFJKLKFF@?$AA?7?$AA?$CF?$AAs?$AA?7?$AA?$CF?$AAs?$AA?7?$AA?$CF?$AAs?$AA?$AA@ (0000)
-0025BBA8 001b:
-	??_C@_0BL@NPJONDMM@NONE?5?$CB?$DN?5local_player_index?$AA@ (0000)
-002DE3E0 0020:
-	_debug_player_color (0000)
-0043E498 047c:
-	_global_goal (0000)
-	_global_variant (0400)
-	_game_engine (0468)
-	_global_autogenerate_list (0474)
-	_global_autogenerate_count (0478)
-*/
+/* GAME_ENGINE.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/game/game_engine.c. */
 
 /* ---------- headers */
 
@@ -919,9 +386,8 @@ extern struct game_engine_globals game_engine_globals;
 extern struct game_engine_stage global_stage;
 extern long timeout_for_endgame_sound;
 
-/* whether a client has had the host's game type state this game (what
-changes in the first, from this machine's own start, it only takes: the
-game types show what changes in the next) */
+/* whether a client has had the host's game type state this game (what changes in the first, from this machine's
+own start, it only takes: the game types show what changes in the next) */
 static boolean game_engine_network_state_read = FALSE;
 
 /* ---------- public code */
@@ -1456,9 +922,8 @@ static void rasterize_in_game_score_draw_line(
 	return;
 }
 
-/* port: the in-game scoreboard's lists (game_engine_rasterize_scoreboard,
-game_engine_rasterize_in_game_score): the players in the game, not those who
-quit, ranked and placed among themselves */
+/* port: the in-game scoreboard's lists (game_engine_rasterize_scoreboard, game_engine_rasterize_in_game_score):
+the players in the game, not those who quit, ranked and placed among themselves */
 static boolean statistic_buffer_in_game_only = FALSE;
 
 long populate_statistic_buffer(
@@ -1666,31 +1131,20 @@ static long select_players_to_display(
 	return MIN(maximum_count, player_count);
 }
 
-/* port: the scoreboard of a full-screen view (game_engine_rasterize_in_game_score;
-a split-screen view's keeps the Xbox's six rows): SCOREBOARD_SCALE times the
-HUD's text, centred, on a panel (display.scoreboard_background). A team game's
-players in a column for each team (display.scoreboard_team_layout), else in
-order of score in one column, or two when one has too few rows; each with
-the player's ping in a network game (the host's measure:
-network_distributed.c). More players than a page are scrolled to with the
-mouse wheel and Page Up/Down (platform_scoreboard_scroll), a footer telling
-which are shown; opened, it shows the viewer's own player's page. */
+/* port: a full-screen view's scoreboard (split screen keeps the Xbox's 6 rows): scaled HUD text on a panel, team
+columns or 1-2 by score, host's pings (network_distributed.c), scrolled (platform_scoreboard_scroll), a footer */
 enum
 {
-	/* the rows' widths (in the scoreboard's text, before it is scaled):
-	place, name, score, ping (the last as wide as "Ping" or three digits,
-	so that the columns centred are their text centred) */
+	/* the rows' widths (in the scoreboard's text, before it is scaled): place, name, score, ping (the last as
+	wide as "Ping" or three digits, so that the columns centred are their text centred) */
 	SCOREBOARD_PLACE_WIDTH = 55,
 	SCOREBOARD_NAME_WIDTH = 150,
 	SCOREBOARD_SCORE_WIDTH = 95,
 	SCOREBOARD_PING_WIDTH = 40,
 	SCOREBOARD_COLUMN_WIDTH = SCOREBOARD_PLACE_WIDTH + SCOREBOARD_NAME_WIDTH + SCOREBOARD_SCORE_WIDTH + SCOREBOARD_PING_WIDTH,
 	SCOREBOARD_COLUMN_GAP = 40,
-	/* the rows a column has: as many as fit between 6 rows of the screen
-	from its top and 2 from its bottom (the motion sensor); the scoreboard
-	is centred on the screen, but never nearer its top than 4 rows (the
-	HUD's shields and health; its messages, such as "hold BACK for score",
-	are hidden while the scoreboard shows) */
+	/* the rows a column has: as many as fit between 6 rows from the screen's top and 2 from its bottom (motion
+	sensor); the scoreboard is centred, but never within 4 rows of the top (shields, health; HUD messages hide) */
 	SCOREBOARD_LAYOUT_TOP_ROWS = 6,
 	SCOREBOARD_BOTTOM_ROWS = 2,
 	SCOREBOARD_MINIMUM_TOP_ROWS = 4,
@@ -1803,15 +1257,13 @@ static void scoreboard_draw_row(
 scoreboard (notches and pages, down positive) */
 void platform_scoreboard_scroll(int open, long *notches, long *pages);
 
-/* the scoreboard's scroll (entries of one list, or rows of the team
-columns), and whether it showed last frame (opened, it shows the viewer's
-own player) */
+/* the scoreboard's scroll (entries of one list, or rows of the team columns), and whether it showed last frame
+(opened, it shows the viewer's own player) */
 static long scoreboard_scroll = 0;
 static boolean scoreboard_open = FALSE;
 
-/* display.scoreboard_team_layout: a team game's players in a column for each
-team ("teams", the red team's on the left), or all in order of score
-("score") */
+/* display.scoreboard_team_layout: a team game's players in a column for each team ("teams", the red team's on
+the left), or all in order of score ("score") */
 static boolean scoreboard_team_columns(
 	void)
 {
@@ -4126,10 +3578,8 @@ static void game_engine_update_teleporter(
 	return;
 }
 
-/* port: the gametype's vehicle respawn time (game_variant_options): the
-host puts a vehicle destroyed, or left empty away from where the map put
-it, back there after the time (the clients get the host's: the distributed
-netcode). Vehicles otherwise stay where they are left (the Xbox game's). */
+/* port: the gametype's vehicle respawn time (game_variant_options): the host puts a vehicle destroyed, or left
+empty off its map spot, back there after it (clients get the host's); else they stay where left (the Xbox's). */
 enum
 {
 	MAXIMUM_VEHICLE_HOMES = 64
@@ -4240,9 +3690,8 @@ void game_engine_update(
 				game_engine_update_player_always_invis(player_iterator.datum_index);
 				game_engine_update_teleporter(player_iterator.datum_index);
 
-				/* (on a client of the distributed netcode each game type
-				skips what the host decides, whose scores, flags, balls and
-				hills it has: game_engine_read_network_state) */
+				/* (on a client of the distributed netcode each game type skips what the host decides, whose
+				scores, flags, balls and hills it has: game_engine_read_network_state) */
 				if (game_engine->player_update_each_tick)
 					game_engine->player_update_each_tick(player_iterator.datum_index);
 			}
@@ -4456,10 +3905,8 @@ void game_engine_player_killed(
 	if (!player_kill)
 		dead_player->respawn_timer += global_variant.universal_variant.suicide_penalty;
 
-	/* port: the gametype's auto team balance (game_variant_options): the host
-	moves the dead to the other team when his is two or more bigger (his
-	next unit is the other team's, which the clients take it from:
-	network_player_attach_unit) */
+	/* port: the gametype's auto team balance (game_variant_options): the host moves the dead to the other team
+	when his is two or more bigger (clients take the team from his next unit: network_player_attach_unit) */
 	if (global_variant.universal_variant.teams && game_variant_options_get()->auto_team_balance &&
 		!network_game_distributed_client() && VALID_INDEX(dead_player->team_index, 2) && !dead_player->quit_out_of_game)
 	{
@@ -4946,9 +4393,8 @@ long find_netgame_flag(
 	return flag_index;
 }
 
-/* playlist data: in the Aug-15-2001 build the playlist functions were the only users of these two globals;
-   this build no longer reads them. their definition point here, with the playlist code, is inferred (the
-   Aug-2001 users and the later builds' layout), not attested */
+/* playlist data: only the Aug-15-2001 build's playlist functions used these two globals, which this build no
+longer reads; their place here, by the playlist code, is inferred (Aug-2001 users, later layouts), not attested */
 void *global_autogenerate_list = NULL;
 long global_autogenerate_count = 0;
 
@@ -7057,10 +6503,8 @@ boolean game_engine_vehicle_placement_allowed(
 	return set != _game_engine_vehicles_none && set - _game_engine_vehicles_warthog == type;
 }
 
-/* port: the gametype's friendly fire (game_variant_options) on a teammate's
-hit of the object (its damage marked friendly: object_cause_damage): all of
-it, none, its shields only, or explosives' only. A player's own hit of
-himself, or of what is not a player's teammate's, is the game's own. */
+/* port: the gametype's friendly fire (game_variant_options) on a teammate's hit of the object (its damage marked
+friendly: object_cause_damage): all, none, shields or explosives' only; self or non-teammate hits: unchanged */
 short game_engine_friendly_damage(
 	long attacker_player_index,
 	long object_index,
@@ -7490,10 +6934,8 @@ static void game_engine_update_weapons(
 					(item->object.scale <= 3.f));
 		}
 
-		/*
-		 * Slot 0x38 is populated by the CTF and oddball engines. It receives
-		 * each objective weapon during the per-tick item scan.
-		 */
+		/* Slot 0x38 is populated by the CTF and oddball engines. It receives
+		each objective weapon during the per-tick item scan. */
 		if (game_engine->objective_weapon_update)
 		{
 			struct weapon_datum *weapon = weapon_try_and_get(iterator.index);
@@ -7647,12 +7089,8 @@ static void game_engine_verify_current_map(
 		_netgame_flag_race_track,
 		"NETGAME MAP FAILURE: duplicate race track flag [team %d]");
 
-	/* BUG (preserved for exact matching): January passes team index zero for
-	 * both CTF checks, and netgame_verify_spawn_points never reads that
-	 * formal parameter.
-	 * A corrected build should filter starting locations by an authoritatively
-	 * recovered team-index field before reporting per-team counts.
-	 */
+	/* BUG (preserved for exact matching): January passes team 0 for both CTF checks; netgame_verify_spawn_points
+	ignores it. Fix: filter starting locations by a recovered team-index field before reporting per-team counts. */
 	netgame_verify_spawn_points(
 		game_engine_ctf,
 		0,
@@ -7718,9 +7156,8 @@ static void internal_rasterize_target_name(
 			target_player_index = NONE;
 	}
 
-	/* This is drawn once a frame, several frames per tick
-	(render_interpolation.c): the hold time counts ticks, as it did on the
-	Xbox. */
+	/* This is drawn once a frame, several frames per tick (render_interpolation.c): the hold time counts ticks,
+	as it did on the Xbox. */
 	{
 		static long last_game_times[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
 		long *last_game_time = NULL;
@@ -7813,9 +7250,8 @@ static boolean internal_rasterize_score(
 		if (message >= _game_engine_message_multi_kill_with_score &&
 			message <= _game_engine_message_killed_enemy_with_score)
 		{
-			/* port: a client of the distributed netcode replaying the host's
-			killing blow: the score the host's game type gave its killer
-			(its own has it only once the game type's state comes) */
+			/* port: a client of the distributed netcode replaying the host's killing blow: the score the host's
+			game type gave its killer (its own has it only once the game type's state comes) */
 			if (!network_damage_killer_score(player_index, &score))
 				score = game_engine->get_player_score(player_index, TRUE);
 		}
@@ -8414,9 +7850,8 @@ static void handle_custom_starting_equipment(
 	return;
 }
 
-/* port: a custom loadout's weapon's place in the globals' weapon list
-(game_engine_h's _loadout_weapon_*, from the assault rifle); random: one
-of those the map has */
+/* port: a custom loadout's weapon's place in the globals' weapon list (game_engine_h's _loadout_weapon_*,
+from the assault rifle); random: one of those the map has */
 static long game_engine_loadout_weapon_definition(
 	byte weapon)
 {
@@ -8669,10 +8104,8 @@ boolean game_engine_get_state_message(
 	return result;
 }
 
-/* port: a distributed client's players spawn when the host spawns them
-(network_player_attach_unit), but their respawn countdown runs here as it
-does on the host (game_engine_should_spawn_player), for the hud's count and
-its sounds: it stops a tick short, where the host's unit ends it */
+/* port: a distributed client's players spawn when the host does (network_player_attach_unit); their respawn
+countdown runs here (game_engine_should_spawn_player) for hud and sounds, a tick short: the host's unit ends it */
 void game_engine_client_respawn_countdown(
 	long player_index)
 {
@@ -8932,9 +8365,8 @@ boolean game_engine_king_read_network_state(byte const *buffer, long size, boole
 long game_engine_race_write_network_state(byte *buffer, long size);
 boolean game_engine_race_read_network_state(byte const *buffer, long size, boolean first);
 
-/* the distributed netcode (port/linux/game/network_damage.c): a player's
-score as the game type has it (with its killing blows' messages), 0 for
-none */
+/* the distributed netcode (port/linux/game/network_damage.c): a player's score as the game type has it (with its
+killing blows' messages), 0 for none */
 long game_engine_network_player_score(
 	long player_index)
 {
@@ -8943,9 +8375,8 @@ long game_engine_network_player_score(
 	return game_engine->get_player_score(player_index, TRUE);
 }
 
-/* the distributed netcode (port/linux/game/network_distributed.c): the
-current game type's state (scores, and what else every machine must agree
-on), which the host sends its clients; the size written, 0 for none */
+/* the distributed netcode (port/linux/game/network_distributed.c): the current game type's state (scores, and
+what else every machine must agree on), which the host sends its clients; the size written, 0 for none */
 long game_engine_write_network_state(
 	byte *buffer,
 	long size)
@@ -9006,3 +8437,29 @@ void game_engine_read_network_state(
 	if (postgame_state != 0 && game_engine_globals.postgame_state == 0)
 		game_engine_end_game();
 }
+
+#ifdef __BIG_ENDIAN__
+void game_engine_slayer_network_state_byte_swap(byte *buffer, long size);
+void game_engine_ctf_network_state_byte_swap(byte *buffer, long size);
+void game_engine_oddball_network_state_byte_swap(byte *buffer, long size);
+void game_engine_king_network_state_byte_swap(byte *buffer, long size);
+void game_engine_race_network_state_byte_swap(byte *buffer, long size);
+
+/* port: the game type's state (past whether the game is over) in the PC builds' order, which they send
+(their memory's), and back */
+void game_engine_network_state_byte_swap(
+	byte *buffer,
+	long size)
+{
+	if (!game_engine)
+		return;
+	switch (game_engine_get_type())
+	{
+	case game_engine_ctf: game_engine_ctf_network_state_byte_swap(buffer, size); break;
+	case game_engine_slayer: game_engine_slayer_network_state_byte_swap(buffer, size); break;
+	case game_engine_oddball: game_engine_oddball_network_state_byte_swap(buffer, size); break;
+	case game_engine_king: game_engine_king_network_state_byte_swap(buffer, size); break;
+	case game_engine_race: game_engine_race_network_state_byte_swap(buffer, size); break;
+	}
+}
+#endif

@@ -106,6 +106,38 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   gets none. The measurement run (Matt: "Done", 2026-10-06 21:15) shows
   both work: see "G7 analysis" ("Measurement run"). Hardware SUCCESS
   (Matt: "Yes, it did!": the resume returned to the quit point).
+- The map scan (Matt, 2026-10-06): the largest loads of the 24 maps, and
+  the maps for the next measurement run (d40, a10 to its end, c20; then
+  d20). See "G7 analysis" ("Map scan").
+- The vertex cache growth fix (Matt, 2026-10-06: "Yes, thanks."): the
+  three draws of map vertex buffers (`rasterizer_xbox_draw_primitives.c`:
+  BSP materials, model parts) give the device their vertex count
+  (`d3d8_draw_vertex_count`, under `HALO_PS3`), which the Xbox's
+  `DrawIndexedPrimitive` wrapper drops. `d3d8_rsx.c` sizes each element
+  copy to the whole buffer at its first draw, so no copy grows or leaves
+  an old copy: the arena holds at most the scan's data (24.3 MB, a10g).
+  The two units compile; no PKG yet (see "Log").
+- The mux fix (Matt, 2026-10-06: the NV2A mismatches of the shader check):
+  the combiner mux in `ps3_rsx_fp.c` computed `(cd - ab) * s + ab`, which
+  can miss `cd` by one ulp. A later mux that reads such an r0.a (exactly
+  0.5 or -0.5 in the reference) then selected the other side (trap 37).
+  The mux is now exact. PC: 0 failures in 720000 random keys (240 seeds of
+  3000 keys; 420000 keys also without the optimizer), against 13 in 60000
+  keys before; 26 instructions on average, as before. Not tested on the
+  PS3: the PKG of 21:54 also holds part of another session's network
+  edits (21:48 to 21:59), so do not install it.
+- G7 step 3, system link on the LAN with the PC builds (Matt, 2026-10-06:
+  "Can you do this?"): built, not tested. Winsock and XNet on the PSL1GHT
+  sockets (`port/ps3/src/ps3_net.c` and `.h`, `port/ps3/xbox/xnet_ps3.c`;
+  `xnet_null.c` is gone), and the PC's byte order on the wire (trap 38).
+  See "G7 analysis" ("System link"). PKG of 22:52 in `build/ps3_net/` (a
+  build folder of its own, see "Log"); it also holds the vertex cache
+  growth fix and the mux fix above, both untested on the PS3.
+- The audit of the code that a10 does not run (Matt, 2026-10-06): no halt
+  and no thread death found. 6 PS3-only faults change the behaviour
+  (doors, controls, AI, a d40 picture). Fixed (Matt: "Yes, you can fix
+  them."): the changed units compile; no PKG yet, not tested on the PS3.
+  See "Audit of the code a10 does not run".
 - Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
@@ -156,6 +188,10 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   - The save items (G7 step 2): `free space of <path>: N MB` at each save
     check of the game; the `fsync` time in the close line of a file with 1
     MB or more of transfers; `fsync failed (N)` on an error.
+  - System link (G7 step 3): `Winsock: PSL1GHT sockets, this PS3 at
+    a.b.c.d` at the start; `[net] <call>: lv2 error N` for the first 32
+    socket errors but would-block (`ps3_net.c`); `Winsock: SO_RCVBUF of N
+    bytes refused` with the size lv2 took (`xnet_ps3.c`).
 
 ## Goal stack
 
@@ -168,7 +204,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
-| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered) |
+| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested |
 | G8 60 frames per second: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX | Not started (Matt, 2026-10-06: the last goal) |
 
 ## G7 analysis (2026-10-06)
@@ -256,6 +292,141 @@ Three read-only audits of the code. No code change.
     resume after the PS3 restart read the save and ran a30 at 30 frames
     per second.
   - Not covered: the larger maps.
+- Map scan 2026-10-06 (Matt: "Scan the 24 maps for their largest loads"):
+  a PC script (the session's scratchpad) walks the tag data and the BSPs
+  of each map with the swap tables (0 errors). No code change. Sizes in
+  MB:
+  - Vertex cache (one 48 MB block, emptied at each map or BSP load): each
+    vertex once, as a float4 array for each element that the game's
+    vertex shaders read (BSP 5 + 2 lightmap, models 7). The largest BSP:
+    a10g 10.4 (then a10f 10.2, c20_3 9.6, a10b 9.6, a10e 9.3, d40c 9.2,
+    d40b 9.1, d20_muster 9.0). All the models of a map (all levels of
+    detail): 8 to 17 (a30 17.2). Both: at most 24.3 (a10g). A BSP array
+    grows by doubling when more of it is visible, and the old copy stays
+    until the next load: up to 4 times its data. In that worst case 8
+    BSPs pass 48 (a10g 55.5, a10f, a10b, d40c, a10e, d40b, d20_muster,
+    d20_hangar). The a10 run of 2026-10-06 measured 10.2.
+  - Textures as RSX copies (DXT as they are, the rest 4 bytes a texel):
+    all the bitmaps of a map: d40 94.6, a10 82.6, b40 79.9, c40 78.5, c10
+    75.2, c20 73.2 (a30 52.2; the run measured 21.0). The set of one BSP
+    (its shaders, lightmaps, fog, weather, lens flares): at most 25.4
+    (c20_3). With all the other bitmaps of its map: at most 54.6 (d40b).
+  - Sounds: the largest permutation (one block of the 4 MB sound cache) is
+    372 KB (a10, a50, d20). The sound cache is the Xbox's.
+  - Multiplayer maps: at most 10.7 of vertex data and 35.7 of textures.
+  - For the next measurement run: d40 (d40b, d40c), a10 to its end (a10f,
+    a10g), c20 (c20_1 at the start has 7.6 of BSP vertex data); then d20.
+- System link, step 3 (2026-10-06, Matt: "Can you do this?"). Built, not
+  tested on the PS3:
+  - Transport: `port/ps3/src/ps3_net.c` calls libnet's `netSocket` and
+    co. (their error is each thread's `net_errno`; trap 39), sets
+    `sin_len`, makes sockets non-blocking with `SO_NBIO`, and selects with
+    `netPoll`, Winsock's way (a failed connect is in the error set, by
+    `SO_ERROR`). The PS3's address comes from netctl (`SYSMODULE_NETCTL`,
+    asked once a second); random numbers from `sysGetRandomNumber`.
+    `port/ps3/xbox/xnet_ps3.c` is `port/linux/src/xnet.c` without internet
+    play and the latency test: Winsock's `sockaddr_in` to lv2's,
+    `network.address` and `network.broadcast` from `config.toml`, the
+    XNADDR with the PS3's address (pending while netctl gets one, which
+    `transport_initialize` waits up to 10 s for), `WSAGetLastError` as the
+    thread's last error. A refused 1 MB socket buffer falls back by halves.
+  - Wire order (trap 38): message headers and the typed packet fields are
+    big-endian on the wire, the PS3's own order, so `message_header.c` and
+    `data_encoding.c` no longer swap on a big-endian host. The PC's
+    little-endian memory is swapped on the PS3 when it goes out and when it
+    comes in: the advertisement (`game_advertisement_byte_swap`, both
+    handlers), the settings record (`network_game_byte_swap`, at its two
+    sends and before a complete record is applied), and the distributed
+    messages (`network_distributed_byte_swap`: at the five send functions
+    of `network_game_globals.c` and `network_server_message_handler.c`, and
+    once in `network_distributed_handle_message`, batches included; the
+    entries in `network_distributed.c`, `network_objects.c`,
+    `network_damage.c`, the game types' states in `game_engine*.c`). The
+    receive buffers are 4-aligned: handlers read entries in place, floats
+    too (trap 23).
+  - Checks on the PC: the walkers of the unit states and relayed actions
+    (the variable entries) against their writers, 200000 random states, 0
+    failures (a planted fault fails). A review of every swap list against
+    its struct and of the packet field tables: no defect.
+  - The test: a PC build of the same source (network version 11) on the
+    LAN, and its firewall open for UDP 5150 and 5151 and TCP 5150. The PC
+    hosts a system link game and the PS3 joins; then the PS3 hosts and the
+    PC joins; a few minutes each (moves, shots, kills, scores on both).
+    Games that do not show: `network.broadcast` in both `config.toml`.
+
+## Audit of the code a10 does not run (2026-10-06)
+
+Matt: "Audit the code that a10 does not run (cutscenes, vehicles, the Flood,
+the scripts of the other levels)". Six read-only audits and four checks of
+the whole tree. No code change.
+
+- The scope, from the maps (a PC script in the session's scratchpad): the
+  88 script functions and 3 external globals that only a30 to d40 use; the
+  tag groups that a10 does not have (`ctrl`, `dobc`, `elec`, `glw!`,
+  `lifi`, `rain`, `swat`, `wind`); the vehicles, characters, weapons and
+  effects of each map.
+- No halt and no thread death found in: the recorded animations (all 349
+  of the 10 maps simulated: no assert can fail), cinematics, cameras,
+  titles, the c10 video effect, custom and scenery animations; vehicles,
+  seats, vehicle physics, vehicle scripts and AI; the Flood, Sentinels,
+  the Monitor, Hunters, Jackals, Engineers, stealth elites, the new
+  weapons, projectiles and powerups; the AI scripts (swarms, spawns,
+  migration, conversations); the other scripts, devices, level changes
+  and the d40 end (the credits are Bink: the null player returns to the
+  menu, as at boot); the PS3 layers (texture formats of all maps, draws,
+  shaders, render targets, sound formats, waits).
+- Checks of the whole tree:
+  - The dump scan of trap 36, with a pattern that also finds typedef names
+    (`size_t`, `uintptr_t`), then the 64-bit types only. 494 units: only
+    the 6 known hits. The pattern:
+    `grep -rn -E "\([A-Za-z_][A-Za-z_0-9 ]*\) \(int\) " --include=*.original build`
+  - Map data: every 4-byte field of the tag data and the BSPs of the 10
+    campaign maps and `ui.map` is 4-aligned (trap 23).
+  - The game's views of tag data (DWARF of the 476 game units, 310 views)
+    against the swap layouts: the narrow views 1, 2 and 5 below. The 3083
+    game fields on bytes that the swap leaves (padding to Invader) are 0
+    in all maps, or the game does not read them.
+- The faults (PS3 only, none halts; fixed, see "Fixes" below):
+  1. Doors lose their flags. `scenario_machine_datum.flags`
+     (`device_machines.h`) is a byte at +0x30 of a 32-bit field (trap 21):
+     the PS3 reads the high byte, always 0. No door gets "does not operate
+     automatically", "one sided", "never appears locked" or "opened by
+     melee attack". Doors with flags: a10 3, a50 142, b30 1, b40 44, c10
+     25, c20 12, c40 14, d20 120, d40 69. A locked door opens for any biped
+     near it when it has power, a one-sided door from both sides; a melee
+     door does not open.
+  2. Controls lose "usable from both sides". `scenario_control_datum.flags`
+     (`device_controls.c`) is a word at +0x30 of a 32-bit field. The action
+     prompt then shows only at the front of the panel. Controls with the
+     flag: a30 1, b30 2, b40 14, c10 5, c40 14. A panel whose front the
+     player cannot reach blocks the level (not checked).
+  3. `machine_update` (`device_machines.c:251`) reads the byte at unit
+     +0xB6, the high byte of the word `damage_flags` on the PS3: bit 10
+     (`_object_cannot_hold_weapon_bit`), not bit 2 (`_object_dead_bit`).
+     Corpses keep automatic doors open; units without their weapon arm
+     (the Flood) cannot open them. All maps.
+  4. `actor_perception.c:1236` reads the same byte (struct at line 417):
+     dead targets count as alive, and units without their weapon arm as
+     dead (unacknowledged and orphan targets). The AI then picks other
+     dialogue. All maps.
+  5. `extra_flags` of the chicago shader
+     (`rasterizer_xbox_transparent_geometry.c:357`) is a word at +0x60 of a
+     32-bit field. The d40 self-destruct screens show wrong digits; the
+     first-person weapon screens fade with active camouflage.
+  6. `encounters.c:741` and `:808`: `FLAG(squad_index)` in a 32-bit mask.
+     The PPC gives 0 for squads 32 to 63, x86 uses the low 5 bits. b40
+     `ext_b_area_a_cov` patrols with such squads: its active area can
+     differ. Minor.
+  - Fixes (2026-10-06, Matt: "Yes, you can fix them."): 1, 2 and 5 put
+    the narrow member at the field's last bytes under `__BIG_ENDIAN__`
+    (trap 21; the offset asserts of 5 too); 3 reads
+    `unit->object.damage_flags` with `_object_dead_bit`; 4 moves its view
+    to +0xB7 under `__BIG_ENDIAN__`; 6 uses `squad_index & 31` (x86's
+    result). The compiled code reads +0x33, +0x32, the word at +0xB6, +0xB7
+    and +0x62, and masks the shift. Not tested on the PS3.
+- Sound and picture of the PS3 layers: no reverb, no Doppler, no sound
+  cones (`dsound_ps3.c`: `SetI3DL2Listener`, `SetVelocity` and the cone
+  calls do nothing). The texture copies have no cap (see "Map scan").
 
 ## G4 summary
 
@@ -460,8 +631,8 @@ Three read-only audits of the code. No code change.
     205 to 47 instructions (1332 to 264 words), 5 temporaries; the simplest
     shader 60 to 3. With `KEYS=3000` the check shows 1 to 3 mismatches
     against the NV2A reference on some seeds (`SEED=1`: key 1729). The
-    translation without the optimizer gives the same ones; not
-    investigated.
+    translation without the optimizer gives the same ones. Fixed
+    2026-10-06: the mux was not exact (see "Now", trap 37).
   - Optimizer run 2026-10-06 (Matt: SUCCESS, a10, then the menu; the
     listener started about 200 s after the boot): 11 timer windows. 8 at
     29.7 to 30.0 frames per second, the RSX wait 0.0 ms in all 11. The
@@ -622,7 +793,9 @@ Three read-only audits of the code. No code change.
     it (a `byte` of long flags). After the swap, that view gets the high
     bytes. Either move the narrow member to the field's last bytes under
     `__BIG_ENDIAN__` (`fog_definitions.h`), or swap the field in the
-    narrower units (`FIELD_UNITS` in `tools/ps3_tag_swap.py`).
+    narrower units (`FIELD_UNITS` in `tools/ps3_tag_swap.py`). Private
+    structs in `.c` files and raw byte reads of a runtime word (unit +0xB6)
+    have the same fault (see "Audit of the code a10 does not run").
 22. After a change of the tag layouts or the swap, run
     `tools/ps3_tag_swap_check.sh` on the maps before a hardware test.
 23. The PPE faults on a misaligned float load or store, and lv2 then ends
@@ -694,6 +867,21 @@ Three read-only audits of the code. No code change.
     `HALO_PTR32` pointers are correct. GCC gives no warning: use the dump
     scan (see "Commands"). A hit is a fault only if the `(int)` operand is a
     pointer and the 64-bit result is used as it is (not cut to 32 bits).
+37. A combiner mux must give `cd` or `ab` exactly. `(cd - ab) * s + ab`
+    can miss `cd` by one ulp. When the exact value is 0.5 or -0.5, a later
+    mux that reads it in r0.a (the parity of r0.a * 255 + 0.5, or r0.a >=
+    0.5) then selects the other side: wrong colours. `ps3_rsx_fp.c` uses
+    `ab - ab * s + cd * s`, exact for s 0 or 1. Keep a rewrite of the mux,
+    or of the optimizer, exact.
+38. The network wire is the PC builds' order. Message headers and typed
+    packet fields (`data_encoding.c`) are big-endian: the PS3 sends them
+    as they are, the PC swaps them. Raw packet fields, the settings record
+    and the distributed messages are the PC's little-endian memory: a new
+    or changed multi-byte field in them needs its `BYTE_SWAP_*` line in the
+    matching `*_byte_swap` function (see "G7 analysis", "System link").
+39. PSL1GHT's libnet wrappers (`socket`, `bind`, `poll`, ...) put their
+    error in newlib's one `errno`, which all threads share. `ps3_net.c`
+    calls `netSocket` and co. and reads `net_errno`, each thread's own.
 
 ## Commands
 
@@ -786,8 +974,8 @@ then `./build.sh pkg LOG_IP=<address>`.
 | Path | Contents |
 | --- | --- |
 | `Makefile`, `build.sh` | The PS3 build |
-| `port/ps3/src/` | The host layer: the entry point (`ps3_main.c`), `ps3_host.c` (lv2 for the Xbox layer), video, pads, audio, log |
-| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, D3D on the RSX, XInput on the pads (`xinput_ps3.c`), DirectSound on the audio port (`dsound_ps3.c`), headless network |
+| `port/ps3/src/` | The host layer: the entry point (`ps3_main.c`), `ps3_host.c` (lv2 for the Xbox layer), video, pads, audio, log, sockets (`ps3_net.c`) |
+| `port/ps3/xbox/` | The Xbox layer on the PS3: kernel, memory window, files, D3D on the RSX, XInput on the pads (`xinput_ps3.c`), DirectSound on the audio port (`dsound_ps3.c`), Winsock and XNet on the PSL1GHT sockets (`xnet_ps3.c`) |
 | `port/ps3/src/ps3_gpu.c`, `ps3_gpu.h` | The RSX back end of D3D (G4) |
 | `port/ps3/src/ps3_rsx_*.c`, `ps3_rsx_program.h` | RSX microcode at run time from NV2A vertex programs and combiners (G4) |
 | `port/ps3/xbox/d3d8_rsx.c` | The D3D 8 device on the RSX (G4), from `d3d8_gl.c` |
@@ -943,3 +1131,48 @@ then `./build.sh pkg LOG_IP=<address>`.
   space and the `fsync` work; the data is in "G7 analysis" ("Measurement
   run"). The listener is stopped. Hardware SUCCESS (Matt: "Yes, it did!":
   the resume returned to the quit point).
+- 2026-10-06: The map scan (Matt: "Scan the 24 maps for their largest
+  loads"): the vertex data, textures and sounds of the 24 maps, with a PC
+  script. Results and the maps for the next measurement run in "G7
+  analysis" ("Map scan"). No code change.
+- 2026-10-06: The vertex cache growth fix (Matt: "Yes, thanks."):
+  `rasterizer_xbox_draw_primitives.c` (3 calls under `HALO_PS3`),
+  `d3d8_rsx.c` (`d3d8_draw_vertex_count`, the extent in `vertex_cache_get`).
+  Both units compile. No PKG: the tree also holds another session's
+  uncommitted network work (edits to 22:00). Waiting for Matt's word.
+- 2026-10-06: The NV2A mismatches of the shader check (Matt: "Do this"):
+  all 13 failures in 60000 random keys came from the combiner mux
+  (`ps3_rsx_fp.c`, trap 37). Fixed. `tools/ps3_rsx_shader_check.sh`: 0
+  failures (`KEYS=3000 SEED=1`, and the default 300 keys); a sweep of
+  720000 keys: 0 failures. The PKG of 21:54 also holds part of another
+  session's network edits; its `check` was stopped. No clean PKG yet, not
+  tested on the PS3.
+- 2026-10-06: G7 step 3, system link (Matt: "Can you do this?"):
+  `port/ps3/src/ps3_net.c` and `.h`, `port/ps3/xbox/xnet_ps3.c` (in place
+  of `xnet_null.c`), the byte order in `byte_swapping.c` and `.h`
+  (`byte_swap_parts`, `BYTE_SWAP_*`), `data_encoding.c`,
+  `message_header.c`, `network_game_manager.c` and `.h`,
+  `network_server_message_handler.c`, `network_client_message_handler.c`,
+  `network_game_globals.c`, `network_distributed.c` and `.h`,
+  `network_objects.c`, `network_damage.c`, `game_engine.c` and the five
+  game types; `port/ps3/README.md` ("System link"). The comments longer
+  than 2 lines in the changed files are shortened (code unchanged, checked
+  without comments). `check` passes (0 `r2off`, `.got` 0x2f38). PKG of
+  22:52 in `build/ps3_net/` (`./build.sh -j12 BUILD=build/ps3_net pkg`):
+  other sessions build in `build/ps3`. It holds the whole tree, the vertex
+  cache growth fix and the mux fix too. Waiting for the test with a PC
+  build (see "G7 analysis", "System link").
+- 2026-10-06: The audit of the code that a10 does not run (Matt: "Audit
+  the code that a10 does not run (cutscenes, vehicles, the Flood, the
+  scripts of the other levels)"): six read-only audits and four checks of
+  the whole tree. No halt and no thread death found; 6 PS3-only faults
+  change the behaviour. Results in "Audit of the code a10 does not run".
+  No code change.
+- 2026-10-06: The 6 audit faults fixed (Matt: "Yes, you can fix them."):
+  `device_machines.h`, `device_machines.c`, `device_controls.c`,
+  `actor_perception.c`, `encounters.c`,
+  `rasterizer_xbox_transparent_geometry.c`; their comments longer than 2
+  lines are shortened. The 8 units that use them compile
+  (`./build.sh BUILD=build/ps3_audit`, a build folder of its own). No PKG:
+  the tree also holds other sessions' uncommitted work. Waiting for Matt's
+  word.

@@ -1,78 +1,5 @@
-/*
-NETWORK_GAME_MANAGER.C
-
-symbols in this file:
-0011A170 0040:
-	_network_game_invalidate_player (0000)
-0011A1B0 0090:
-	_network_game_add_machine (0000)
-0011A240 0090:
-	_network_game_update_machine (0000)
-0011A2D0 0070:
-	_xbox_set_machine_name (0000)
-0011A340 0090:
-	_network_game_generate_local_machine_name (0000)
-0011A3D0 0040:
-	_network_game_end_and_load_ui (0000)
-0011A410 00b0:
-	_network_game_reset_for_next_round (0000)
-0011A4C0 0010:
-	_network_game_assign_players_to_team (0000)
-0011A4D0 0030:
-	_network_player_is_valid (0000)
-0011A500 00b0:
-	_network_game_invalidate_machine (0000)
-0011A5B0 01a0:
-	_network_game_add_player (0000)
-0011A750 0140:
-	_compare_network_players (0000)
-0011A890 0080:
-	_network_game_spawn_player (0000)
-0011A910 0090:
-	_network_game_player_is_valid (0000)
-0011A9A0 00a0:
-	_network_game_invalidate (0000)
-0011AA40 00a0:
-	_network_game_update_player (0000)
-0011AAE0 00c0:
-	_network_game_remove_player (0000)
-0011ABA0 01b0:
-	_network_game_create_game_objects (0000)
-0011AD50 00e0:
-	_network_game_remove_machine (0000)
-00283DA4 0031:
-	??_C@_0DB@DPKLAPFE@c?3?2halo?2SOURCE?2networking?2networ@ (0000)
-00283DD8 0035:
-	??_C@_0DF@FMJAGNKK@game?5?$CG?$CG?5machine?5?$CG?$CG?5network_machi@ (0000)
-00283E10 0043:
-	??_C@_0ED@LDCLPLHI@?8?$CFs?8?5is?5not?5a?5valid?5machine?5name@ (0000)
-00283E54 0016:
-	??_C@_0BG@OIMNPPEI@XSetNickname?$CI?$CJ?5failed?$AA@ (0000)
-00283E6C 002d:
-	??_C@_0CN@JCIPKPMA@XSetNickname?$CI?$CJ?5failed?5to?5set?5sys@ (0000)
-00283E9C 001c:
-	??_C@_0BM@GOCBNICP@system?5nickname?5set?5to?5?8?$CFs?8?$AA@ (0000)
-00283EB8 0036:
-	??_C@_0DG@KPIAMNFF@game?5?$CG?$CG?5?$CImachine_index?$DMMAXIMUM_N@ (0000)
-00283EF0 0039:
-	??_C@_0DJ@PKEDFKIN@game?5is?5already?5at?5maximum?5playe@ (0000)
-00283F2C 000f:
-	??_C@_0P@KHIDKAOH@game?5?$CG?$CG?5player?$AA@ (0000)
-00283F40 004b:
-	??_C@_0EL@LDBNCIG@multiple?5players?5on?5the?5same?5mac@ (0000)
-00283F8C 000f:
-	??_C@_0P@NHMFPDJJ@player?5?$CG?$CG?5game?$AA@ (0000)
-00283F9C 002c:
-	??_C@_0CM@KIIMJJBI@tried?5to?5update?5a?5player?5with?5in@ (0000)
-00283FC8 002c:
-	??_C@_0CM@NFHLBLAN@tried?5to?5remove?5a?5player?5with?5in@ (0000)
-00283FF4 0017:
-	??_C@_0BH@GFBBGLI@?$CB?$CCbad?5game?5connection?$CC?$AA@ (0000)
-0028400C 0024:
-	??_C@_0CE@GKPEJODL@failed?5to?5remove?5a?5machine?8s?5pla@ (0000)
-00284030 0010:
-	??_C@_0BA@OPIINEDG@game?5?$CG?$CG?5machine?$AA@ (0000)
-*/
+/* NETWORK_GAME_MANAGER.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/networking/network_game_manager.c. */
 
 /* ---------- headers */
 
@@ -84,6 +11,7 @@ symbols in this file:
 #include "interface/player_ui.h"
 #include "saved games/player_profile.h"
 #include "main/main.h"
+#include "memory/byte_swapping.h"
 #include "memory/data.h"
 #include "network_game_globals.h"
 #include "network_game_manager.h"
@@ -102,19 +30,8 @@ native builds' session limits (port/linux/include/halo_port_limits.h) */
 #define NETWORK_GAME_MACHINE_SLOTS HALO_PORT_MAXIMUM_NETWORK_MACHINES
 #define NETWORK_GAME_PLAYER_SLOTS HALO_PORT_MAXIMUM_NETWORK_PLAYERS
 
-/* port: the distributed netcode names players by their datums' absolute
-indices (port/linux/game), which every machine must share: a machine that
-joined the game in progress too, which has neither the players who left
-(their datums stay until the game ends) nor the order the others added
-players in. So there each player's datum is its slot in the host's player
-list: every machine makes it there (network_game_spawn_player), and the host
-gives a player added to the game in progress a slot whose datum is free.
-(Only in a game: in the lobby the host runs the user interface's scenario,
-whose local player holds datum 0, and a full lobby could not use slot 0.)
-A player who quit the game holds his slot no longer once his unit is gone:
-his datum gives way to the next player there (network_game_spawn_player),
-so that those who quit do not keep the game from filling. Nor in the lobby
-between games, where the last game's datums stay until the next is made. */
+/* port: in a game a player's datum is his slot in the host's list (network_game_spawn_player), as the distributed
+netcode's indices must agree on late joiners. Not in the lobby, whose UI scenario's local player has datum 0. */
 /* a player who quit the game and has no unit left: his slot can be another's */
 static boolean network_game_player_slot_reusable(
 	struct player_datum const *player)
@@ -184,9 +101,8 @@ boolean network_game_add_machine(
 		0x6A,
 		game && machine && network_machine_is_valid(machine));
 
-	/* port: at its own index, not the first free slot: the host numbers a
-	machine by its connection's slot, which must be its slot here (two
-	machines once shared an index) */
+	/* port: at its own index, not the first free slot: the host numbers a machine by its connection's slot,
+	which must be its slot here (two machines once shared an index) */
 	machine_index = machine->machine_index;
 	if (!network_machine_is_valid(&game->machines[machine_index]))
 	{
@@ -251,9 +167,8 @@ void network_game_generate_local_machine_name(
 	char ascii_machine_name[32];
 	HANDLE find_handle;
 
-	/* port: a machine that brings one player to the game (the one who
-	joined multiplayer on it) is named after that player's profile, not the
-	system's random nickname: the system link list shows a host's game by it */
+	/* port: a machine that brings one player to the game (the one who joined multiplayer on it) is named after
+	that player's profile, not the system's random nickname: the system link list shows a host's game by it */
 	{
 		short local_player_index;
 		short joined_player_index = NONE;
@@ -489,9 +404,8 @@ boolean network_game_spawn_player(
 			struct player_datum *quitter = (struct player_datum *)((byte *)player_data->data +
 				player_data->size * player->player_list_index);
 
-			/* (the host's choice stands: a client whose clock has not yet
-			come to the quit of the player there gives way too, to another
-			machine's player) */
+			/* (the host's choice stands: a client whose clock has not yet come to the quit of the player there
+			gives way too, to another machine's player) */
 			if (((struct datum_header *)quitter)->identifier != 0 &&
 				(network_game_player_slot_reusable(quitter) ||
 					quitter->network_player_data.machine_index != player->machine_index ||
@@ -754,11 +668,8 @@ boolean network_game_create_game_objects(
 	game_precache_new_map(options.map_name, TRUE);
 	main_menu_unload();
 
-	/* port: and whenever a map is loaded. After a game the client is back in
-	the main menu's map with its clock ended (network_game_dispose_game_objects),
-	so not in progress: the next game's map was loaded over it, and the
-	texture cache, opened again, lost the menu's loaded textures (a crash in
-	lruv_block_new) */
+	/* port: or when a map is loaded: after a game the client is in the menu's map, clock ended, not in progress
+	(network_game_dispose_game_objects): loading over it lost the menu's textures (a crash in lruv_block_new) */
 	if (game_in_progress() || game_map_loaded())
 	{
 		game_dispose_from_old_map();
@@ -802,5 +713,84 @@ boolean network_game_create_game_objects(
 
 	return game->local_data.game_objects_loaded;
 }
+
+#ifdef __BIG_ENDIAN__
+static void network_player_byte_swap(
+	struct network_player *player)
+{
+	BYTE_SWAP_ARRAY(player->name);
+	BYTE_SWAP_FIELD(player->primary_color_index);
+	BYTE_SWAP_FIELD(player->icon_index);
+}
+
+/* (engine_index: the game type, which says what the variant's union holds) */
+static void game_variant_byte_swap(
+	struct game_variant *variant,
+	long engine_index)
+{
+	union game_engine_variant *engine_variant = &variant->game_engine_variant;
+
+	BYTE_SWAP_ARRAY(variant->human_readable_game_description);
+	BYTE_SWAP_FIELD(variant->game_engine_index);
+	BYTE_SWAP_FIELD(variant->universal_variant.flags);
+	BYTE_SWAP_FIELD(variant->universal_variant.goal_radar);
+	BYTE_SWAP_FIELD(variant->universal_variant.respawn_time_growth);
+	BYTE_SWAP_FIELD(variant->universal_variant.respawn_time);
+	BYTE_SWAP_FIELD(variant->universal_variant.suicide_penalty);
+	BYTE_SWAP_FIELD(variant->universal_variant.lives);
+	BYTE_SWAP_FIELD(variant->universal_variant.health);
+	BYTE_SWAP_FIELD(variant->universal_variant.score_to_win);
+	BYTE_SWAP_FIELD(variant->universal_variant.weapon_set);
+	BYTE_SWAP_FIELD(variant->universal_variant.vehicle_set);
+	switch (engine_index)
+	{
+	case game_engine_ctf:
+		BYTE_SWAP_FIELD(engine_variant->ctf.single_flag_time);
+		break;
+	case game_engine_oddball:
+		BYTE_SWAP_FIELD(engine_variant->oddball.speed_with_ball);
+		BYTE_SWAP_FIELD(engine_variant->oddball.trait_with_ball);
+		BYTE_SWAP_FIELD(engine_variant->oddball.trait_without_ball);
+		BYTE_SWAP_FIELD(engine_variant->oddball.oddball_ball_type);
+		BYTE_SWAP_FIELD(engine_variant->oddball.ball_spawn_count);
+		break;
+	case game_engine_race:
+		BYTE_SWAP_FIELD(engine_variant->race.race_type);
+		BYTE_SWAP_FIELD(engine_variant->race.team_scoring);
+		break;
+	}
+	BYTE_SWAP_FIELD(variant->flags);
+}
+
+/* port: the settings record in the PC builds' order (their memory's, which they send) and back;
+native: whether it is in this machine's order now */
+void network_game_byte_swap(
+	struct network_game *game,
+	boolean native)
+{
+	long engine_index = game->variant.game_engine_index;
+	long index;
+
+	if (!native)
+		BYTE_SWAP_FIELD(engine_index);
+	BYTE_SWAP_ARRAY(game->name);
+	BYTE_SWAP_FIELD(game->map.version);
+	game_variant_byte_swap(&game->variant, engine_index);
+	BYTE_SWAP_FIELD(game->difficulty);
+	BYTE_SWAP_FIELD(game->machine_count);
+	for (index = 0; index < NETWORK_GAME_MACHINE_SLOTS; index++)
+		BYTE_SWAP_ARRAY(game->machines[index].name);
+	BYTE_SWAP_FIELD(game->player_count);
+	for (index = 0; index < NETWORK_GAME_PLAYER_SLOTS; index++)
+		network_player_byte_swap(&game->players[index]);
+	BYTE_SWAP_FIELD(game->__unknown426);
+	BYTE_SWAP_FIELD(game->random_seed);
+	BYTE_SWAP_FIELD(game->number_of_games_played);
+	BYTE_SWAP_FIELD(game->variant_options.time_limit);
+	BYTE_SWAP_FIELD(game->variant_options.friendly_fire);
+	BYTE_SWAP_FIELD(game->variant_options.friendly_fire_penalty);
+	BYTE_SWAP_FIELD(game->variant_options.vehicle_respawn_time);
+}
+#endif
 
 /* ---------- private code */

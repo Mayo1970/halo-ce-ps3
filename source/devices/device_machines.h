@@ -1,6 +1,4 @@
-/*
-DEVICE_MACHINES.H
-*/
+/* DEVICE_MACHINES.H */
 
 #ifndef __DEVICE_MACHINES_H
 #define __DEVICE_MACHINES_H
@@ -23,8 +21,14 @@ struct scenario_machine_datum
 {
 	struct scenario_object_datum object;
 	struct scenario_device_datum device;
+#ifdef __BIG_ENDIAN__
+	/* port: the low byte of the tag's long flags, which a big-endian long keeps last */
+	byte pad[3];
+	byte flags;
+#else
 	byte flags;
 	byte pad[3];
+#endif
 };
 
 /* ---------- prototypes/DEVICE_MACHINES.C */

@@ -1,8 +1,4 @@
-/*
-NETWORK_GAME_MANAGER.H
-
-header included in hcex build.
-*/
+/* NETWORK_GAME_MANAGER.H: header included in hcex build. */
 
 #ifndef __NETWORK_GAME_MANAGER_H
 #define __NETWORK_GAME_MANAGER_H
@@ -117,6 +113,11 @@ boolean network_game_remove_machine(
 	struct network_machine *machine);
 boolean network_game_create_game_objects(
 	struct network_game *game);
+#ifdef __BIG_ENDIAN__
+void network_game_byte_swap(
+	struct network_game *game,
+	boolean native);
+#endif
 
 /* ---------- globals */
 

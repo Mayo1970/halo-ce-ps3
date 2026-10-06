@@ -1,86 +1,10 @@
-/*
-GAME_ENGINE_KING.C
-
-symbols in this file:
-000A0030 0010:
-	_king_engine_dispose (0000)
-000A0040 0020:
-	_point3d_to_point2d (0000)
-000A0060 0350:
-	_find_hill (0000)
-000A03B0 0010:
-	_king_engine_dispose_from_old_map (0000)
-000A03C0 0020:
-	_king_engine_player_added (0000)
-000A03E0 0010:
-	_king_engine_game_ending (0000)
-000A03F0 0020:
-	_king_engine_game_starting (0000)
-000A0410 0010:
-	_king_engine_statistics_append (0000)
-000A0420 0010:
-	_king_engine_handle_client_message (0000)
-000A0430 0010:
-	_king_engine_handle_server_message (0000)
-000A0440 0010:
-	_king_engine_pregame_post_rasterize (0000)
-000A0450 0090:
-	_player_inside_hill (0000)
-000A04E0 0160:
-	_king_engine_player_update (0000)
-000A0640 01c0:
-	_king_calculate_hill_state (0000)
-000A0800 0010:
-	_king_engine_player_damaged_player (0000)
-000A0810 0010:
-	_king_engine_player_killed_player (0000)
-000A0820 0190:
-	_king_engine_display_score (0000)
-000A09B0 0010:
-	_king_engine_prespawn_player_update (0000)
-000A09C0 0040:
-	_king_get_score (0000)
-000A0A00 0090:
-	_render_dynamic_quad_initialize (0000)
-000A0A90 02b0:
-	_render_dynamic_quad (0000)
-000A0D40 0040:
-	_king_get_score_string (0000)
-000A0D80 0060:
-	_king_get_score_header_string (0000)
-000A0DE0 0030:
-	_king_get_team_score_string (0000)
-000A0E10 0020:
-	_king_engine_goal_matches_player (0000)
-000A0E30 0070:
-	_find_next_hill (0000)
-000A0EA0 0110:
-	_king_engine_initialize_for_new_map (0000)
-000A0FB0 03a0:
-	_king_engine_post_rasterize (0000)
-000A1350 0110:
-	_king_engine_update (0000)
-0025BDC0 000d:
-	??_C@_0N@DGPCNCJC@NULL?5?$CB?$DN?5flag?$AA@ (0000)
-0025BDD0 0027:
-	??_C@_0CH@IHPMMFJJ@c?3?2halo?2SOURCE?2game?2game_engine_@ (0000)
-0025BDF8 0023:
-	??_C@_0CD@DHKICDEA@king_globals?4hill_point_count?5?$CB?$DN@ (0000)
-0025BE1C 0014:
-	??_C@_0BE@EEOONBNI@FAILED?5TO?5FIND?5HILL?$AA@ (0000)
-0025BE30 000b:
-	??_C@_0L@HEFOOJCG@crown_blue?$AA@ (0000)
-0025BE3C 0038:
-	??_C@_0DI@GPEOKAOO@failed?5to?5find?5hill?5?$CD?$CFd?5most?5lik@ (0000)
-002DE488 0088:
-	_king_engine (0000)
-0043E948 0230:
-	_king_globals (0000)
-*/
+/* GAME_ENGINE_KING.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/game/game_engine_king.c. */
 
 /* ---------- headers */
 
 #include "cseries/cseries.h"
+#include "memory/byte_swapping.h"
 #include "cseries/errors.h"
 #include "game/game_globals.h"
 #include "game/game_engine_king.h"
@@ -450,9 +374,8 @@ static void king_engine_player_update(
 		if (game_engine_can_score() && player_inside_hill(player_index))
 		{
 			king_globals.on_the_hill[DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index)] = TRUE;
-			/* (a client of the distributed netcode has the host's scores,
-			game_engine_king_read_network_state, and shows who is on the
-			hill as it sees them) */
+			/* (a client of the distributed netcode has the host's scores, game_engine_king_read_network_state,
+			and shows who is on the hill as it sees them) */
 			if (!network_game_distributed_client())
 				player->statistics.multiplayer_statistics.king_statistics.time_on_hill++;
 			if (!network_game_distributed_client() &&
@@ -1169,10 +1092,8 @@ static void king_client_score_sounds(
 	return;
 }
 
-/* a client takes the host's scores and which hill it is, and finds the
-hill's points itself (not the host's count of them, which the hill's
-drawing indexes by), and who is on the hill and the hill's state (which
-king_calculate_hill_state keeps from what it sees, sounding as it changes) */
+/* a client takes the host's scores and hill, and finds itself the hill's points (not the host's count, which the
+drawing indexes by), who is on it and its state (king_calculate_hill_state's, sounding as it changes) */
 boolean game_engine_king_read_network_state(
 	byte const *buffer,
 	long size,
@@ -1201,3 +1122,29 @@ boolean game_engine_king_read_network_state(
 	}
 	return TRUE;
 }
+
+#ifdef __BIG_ENDIAN__
+/* port: the state in the PC builds' order, which they send (their memory's), and back */
+void game_engine_king_network_state_byte_swap(
+	byte *buffer,
+	long size)
+{
+	struct king_globals *state = (struct king_globals *)buffer;
+
+	if (size != (long)sizeof(*state))
+		return;
+	BYTE_SWAP_ARRAY(state->score);
+	BYTE_SWAP_ARRAY(state->score_tick);
+	BYTE_SWAP_FIELD(state->hill_point_count);
+	BYTE_SWAP_REALS(state->hill_points);
+	BYTE_SWAP_REALS(state->convex_hull);
+	BYTE_SWAP_REALS(state->hill_center);
+	BYTE_SWAP_FIELD(state->hill_state);
+	BYTE_SWAP_FIELD(state->hill_controlled_count);
+	BYTE_SWAP_FIELD(state->hill_previous_controller);
+	BYTE_SWAP_FIELD(state->hill_top);
+	BYTE_SWAP_FIELD(state->hill_bottom);
+	BYTE_SWAP_FIELD(state->hill_id);
+	BYTE_SWAP_FIELD(state->hill_timer);
+}
+#endif

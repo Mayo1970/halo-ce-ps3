@@ -1,80 +1,10 @@
-/*
-GAME_ENGINE_SLAYER.C
-
-symbols in this file:
-000A3CF0 0050:
-	_target_is_eligible (0000)
-000A3D40 0010:
-	_slayer_engine_dispose (0000)
-000A3D50 0030:
-	_slayer_engine_initialize_for_new_map (0000)
-000A3D80 0010:
-	_slayer_engine_dispose_from_old_map (0000)
-000A3D90 0030:
-	_slayer_engine_player_added (0000)
-000A3DC0 0010:
-	_slayer_engine_game_ending (0000)
-000A3DD0 0020:
-	_slayer_engine_game_starting (0000)
-000A3DF0 0010:
-	_slayer_engine_statistics_append (0000)
-000A3E00 0010:
-	_slayer_engine_handle_client_message (0000)
-000A3E10 0010:
-	_slayer_engine_handle_server_message (0000)
-000A3E20 0010:
-	_slayer_engine_pregame_post_rasterize (0000)
-000A3E30 0010:
-	_slayer_engine_post_rasterize (0000)
-000A3E40 0010:
-	_slayer_engine_update (0000)
-000A3E50 0010:
-	_slayer_engine_allow_pick_up (0000)
-000A3E60 0010:
-	_slayer_engine_player_damaged_player (0000)
-000A3E70 0110:
-	_update_speed_for_score (0000)
-000A3F80 0040:
-	_slayer_engine_adjust_score (0000)
-000A3FC0 0010:
-	_slayer_engine_prespawn_player_update (0000)
-000A3FD0 0040:
-	_slayer_get_score (0000)
-000A4010 0010:
-	_slayer_test_flag (0000)
-000A4020 0030:
-	_slayer_get_score_string (0000)
-000A4050 0060:
-	_slayer_get_score_header_string (0000)
-000A40B0 0030:
-	_slayer_get_team_score_string (0000)
-000A40E0 0190:
-	_find_next_target (0000)
-000A4270 0090:
-	_slayer_engine_player_killed_player (0000)
-000A4300 0280:
-	_slayer_engine_display_score (0000)
-000A4580 0190:
-	_slayer_player_update (0000)
-0025C190 0014:
-	??_C@_0BE@HDNMKCGO@next_target?5?$CB?$DN?5NONE?$AA@ (0000)
-0025C1A4 0029:
-	??_C@_0CJ@GAGEHHLD@c?3?2halo?2SOURCE?2game?2game_engine_@ (0000)
-0025C1D0 0036:
-	??_C@_0DG@HCMPGGBD@?$CIindex?5?$DO?$DN?50?$CJ?5?$CG?$CG?5?$CIindex?5?$DM?5MULTIPL@ (0000)
-0025C208 0004:
-	__real@373a69dc (0000)
-0025C20C 0004:
-	__real@38e90453 (0000)
-002DE670 0088:
-	_slayer_engine (0000)
-0043ED80 0080:
-	_slayer_globals (0000)
-*/
+/* GAME_ENGINE_SLAYER.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/game/game_engine_slayer.c. */
 
 /* ---------- headers */
 
 #include "cseries/cseries.h"
+#include "memory/byte_swapping.h"
 
 #include "game/game_engine_place.h"
 #include "game/game_engine_slayer.h"
@@ -465,9 +395,8 @@ static void slayer_engine_player_killed_player(
 {
 	struct player_datum *dead_player = player_get(dead_player_index);
 
-	/* (a client of the distributed netcode has the host's scores,
-	game_engine_slayer_read_network_state: its copy of a kill may come before
-	or after the state with it, and would count twice) */
+	/* (a client of the distributed netcode has the host's scores, game_engine_slayer_read_network_state: its copy
+	of a kill may come before or after the state with it, and would count twice) */
 	if (!dead_player->quit_out_of_game && killing_player_index != NONE &&
 		!network_game_distributed_client())
 	{
@@ -709,13 +638,11 @@ struct game_engine slayer_engine =
 struct slayer_network_state
 {
 	struct slayer_globals globals;
-	/* kill in order: each player's target (player_datum.multiplayer_special,
-	chosen at random), by absolute index (their datum identifiers are each
-	machine's own) */
+	/* kill in order: each player's target (player_datum.multiplayer_special, chosen at random), by absolute
+	index (their datum identifiers are each machine's own) */
 	byte targets[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
-	/* each player's speed_multiplier (update_speed_for_score, which
-	slayer_player_update brings back to 1 each tick), in units of
-	1/SLAYER_SPEED_UNITS, by absolute index, 0 for no player */
+	/* each player's speed_multiplier (update_speed_for_score, which slayer_player_update brings back to 1 each
+	tick), in units of 1/SLAYER_SPEED_UNITS, by absolute index, 0 for no player */
 	word speeds[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 };
 
@@ -794,3 +721,19 @@ boolean game_engine_slayer_read_network_state(
 	}
 	return TRUE;
 }
+
+#ifdef __BIG_ENDIAN__
+/* port: the state in the PC builds' order, which they send (their memory's), and back */
+void game_engine_slayer_network_state_byte_swap(
+	byte *buffer,
+	long size)
+{
+	struct slayer_network_state *state = (struct slayer_network_state *)buffer;
+
+	if (size != (long)sizeof(*state))
+		return;
+	BYTE_SWAP_ARRAY(state->globals.team_score);
+	BYTE_SWAP_ARRAY(state->globals.individual_score);
+	BYTE_SWAP_ARRAY(state->speeds);
+}
+#endif
