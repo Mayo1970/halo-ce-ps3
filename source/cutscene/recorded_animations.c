@@ -216,10 +216,11 @@ void recorded_animations_update(
 				thread_debug = animation_threads_debug_get(iterator.datum_index);
 				if (thread_debug->active)
 				{
+					/* port: a full pointer first; in a difference GCC sign-extends a HALO_PTR32 one (ROADMAP trap 36) */
 					match_assert(
 						"c:\\halo\\SOURCE\\cutscene\\recorded_animations.c",
 						354,
-						thread->event_stream-thread_debug->event_stream_start<thread_debug->stream_length||(thread->event_stream-thread_debug->event_stream_start==thread_debug->stream_length&&finished));
+						thread->event_stream-(byte *)thread_debug->event_stream_start<thread_debug->stream_length||(thread->event_stream-(byte *)thread_debug->event_stream_start==thread_debug->stream_length&&finished));
 				}
 
 				thread->relative_ticks++;

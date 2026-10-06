@@ -49,8 +49,21 @@ static struct
 {
 	void *memory;
 	uint32_t frame;
+	uint32_t size;
+	int kind;
 } deferred_frees[DEFERRED_FREE_COUNT];
 static uint32_t deferred_free_count;
+
+/* the blocks in use by kind (ps3_gpu_memory_usage); the display thread reads them */
+static struct
+{
+	uint64_t local_size;
+	uint64_t used;
+	uint64_t peak;
+	uint64_t bytes[_ps3_gpu_memory_count];
+	uint32_t counts[_ps3_gpu_memory_count];
+	uint32_t refused;
+} rsx_memory;
 
 /* what the RSX holds; reset at each frame, which the system's overlays can change */
 static struct ps3_gpu_state state;
@@ -93,13 +106,46 @@ static struct
 
 /* ---------- memory */
 
-void *ps3_gpu_memory_allocate(uint32_t size, uint32_t alignment, uint32_t *offset)
+void *ps3_gpu_memory_allocate(uint32_t size, uint32_t alignment, int kind, uint32_t *offset)
 {
 	void *memory = rsxMemalign(alignment < 64 ? 64 : alignment, size);
 
-	if (memory)
-		rsxAddressToOffset(memory, offset);
+	if (!memory)
+	{
+		rsx_memory.refused++;
+		return NULL;
+	}
+	rsxAddressToOffset(memory, offset);
+	rsx_memory.bytes[kind] += size;
+	rsx_memory.counts[kind]++;
+	rsx_memory.used += size;
+	if (rsx_memory.used > rsx_memory.peak)
+		rsx_memory.peak = rsx_memory.used;
 	return memory;
+}
+
+static void memory_release(void *memory, uint32_t size, int kind)
+{
+	rsxFree(memory);
+	rsx_memory.bytes[kind] -= size;
+	rsx_memory.counts[kind]--;
+	rsx_memory.used -= size;
+}
+
+void ps3_gpu_memory_usage(struct ps3_gpu_memory_usage *usage)
+{
+	int kind;
+
+	usage->heap = rsx_memory.local_size;
+	usage->display = ps3_video_memory_bytes();
+	usage->used = rsx_memory.used;
+	usage->peak = rsx_memory.peak;
+	for (kind = 0; kind < _ps3_gpu_memory_count; kind++)
+	{
+		usage->bytes[kind] = rsx_memory.bytes[kind];
+		usage->counts[kind] = rsx_memory.counts[kind];
+	}
+	usage->refused = rsx_memory.refused;
 }
 
 static int frame_finished(uint32_t frame)
@@ -121,7 +167,7 @@ static void deferred_frees_run(int all)
 	{
 		if (all || frame_finished(deferred_frees[index].frame))
 		{
-			rsxFree(deferred_frees[index].memory);
+			memory_release(deferred_frees[index].memory, deferred_frees[index].size, deferred_frees[index].kind);
 			deferred_frees[index] = deferred_frees[--deferred_free_count];
 		}
 		else
@@ -131,13 +177,13 @@ static void deferred_frees_run(int all)
 	}
 }
 
-void ps3_gpu_memory_free(void *memory)
+void ps3_gpu_memory_free(void *memory, uint32_t size, int kind)
 {
 	if (!memory)
 		return;
 	if (!ready)
 	{
-		rsxFree(memory);
+		memory_release(memory, size, kind);
 		return;
 	}
 	if (deferred_free_count == DEFERRED_FREE_COUNT)
@@ -147,6 +193,8 @@ void ps3_gpu_memory_free(void *memory)
 	}
 	deferred_frees[deferred_free_count].memory = memory;
 	deferred_frees[deferred_free_count].frame = frame_index;
+	deferred_frees[deferred_free_count].size = size;
+	deferred_frees[deferred_free_count].kind = kind;
 	deferred_free_count++;
 }
 
@@ -562,7 +610,7 @@ static int fragment_program_store(const struct rsx_instruction *instruction, uin
 	count = rsx_fragment_encode(instruction, 1, words);
 	for (index = 0; index < count; index++)
 		words[index] = (words[index] << 16) | (words[index] >> 16);
-	memory = ps3_gpu_memory_allocate(sizeof(words) + 64, 64, offset);
+	memory = ps3_gpu_memory_allocate(sizeof(words) + 64, 64, _ps3_gpu_memory_program, offset);
 	if (!memory)
 		return -1;
 	memcpy(memory, words, count * 4);
@@ -782,6 +830,8 @@ void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t h
 
 int ps3_gpu_initialize(void)
 {
+	gcmConfiguration configuration;
+
 	if (ready)
 		return 0;
 	ps3_display_acquire();
@@ -791,7 +841,12 @@ int ps3_gpu_initialize(void)
 		ps3_log_printf("[gpu] no RSX context: nothing is drawn\n");
 		return -1;
 	}
-	scratch.base = ps3_gpu_memory_allocate(2 * SCRATCH_HALF_SIZE, 128, &scratch.offset);
+	gcmGetConfiguration(&configuration);
+	/* PSL1GHT's heap (librsx mm.c) is all of it but 4 KB */
+	rsx_memory.local_size = configuration.localSize - 4096;
+	ps3_log_printf("[gpu] RSX local memory %u KB, display buffers %u KB\n", (unsigned)(configuration.localSize / 1024),
+		ps3_video_memory_bytes() / 1024);
+	scratch.base = ps3_gpu_memory_allocate(2 * SCRATCH_HALF_SIZE, 128, _ps3_gpu_memory_scratch, &scratch.offset);
 	if (!scratch.base || blit_programs_build() != 0)
 	{
 		ps3_log_printf("[gpu] out of RSX memory at the start\n");

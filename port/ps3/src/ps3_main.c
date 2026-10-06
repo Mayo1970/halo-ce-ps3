@@ -2,10 +2,12 @@
 thread keeps the display flipping for the XMB: blue running, green stopped, red failed. */
 
 #include "ps3_audio.h"
+#include "ps3_gpu.h"
 #include "ps3_host.h"
 #include "ps3_system.h"
 #include "ps3_video.h"
 
+#include <malloc.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -22,6 +24,7 @@ SYS_PROCESS_PARAM(1001, 0x100000);
 int halo_xbox_main(void);
 void platform_kernel_initialize(void);
 int platform_memory_initialize(void);
+void platform_memory_usage(uint32_t *mapped_mb, uint32_t *peak_mb);
 int platform_heartbeat(void);
 void ps3_host_report_blocked(void);
 
@@ -40,6 +43,8 @@ static volatile int display_paused;
 static volatile int display_idle;
 /* the game's thread, for the stall report */
 static sys_ppu_thread_t main_thread_id;
+/* set once the boot probes are over: a probe's containers would show as the lowest free memory */
+static volatile int memory_sampling;
 
 void ps3_host_set_status(int status)
 {
@@ -78,6 +83,34 @@ static void main_thread_report(void)
 	ps3_log_printf("[ps3] main thread: priority %d (0x%08x)\n", (int)priority, (unsigned)result);
 }
 
+/* main memory from lv2 (free, and the lowest the display thread saw), the Xbox window, newlib's heap;
+the RSX's local memory by use */
+static void memory_heartbeat(void)
+{
+	struct ps3_gpu_memory_usage rsx;
+	struct mallinfo heap = mallinfo();
+	uint32_t total = 0, available = 0, lowest, window, window_peak;
+	double now = ps3_time_seconds(), lowest_time, megabyte = 1048576.0;
+
+	ps3_memory_user(&total, &available);
+	ps3_memory_lowest(&lowest, &lowest_time);
+	platform_memory_usage(&window, &window_peak);
+	ps3_log_printf("[mem] t=%.0fs main: %.1f MB free (lowest %.1f at t=%.0fs) of %.1f; Xbox window %u MB (peak %u); "
+		"heap %.1f MB, %.1f in use\n", now, available / megabyte, lowest / megabyte, lowest_time, total / megabyte,
+		(unsigned)window, (unsigned)window_peak, heap.arena / megabyte, heap.uordblks / megabyte);
+	ps3_gpu_memory_usage(&rsx);
+	if (!rsx.heap)
+		return;
+	ps3_log_printf("[mem] t=%.0fs RSX: %.1f MB of %.1f in use (peak %.1f): display %.1f, textures %.1f (%u), "
+		"targets %.1f (%u), vertices %.1f, scratch %.1f, programs %.2f; %u refused\n", now,
+		(rsx.display + rsx.used) / megabyte, rsx.heap / megabyte, (rsx.display + rsx.peak) / megabyte,
+		rsx.display / megabyte, rsx.bytes[_ps3_gpu_memory_texture] / megabyte,
+		(unsigned)rsx.counts[_ps3_gpu_memory_texture], rsx.bytes[_ps3_gpu_memory_target] / megabyte,
+		(unsigned)rsx.counts[_ps3_gpu_memory_target], rsx.bytes[_ps3_gpu_memory_vertices] / megabyte,
+		rsx.bytes[_ps3_gpu_memory_scratch] / megabyte, rsx.bytes[_ps3_gpu_memory_program] / megabyte,
+		(unsigned)rsx.refused);
+}
+
 static void display_main(void *argument)
 {
 	unsigned frame = 0;
@@ -108,12 +141,16 @@ static void display_main(void *argument)
 			ps3_video_end_frame();
 			frame++;
 		}
+		if (memory_sampling)
+			ps3_memory_sample();
 		if (ps3_time_seconds() >= next_heartbeat)
 		{
 			ps3_log_printf("[hb] t=%.0fs display frames %u\n", ps3_time_seconds(), frame);
 			if (platform_heartbeat())
 				main_thread_report();
 			ps3_host_report_blocked();
+			if (memory_sampling)
+				memory_heartbeat();
 			next_heartbeat += HEARTBEAT_SECONDS;
 		}
 	}
@@ -235,6 +272,7 @@ int main(int argc, char *argv[])
 		ps3_log_printf("[ps3] main thread stack %08llx..%08llx, main() frame %08llx\n",
 			(unsigned long long)main_stack_low, (unsigned long long)main_stack_high, (unsigned long long)main_frame);
 	}
+	memory_sampling = 1;
 	result = halo_xbox_main();
 	ps3_log_printf("[ps3] the game returned %d\n", result);
 

@@ -97,6 +97,10 @@ data when it loads it), for example with FTP:
 port looks for `HaloCE/maps` on the USB drives (`/dev_usb000` to
 `/dev_usb006`). At the first start without data, it makes the HDD folder.
 
+`init.txt` in the data root holds console commands that the game runs at
+start-up, one a line. For example, `map_name levels\b30\b30` starts that
+campaign level without the menu.
+
 The game writes these files:
 
 | File | Contents |
@@ -113,17 +117,17 @@ enter `nc -ul 18194` on that computer. `printf`, `puts` and `putchar` also
 go to the log (`-Wl,--wrap`), and so do the lines of the game's
 `debug.txt`.
 
-## The EBOOT (G6)
+## The EBOOT (G7)
 
 | Part | In the log | On the PS3 |
 | --- | --- | --- |
 | System | `[ps3]` lines: the build time, `sizeof` of `void*`, `long` and `wchar_t`, the byte order | |
-| Memory | `[mem]` lines: the free memory at boot, after the memory window and after the RSX init; the mmapper results | |
+| Memory | `[mem]` lines: the free memory at boot, after the memory window and after the RSX init (the container probe, and lv2's count from syscall 352); the mmapper results. Every 10 s (G7): the free main memory from lv2 and its lowest since the game started, the Xbox window's mapped MB, newlib's heap, and the RSX's local memory by use (display, textures, targets, vertices, scratch, programs) with its peak | |
 | Display | `[vid]` lines; `[hb]` every 10 s | A slow blue pulse until the game creates its Direct3D device |
-| Game | `[halo]` lines: each memory window block, each file the game opens, each thread; the game's own `debug.txt` lines | |
+| Game | `[halo]` lines: each memory window block, each file the game opens, each thread; the game's own `debug.txt` lines. Each file transfer of 1 MB or more with its time, and at the close of a file with 1 MB or more of transfers, their totals (G7: the saves) | |
 | Map data | `tag data swapped in N ms: ...` and `structure BSP swapped ...`, with the counts and the errors | |
 | Pads | `[pad] port N connected`; `XInput:` lines: the Xbox port of each pad, the game's open and close, and the buttons the game gets at each change | The D-pad and the left stick move in the menus, CROSS chooses (A), CIRCLE goes back (B) |
-| Drawing | `[gpu] ready`; `Direct3D:` lines: each vertex shader translated, the first pixel shaders, and every 600 frames the draws, the skips, the texture uploads and the vertex cache (the vertex elements converted into it and at draws, its use); `[gpu] frame N` every 600 frames: the programs and the scratch use | The game's picture, 4:3 in the middle of the display |
+| Drawing | `[gpu] ready` and the RSX local memory; `Direct3D:` lines: each vertex shader translated, the first pixel shaders, and every 600 frames the draws, the skips, the texture uploads, the textures in RSX memory (and the part no draw used in 600 frames) and the vertex cache (the vertex elements converted into it and at draws, its use); `[gpu] frame N` every 600 frames: the programs and the scratch use | The game's picture, 4:3 in the middle of the display |
 | Timers | `[time]` lines every 300 frames (`src/ps3_timers.c`): the game thread's ms a frame by phase (game ticks, render and its parts, Direct3D draws, waits). With `TIMER_PROBE_FRAMES` 30 (now 0, off), also the RSX's ms by part in probe frames (the game thread waits for the RSX after each part) | |
 | Sound | `[aud] port N` at the start; `DirectSound:` every 10 s: the streams and buffers that play, the packets decoded, the mixer's time per 5333 us chunk, and the port blocks played silent or partial (underruns) | The game's sound on the PS3 audio output |
 | Exit | `[ps3] exit 0` | PS button > Quit Game goes back to the XMB |

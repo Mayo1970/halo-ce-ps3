@@ -43,7 +43,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
    keep the "why". When you edit a file, shorten its longer comments too.
 8. Commits and PRs: no co-author line, no AI attribution.
 
-## Now (2026-10-05, end of session)
+## Now (2026-10-06)
 
 - G0 to G3 are done: hardware SUCCESS. G2 ran the game headless to the open
   of `d:\maps\ui.map`; the Xbox window is at 0x80000000, so the map pointers
@@ -76,7 +76,9 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   runs at 29 to 30 frames per second in calm scenes, and the RSX limits the
   heavy ones (24 to 26). See "Found for later goals" (G7, a10).
 - The pixel shader optimizer (Matt, 2026-10-06: "Yes, make the shader
-  optimizer."): built, waiting for the hardware test in a10.
+  optimizer."): hardware SUCCESS (Matt). a10 runs at 30 frames per second
+  with 0.0 ms of RSX wait in every timer window, at up to 565 draws a
+  frame (see "Found for later goals", G7, a10).
   `ps3_rsx_fp.c` optimizes each translated pixel shader before the
   encoding: it folds the numbers and the clamps that the value ranges
   prove, reads copies at their source, reuses equal computations, drops
@@ -85,6 +87,15 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   reflection pass 205 to 47 instructions and 23 to 5 temporaries; the
   simplest shader 60 to 3. The probe frames are off; the three other
   `[time]` lines stay.
+- G7 started (Matt, 2026-10-06: "We will now work on G7."). The analysis is
+  done: see "G7 analysis". Step 1, the measurement build (Matt: "Do the
+  measurement build."), is built: PKG of 09:26. Waiting for the hardware
+  run.
+- The a30 red screen (Matt, 2026-10-06): a halt at the first recorded
+  animation (`recorded_animations.c,#354`), in every map. Fixed (trap 36);
+  the dump scan found no other fault. Hardware SUCCESS with the PKG of
+  19:53 (Matt: "Perfect, it worked!"; no listener ran). That PKG also holds
+  the measurement build.
 - Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
@@ -119,6 +130,19 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     still sends it. The other lines leave the waits out ("probe waits").
     Off from 2026-10-06: `TIMER_PROBE_FRAMES` is 0 in `ps3_timers.c` (30
     probes again). A probe frame stalls about 70 ms.
+  - The G7 measurement build (Matt, 2026-10-06):
+    - Two `[mem]` lines every 10 s (`ps3_main.c` `memory_heartbeat`). The
+      first: the free main memory from lv2 syscall 352 (`ps3_memory_user`,
+      no reservation) and its lowest, which the display thread samples at
+      each pass from the game's start; the Xbox window's mapped MB and
+      peak (`xbox_memory.c`); newlib's heap (`mallinfo`). The second: the
+      RSX local memory by kind, with its peak (`ps3_gpu_memory_usage`;
+      `ps3_gpu_memory_allocate` and `_free` take the kind and the size).
+    - The boot `[mem]` lines give the probe and lv2's count side by side.
+    - `xbox_files.c`: each transfer of 1 MB or more with its time; at the
+      close of a file with 1 MB or more of transfers, the totals.
+    - `Direct3D: frame` lines: the textures in RSX memory, and the KB that
+      no draw used in 600 frames.
 
 ## Goal stack
 
@@ -130,8 +154,76 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done 2026-10-05 (hardware SUCCESS, run 9, after the audit fixes) |
 | G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
-| G6 First playable level (a10) | In progress: the sound works (run 1, hardware SUCCESS) |
-| G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
+| G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
+| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06, steps proposed (see "G7 analysis") |
+| G8 60 frames per second: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX | Not started (Matt, 2026-10-06: the last goal) |
+
+## G7 analysis (2026-10-06)
+
+Three read-only audits of the code. No code change.
+
+- Memory:
+  - Main memory: 188 MB free at boot, 179 MB after the RSX init, 94 MB
+    after the game's start-up (G2). The Xbox window maps about 72 MB (tag
+    cache 22, game state 16, texture cache 22, sound cache 4, Direct3D
+    blocks); nothing in it is freed before the exit. Outside the window: the
+    RSX host buffer 8 MB, the AI debug arrays 9.9 MB and the rasterizer
+    debug arrays 1.4 MB (always allocated, `ai_debug.c`,
+    `rasterizer_debug.c`), DirectSound's float packets (up to about 7.6 MB,
+    freed when played), the shader caches (never freed).
+  - RSX memory: about 98 MB fixed (display buffers and depth 14 MB at 720p,
+    scratch 32 MB, vertex arena 48 MB, render targets about 4 MB). Texture
+    copies have no cap: a copy stays up to 1800 idle frames after the
+    texture cache drops it. A failed RSX allocation logs and skips; nothing
+    halts.
+  - Nothing measures memory during the game: the `[mem]` lines are at boot
+    only. lv2 syscall 352 (`sys_memory_get_user_memory_size`, no PSL1GHT
+    wrapper, `lv2/syscalls.h`) gives the free user memory without a
+    reservation (trap 15 is about the container probe).
+- Saved games (files in `/dev_hdd0/data/HaloCE/u` and `z`):
+  - The game state is 16 MB on the PS3 (`HALO_PORT_GAME_STATE_SIZE`; 3.3
+    MB on the Xbox). Each checkpoint writes all of it to `z:\savegame.bin`
+    on the game thread; a death, "restart at checkpoint" and a cinematic
+    skip read it back. Each level start reads the profile's `savegame.bin`
+    (the header, then a CRC over 16 MB); pause > quit writes it.
+  - `checksum failed on persistent storage` at a level start is normal
+    until the profile has a save: a new file of zeroes has a stored
+    checksum of 0 (the Xbox does the same).
+  - The files hold big-endian data. The PS3 reads only its own files (an
+    Xbox or PC profile fails its signature).
+  - `GetDiskFreeSpaceExA` gives a fixed 8 GB (`ps3_host_disk_space`;
+    `sysFsGetFreeSize` needs the sys_fs module). Written files get no
+    `sysLv2FsFsync`.
+  - Not tested on hardware: the revert at a death, pause > quit and the
+    resume, a profile after a PS3 restart.
+- Network (`xbox/xnet_null.c` now: no network):
+  - System link uses the game's transport (`source/bungie_net`, UDP
+    broadcast to ports 5150 and 5151, TCP). The Linux build implements
+    Winsock and XNet on POSIX in `port/linux/src/xnet.c` and `posix_net.c`
+    (Linux-only parts: getifaddrs, accept4, MSG_NOSIGNAL, `__thread`,
+    pthread). Internet play (`p2p*.c`: MQTT signalling, STUN, a KCP tunnel)
+    also needs threads, DNS and LP64 fixes (`long long`, 4-byte copies of
+    an `unsigned long`).
+  - The PC builds have their own wire format (message version 2, network
+    version 11). To play with a PC, the PS3 must send the PC's bytes: the
+    message header (`message_header.c`) and `data_encoding.c` always swap,
+    which a big-endian CPU must not do; the advertisement, the game
+    settings and the distributed netcode (`port/linux/game/network_*.c`)
+    are raw little-endian structs.
+  - PSL1GHT: socket descriptors have bit 30 set (no `select` with `FD_*`;
+    `poll` strips the bit); `sockaddr_in` starts with `sin_len` and a
+    1-byte family; netctl gives the local address and netmask.
+- Proposed steps:
+  1. A measurement build: the free main memory (syscall 352) and the RSX
+     memory in use, every 10 s, with peaks; the time of each file transfer
+     of 1 MB or more. The run: a10 to a checkpoint, a death, pause > quit,
+     resume, a PS3 restart and resume, then larger maps. Built 2026-10-06
+     (Matt: "Do the measurement build.").
+  2. Fixes from that data, and the known save items (the real free space,
+     `fsync` after the save writes).
+  3. System link on the LAN with the PC builds: Winsock and XNet on the
+     PSL1GHT sockets (from `xnet.c`), and the PC's byte order on the wire.
+  4. Later: internet play (`p2p*.c`).
 
 ## G4 summary
 
@@ -338,6 +430,17 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     against the NV2A reference on some seeds (`SEED=1`: key 1729). The
     translation without the optimizer gives the same ones; not
     investigated.
+  - Optimizer run 2026-10-06 (Matt: SUCCESS, a10, then the menu; the
+    listener started about 200 s after the boot): 11 timer windows. 8 at
+    29.7 to 30.0 frames per second, the RSX wait 0.0 ms in all 11. The
+    game thread 10 to 21 ms a frame (ticks 3.3 to 8.0, render 7.0 to
+    14.7), the rest the 30 fps throttle wait. Two windows at 26.9 frames
+    per second: 4.0 ms a frame outside the timed phases ("rest", about 1.2
+    s each), with texture uploads, new pixel shaders and vertex cache
+    fills (loads, not the RSX). The last window (21.6) is the return to the
+    menu. Each frame: 211 to 565 draws, 60 to 113 pixel shader copies;
+    scratch peak 601 to 722 KB (1005 KB before). 143 pixel shaders
+    translated, 0 skipped draws.
 - Widescreen and 60 frames per second (Matt asked, 2026-10-06): both are
   possible, not started. Recommended order: the G7 performance work, then
   widescreen, then 60 frames per second.
@@ -347,13 +450,19 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     640 (`d3d8_rsx.c`), and Present draws 640x480 4:3 in the middle. To do:
     854 on a 16:9 TV, an 854x480 back buffer, Present to the full display.
     Cost: about 33% more pixels for the RSX.
-  - 60 frames per second: the game ticks at 30 Hz.
-    `port/linux/game/render_interpolation.c` draws the frames between ticks
-    and is already in the PS3 build; `halo_interpolation_enabled` in
-    `port/ps3/xbox/port_stubs.c` returns 0. The vsync flips (three buffers)
-    give the cap at 60. The blocker: a frame must take 16.7 ms or less, and
-    a10 takes 33 to 53 ms (timer build run). Interpolation also adds CPU
-    work each frame.
+  - 60 frames per second (G8 from 2026-10-06, Matt: the last goal): the
+    game ticks at 30 Hz. `port/linux/game/render_interpolation.c` draws
+    the frames between ticks and is already in the PS3 build;
+    `halo_interpolation_enabled` in `port/ps3/xbox/port_stubs.c` returns
+    0. The vsync flips (three buffers) give the cap at 60. Each frame must
+    take 16.7 ms or less, and a tick runs every second frame. The game
+    thread after the optimizer (run of 2026-10-06): calm scenes render 7.0
+    to 7.8 ms and tick 3.3 to 3.8 ms (10 to 12 ms with a tick: fits);
+    heavy scenes render 13 to 15 ms and tick 4 to 8 ms (18 to 21 ms with a
+    tick: about 5 ms too much). The RSX is under 33 ms a frame (wait 0.0);
+    under 16.7 ms is not measured. Interpolation adds CPU work each frame,
+    not measured. First step: a measurement build, interpolation and
+    timers on.
 
 ## Decisions
 
@@ -544,6 +653,15 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     texture, or an unsaturated colour output, needs a change in `resolve`
     and `bounds`. Only MOV, TEX and TXP read a texture coordinate input:
     cgcomp's MUL, DP3 and DP4 read it without perspective correction.
+36. GCC sign-extends a `HALO_PTR32` pointer when it makes it a 64-bit
+    integer: in a difference with a full pointer, and in a cast to a 64-bit
+    integer type (`extsw`). An Xbox window address 0x8xxxxxxx becomes
+    0xFFFFFFFF8xxxxxxx. Cast the member to a full pointer first
+    (`p - (byte *)x->start`): that conversion zero-extends. Loads,
+    assignments, comparisons, pointer + integer and a difference of two
+    `HALO_PTR32` pointers are correct. GCC gives no warning: use the dump
+    scan (see "Commands"). A hit is a fault only if the `(int)` operand is a
+    pointer and the 64-bit result is used as it is (not cut to 32 bits).
 
 ## Commands
 
@@ -574,6 +692,19 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "E:/Users/Matteo/Desktop/Halo/PS3:/src:ro"
 mkdir -p /tmp/w && cd /src && tar cf - --exclude=./build --exclude=./.git . | (cd /tmp/w && tar xf -)
 cd /tmp/w && find source port/linux/game \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 sed -i "s/^#line .*$//"
 make -k -j12 game GAME_EXTRA=-fsyntax-only GAME_WARN="-Wimplicit-function-declaration -Wincompatible-pointer-types -Wint-to-pointer-cast -Wno-multichar" > /out/warn.txt 2>&1'
+```
+
+The dump scan of trap 36. It compiles the game and the Xbox layer of a copy
+with `-fdump-tree-original` and writes each widened 32-bit value to
+`ptr32.txt` in `OUT`:
+
+```sh
+OUT=C:/path/to/a/folder
+MSYS_NO_PATHCONV=1 docker run --rm -v "E:/Users/Matteo/Desktop/Halo/PS3:/src:ro" -v "$OUT:/out" ps3dev-latest:latest bash -c '
+mkdir -p /tmp/w && cd /src && tar cf - --exclude=./build --exclude=./.git . | (cd /tmp/w && tar xf -)
+cd /tmp/w && make -k -j12 game GAME_EXTRA=-fdump-tree-original > /out/make.txt 2>&1
+make -k -j12 $(ls port/ps3/xbox/*.c port/linux/src/{bink_null,d3d8_resources,halo_linker_common,msvc_crt,msvc_wide,port_config,xbdm,xbox_xapi}.c | sed "s#^#build/ps3/obj/#; s#\.c\$#.o#") XBOX_DEFINES=-fdump-tree-original >> /out/make.txt 2>&1
+grep -rn -E "\((long( unsigned)? int|__u?int64|sizetype)\) \(int\) " --include=*.original build > /out/ptr32.txt'
 ```
 
 ## Hardware test
@@ -740,3 +871,30 @@ then `./build.sh pkg LOG_IP=<address>`.
   give the same results with and without the pass. `check` passes (0
   `r2off`, `.got` 0x2d68). PKG of 02:51. Waiting for the hardware test in
   a10.
+- 2026-10-06: Optimizer hardware SUCCESS (Matt, PKG of 02:51): a10 at 30
+  frames per second, the RSX wait 0.0 ms. Results in "Found for later
+  goals" (G7, a10). The listener is stopped.
+- 2026-10-06: Matt asked if 60 frames per second is possible now: partly
+  (calm scenes fit, heavy scenes need about 5 ms less on the game thread;
+  the RSX not measured). Matt: "Add it to the goals as last goal": G8 in
+  the goal stacks (here and GOALS.md). No code change.
+- 2026-10-06: G7 started (Matt: "We will now work on G7."). Analysis of the
+  memory, the saved games and the network: "G7 analysis". No code change.
+- 2026-10-06: G7 step 1, the measurement build (Matt: "Do the measurement
+  build."): `ps3_system.c` and `.h`, `ps3_main.c`, `ps3_gpu.c` and `.h`,
+  `ps3_video.c` and `.h`, `xbox_memory.c`, `d3d8_rsx.c`, `xbox_files.c`;
+  `port/ps3/README.md` (the new lines, `init.txt`). `check` passes (0
+  `r2off`, `.got` 0x2e08). PKG of 09:26. The listener is stopped (Matt:
+  "Stop the listener for now. I'll tell you when I'm going to run the
+  test."). Waiting for Matt's word before the run.
+- 2026-10-06: Red pulsing screen in a30 (Matt, the 02:51 build): the halt
+  `recorded_animations.c,#354` at the intro's first recording. Cause: trap
+  36 (`event_stream_start` sign-extended in a difference with a full
+  pointer). Fixed with a cast (Matt: "Do these fixes."). The dump scan (476
+  game units, 18 Xbox layer units) found no other fault: the hits in
+  `hs_compile.c` (3, the result is cut to 32 bits) and
+  `cache_files_decompress_windows.c` (2, two `HALO_PTR32` pointers) are
+  correct. `check` passes (0 `r2off`, `.got` 0x2e08). PKG of 19:53, which
+  also holds the G7 measurement build. The listener is stopped.
+- 2026-10-06: a30 fix hardware SUCCESS (Matt: "Perfect, it worked!"). No
+  listener ran, so there is no log of the run.

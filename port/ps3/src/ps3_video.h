@@ -18,6 +18,8 @@ void ps3_video_clear(unsigned argb);
 void ps3_video_end_frame(void);
 
 void ps3_video_stats(unsigned *flips_queued, unsigned *flips_completed, unsigned *wait_timeouts);
+/* the RSX local memory of the display and depth buffers */
+unsigned ps3_video_memory_bytes(void);
 
 /* the display thread (ps3_main.c) stops drawing: the caller owns the RSX until it releases it */
 void ps3_display_acquire(void);

@@ -27,8 +27,9 @@ Rules:
 | G3 Map data on a big-endian CPU: tag data swapped and its pointers relocated, checked headless | Done. Hardware SUCCESS 2026-10-05 on run 9: 1800 frames of the main menu on the swapped `ui.map`, after the fixes of 2 halts and of the 43 audit mismatches. See "G3 progress". |
 | G4 Direct3D 8 on the RSX: the main menu shows | Done. Hardware SUCCESS 2026-10-05 on run 5: the main menu at 30 frames per second, after the fixes of an inverted front face and a depth clear of 0. See "G4 progress". |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done. The pads (XInput) work: hardware SUCCESS 2026-10-05 on run 1. Matt moved the sound to G6. See "G5 progress". |
-| G6 First playable level (a10) | In progress. Matt (2026-10-05): "G6. Go for the sound." The sound works: hardware SUCCESS 2026-10-05 on run 1. See "G6 progress". |
-| G7 Performance and hardening: memory budget, saved games on the HDD, network | Not started |
+| G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7). Matt (2026-10-05): "G6. Go for the sound." The sound works: hardware SUCCESS 2026-10-05 on run 1. a10 runs at 30 frames per second (ROADMAP.md). See "G6 progress". |
+| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress. Analysis done 2026-10-06, steps proposed: ROADMAP.md ("G7 analysis"). Step 1, the measurement build, built 2026-10-06; waiting for the hardware run. |
+| G8 60 frames per second: the frames between the 30 Hz ticks (`render_interpolation.c`), each frame in 16.7 ms on the game thread and the RSX | Not started. Matt (2026-10-06) added it as the last goal. First step: a measurement build, interpolation and timers on. See ROADMAP.md ("Found for later goals"). |
 
 ## G1 progress
 
