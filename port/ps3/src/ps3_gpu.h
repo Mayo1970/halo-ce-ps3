@@ -21,10 +21,36 @@ void ps3_gpu_wait_idle(void);
 
 /* ---------- memory */
 
+/* what a block of RSX local memory holds, for the [mem] heartbeat (ps3_main.c) */
+enum
+{
+	_ps3_gpu_memory_texture,
+	_ps3_gpu_memory_target,
+	_ps3_gpu_memory_vertices,
+	_ps3_gpu_memory_scratch,
+	_ps3_gpu_memory_program,
+	_ps3_gpu_memory_count
+};
+
 /* RSX local memory: the CPU writes it in order (write-combined) and never reads it */
-void *ps3_gpu_memory_allocate(uint32_t size, uint32_t alignment, uint32_t *offset);
-/* freed once the RSX has finished the frame that can still read it */
-void ps3_gpu_memory_free(void *memory);
+void *ps3_gpu_memory_allocate(uint32_t size, uint32_t alignment, int kind, uint32_t *offset);
+/* the size and kind it was allocated with; freed once the RSX has finished the frame that can still read it */
+void ps3_gpu_memory_free(void *memory, uint32_t size, int kind);
+
+/* PSL1GHT's RSX heap keeps no totals: these come from the calls above and the display buffers */
+struct ps3_gpu_memory_usage
+{
+	/* 0 until the device takes the RSX */
+	uint64_t heap;
+	uint64_t display;
+	uint64_t used;
+	uint64_t peak;
+	uint64_t bytes[_ps3_gpu_memory_count];
+	uint32_t counts[_ps3_gpu_memory_count];
+	uint32_t refused;
+};
+
+void ps3_gpu_memory_usage(struct ps3_gpu_memory_usage *usage);
 /* this frame's scratch (vertices, indices, programs); NULL when this frame's half is full */
 void *ps3_gpu_scratch(uint32_t size, uint32_t alignment, uint32_t *offset);
 

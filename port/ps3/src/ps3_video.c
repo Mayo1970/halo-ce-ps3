@@ -248,3 +248,8 @@ void ps3_video_stats(unsigned *out_queued, unsigned *out_completed, unsigned *ou
 	*out_completed = flips_completed;
 	*out_timeouts = wait_timeouts;
 }
+
+unsigned ps3_video_memory_bytes(void)
+{
+	return ready ? BUFFER_COUNT * pitch * height + width * height * 4 : 0;
+}

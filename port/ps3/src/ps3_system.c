@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <ppu-asm.h>
+#include <ppu-lv2.h>
 #include <ppu-types.h>
 #include <arpa/inet.h>
 #include <net/net.h>
@@ -46,6 +47,9 @@ static u64 time_base;
 static double timebase_frequency = 79800000.0;
 
 static char data_root[64];
+
+static uint32_t memory_lowest_bytes = 0xffffffffu;
+static double memory_lowest_seconds;
 
 /* ---------- log */
 
@@ -194,9 +198,51 @@ unsigned ps3_memory_free_mb(void)
 	return best;
 }
 
+/* sys_memory_get_user_memory_size: PSL1GHT has its number (lv2/syscalls.h), not a wrapper */
+LV2_SYSCALL memory_user_size(u32 *information)
+{
+	lv2syscall1(352, (u64)information);
+	return_to_user_prog(s32);
+}
+
+int ps3_memory_user(uint32_t *total, uint32_t *available)
+{
+	u32 information[2] __attribute__((aligned(8)));
+	s32 result = memory_user_size(information);
+
+	if (result != 0)
+		return result;
+	*total = information[0];
+	*available = information[1];
+	return 0;
+}
+
+/* lv2's count beside the probe, which it must match */
 void ps3_memory_report(const char *label)
 {
-	ps3_log_printf("[mem] %s: %u MB free\n", label, ps3_memory_free_mb());
+	uint32_t total = 0, available = 0;
+	unsigned probe = ps3_memory_free_mb();
+	int result = ps3_memory_user(&total, &available);
+
+	ps3_log_printf("[mem] %s: %u MB free; lv2: %.1f MB free of %.1f MB (0x%08x)\n", label, probe,
+		available / 1048576.0, total / 1048576.0, (unsigned)result);
+}
+
+void ps3_memory_sample(void)
+{
+	uint32_t total, available;
+
+	if (ps3_memory_user(&total, &available) == 0 && available < memory_lowest_bytes)
+	{
+		memory_lowest_bytes = available;
+		memory_lowest_seconds = ps3_time_seconds();
+	}
+}
+
+void ps3_memory_lowest(uint32_t *bytes, double *seconds)
+{
+	*bytes = memory_lowest_bytes;
+	*seconds = memory_lowest_seconds;
 }
 
 /* ---------- time */
