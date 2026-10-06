@@ -647,10 +647,12 @@ static void combiner_stage(struct context *context, int stage)
 
 		if (flags & 0x04)
 		{
-			/* sum = selector ? cd : ab */
-			emit2(context, _rsx_fp_add, _register_sum, mask, temporary(_register_cd), negated(temporary(_register_ab)));
-			emit(context, _rsx_fp_mad, _register_sum, mask, temporary(_register_sum),
+			/* sum = selector ? cd : ab, as ab - ab * s + cd * s: exact for s 0 or 1. (cd - ab) * s + ab can
+			miss cd by an ulp, and a later mux that reads such an r0.a of +-0.5 then selects the other side. */
+			emit(context, _rsx_fp_mad, _register_sum, mask, negated(temporary(_register_ab)),
 				replicated(temporary(_register_scratch2), 0), temporary(_register_ab));
+			emit(context, _rsx_fp_mad, _register_sum, mask, temporary(_register_cd),
+				replicated(temporary(_register_scratch2), 0), temporary(_register_sum));
 		}
 		else
 		{
