@@ -99,6 +99,7 @@ int ps3_host_file_write(int32_t descriptor, const void *buffer, uint64_t size, u
 /* whence: 0 set, 1 current, 2 end */
 int ps3_host_file_seek(int32_t descriptor, int64_t offset, int whence, uint64_t *position);
 int ps3_host_file_truncate(int32_t descriptor, uint64_t size);
+int ps3_host_file_sync(int32_t descriptor);
 int ps3_host_file_information(int32_t descriptor, struct ps3_host_file_information *information);
 
 int ps3_host_path_information(const char *path, struct ps3_host_file_information *information);
@@ -108,6 +109,7 @@ int ps3_host_path_make_directory(const char *path);
 int ps3_host_path_remove_directory(const char *path);
 int ps3_host_path_set_read_only(const char *path, int read_only);
 int ps3_host_path_set_times(const char *path, int64_t access_time, int64_t modification_time);
+/* the free space of path's device; sys_fs gives no device size, so total is the free space too */
 int ps3_host_disk_space(const char *path, uint64_t *free_bytes, uint64_t *total_bytes);
 
 int ps3_host_directory_open(const char *path, int32_t *descriptor);

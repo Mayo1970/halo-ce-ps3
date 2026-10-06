@@ -47,7 +47,7 @@ ASFLAGS := -mcpu=cell -mno-altivec
 LDFLAGS := -Wl,--no-multi-toc -L$(PSL1GHT)/ppu/lib -L$(PS3DEV)/portlibs/ppu/lib \
            -Wl,--wrap,printf -Wl,--wrap,vprintf -Wl,--wrap,puts -Wl,--wrap,putchar
 
-LIBS := -lrsx -lgcm_sys -lio -laudio -lsysutil -lsysmodule -lnet -lnetctl -lrt -llv2 -lm
+LIBS := -lrsx -lgcm_sys -lio -laudio -lsysutil -lsysfs -lsysmodule -lnet -lnetctl -lrt -llv2 -lm
 
 # ---------- the game's units (GOALS.md G1, G2)
 

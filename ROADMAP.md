@@ -89,13 +89,23 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   `[time]` lines stay.
 - G7 started (Matt, 2026-10-06: "We will now work on G7."). The analysis is
   done: see "G7 analysis". Step 1, the measurement build (Matt: "Do the
-  measurement build."), is built: PKG of 09:26. Waiting for the hardware
-  run.
+  measurement build."): run 2026-10-06 with the PKG of 21:03, results in
+  "G7 analysis" ("Measurement run").
 - The a30 red screen (Matt, 2026-10-06): a halt at the first recorded
   animation (`recorded_animations.c,#354`), in every map. Fixed (trap 36);
   the dump scan found no other fault. Hardware SUCCESS with the PKG of
   19:53 (Matt: "Perfect, it worked!"; no listener ran). That PKG also holds
   the measurement build.
+- G7 step 2, the known save items (Matt, 2026-10-06: "Do 1 then."): built,
+  PKG of 21:03, with the measurement build. `GetDiskFreeSpaceExA` gives the
+  real free space of the HDD: `ps3_host_disk_space` loads the sys_fs module
+  at its first call and asks `sysFsGetFreeSize` for the mount point
+  (`/dev_hdd0`). Each written file gets `sysLv2FsFsync` at its close
+  (`file_destroy` in `xbox_files.c`), and so does a `CopyFileA` copy.
+  `z:\savegame.bin` (the checkpoints) stays open during the game, so it
+  gets none. The measurement run (Matt: "Done", 2026-10-06 21:15) shows
+  both work: see "G7 analysis" ("Measurement run"). Hardware SUCCESS
+  (Matt: "Yes, it did!": the resume returned to the quit point).
 - Diagnostics in the build, from G3 (ask Matt before removing them):
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
@@ -143,6 +153,9 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
       close of a file with 1 MB or more of transfers, the totals.
     - `Direct3D: frame` lines: the textures in RSX memory, and the KB that
       no draw used in 600 frames.
+  - The save items (G7 step 2): `free space of <path>: N MB` at each save
+    check of the game; the `fsync` time in the close line of a file with 1
+    MB or more of transfers; `fsync failed (N)` on an error.
 
 ## Goal stack
 
@@ -155,7 +168,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
-| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06, steps proposed (see "G7 analysis") |
+| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered) |
 | G8 60 frames per second: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX | Not started (Matt, 2026-10-06: the last goal) |
 
 ## G7 analysis (2026-10-06)
@@ -193,7 +206,7 @@ Three read-only audits of the code. No code change.
     Xbox or PC profile fails its signature).
   - `GetDiskFreeSpaceExA` gives a fixed 8 GB (`ps3_host_disk_space`;
     `sysFsGetFreeSize` needs the sys_fs module). Written files get no
-    `sysLv2FsFsync`.
+    `sysLv2FsFsync`. Both fixed in step 2 (2026-10-06, see "Now").
   - Not tested on hardware: the revert at a death, pause > quit and the
     resume, a profile after a PS3 restart.
 - Network (`xbox/xnet_null.c` now: no network):
@@ -220,10 +233,29 @@ Three read-only audits of the code. No code change.
      resume, a PS3 restart and resume, then larger maps. Built 2026-10-06
      (Matt: "Do the measurement build.").
   2. Fixes from that data, and the known save items (the real free space,
-     `fsync` after the save writes).
+     `fsync` after the save writes). The save items are built (2026-10-06,
+     Matt: "Do 1 then.").
   3. System link on the LAN with the PC builds: Winsock and XNet on the
      PSL1GHT sockets (from `xnet.c`), and the PC's byte order on the wire.
   4. Later: internet play (`p2p*.c`).
+- Measurement run 2026-10-06 (PKG of 21:03; a30 and the menu; the
+  listener started at t=20 s of the first boot):
+  - Main memory: 93.1 MB free at the lowest (94.1 in the menu); the Xbox
+    window 71 MB (peak 71); newlib's heap 21 to 22 MB. Stable.
+  - RSX memory: 99 MB in the menu, peak 131.5 of 234 MB, 0 refused. The
+    textures grew from 21.0 to 34.7 MB when a30 loaded a second time in
+    the same boot (the old copies stay for up to 1800 idle frames).
+  - On the game thread: each checkpoint writes 16 MB to `z:\savegame.bin`
+    in 1.12 to 1.20 s; each revert (a death) reads it in 1.0 s; pause >
+    quit 2.1 s (the revert, then 16 MB to the profile in 0.96 s and the
+    `fsync` in 39 ms); each check of the profile's save (menu, level
+    start) 0.7 s; the resume read 0.75 s. The Xbox's game state is 3.3 MB.
+  - The save items: `free space of /dev_hdd0/data/HaloCE/u: 67529 MB`
+    after the restart (the game checks only at the first menu of a boot
+    and at a new save, not after pause > quit); no `fsync failed`. The
+    resume after the PS3 restart read the save and ran a30 at 30 frames
+    per second.
+  - Not covered: the larger maps.
 
 ## G4 summary
 
@@ -898,3 +930,16 @@ then `./build.sh pkg LOG_IP=<address>`.
   also holds the G7 measurement build. The listener is stopped.
 - 2026-10-06: a30 fix hardware SUCCESS (Matt: "Perfect, it worked!"). No
   listener ran, so there is no log of the run.
+- 2026-10-06: Matt asked what can be done on the PC before a hardware test,
+  and chose the known save items of G7 step 2 (Matt: "Do 1 then."):
+  `ps3_host.c` and `.h` (`ps3_host_disk_space` with `sysFsGetFreeSize`,
+  `ps3_host_file_sync`), `xbox_files.c` (`fsync` at the close of a written
+  file and after `CopyFileA`; the free space and the `fsync` time in the
+  log), `Makefile` (`-lsysfs`), `port/ps3/README.md`. `check` passes (0
+  `r2off`, `.got` 0x2e20). PKG of 21:03, with the measurement build.
+  Waiting for the measurement run.
+- 2026-10-06: The measurement run (Matt: "Done"): a30 to checkpoints, two
+  deaths, pause > quit, resume, an exit and a new boot, resume. The free
+  space and the `fsync` work; the data is in "G7 analysis" ("Measurement
+  run"). The listener is stopped. Hardware SUCCESS (Matt: "Yes, it did!":
+  the resume returned to the quit point).
