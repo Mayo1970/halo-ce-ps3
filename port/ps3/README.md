@@ -26,17 +26,18 @@ because `long` has a different size on each side.
 | `src/ps3_system.c` | The UDP log, the XMB exit, the free memory, the time and the data root. |
 | `src/ps3_video.c` | RSX init, three buffers with vsync flips, 720p if the TV has it. |
 | `src/ps3_gpu.c` | The RSX for Direct3D: RSX memory, a per-frame scratch in two halves with a backend label fence, render state, programs, textures, draws, and the present (the 640x480 picture 4:3 in the middle of the display). The game's thread takes the RSX from the display thread when it creates its device. |
-| `src/ps3_rsx_vp.c`, `ps3_rsx_fp.c`, `ps3_rsx_asm.c`, `ps3_rsx_program.h` | RSX microcode made at run time: the game's NV2A vertex programs, and its pixel shaders (texture stages and register combiners), encoded as `cgcomp` encodes them. |
+| `src/ps3_rsx_vp.c`, `ps3_rsx_fp.c`, `ps3_rsx_asm.c`, `ps3_rsx_program.h` | RSX microcode made at run time: the game's NV2A vertex programs, and its pixel shaders (texture stages and register combiners), encoded as `cgcomp` encodes them. An optimizing pass shrinks each pixel shader before the encoding. |
 | `src/ps3_input.c` | DualShock 3 and Sixaxis pads on all 7 ports: buttons, sticks and pressures, and the motors. |
 | `src/ps3_audio.c` | One 48 kHz stereo float audio port, fed from a ring by a thread. `xbox/dsound_ps3.c` opens it, and `ps3_host_exit` stops it. |
 | `src/ps3_posix.c` | The part of `port/linux/src/posix.h` that `msvc_crt.c` calls. |
 | `src/ps3_setjmp.S`, `include/setjmp.h` | A 64-bit `setjmp`/`longjmp` in place of the newlib one, which overflows `jmp_buf`. |
+| `src/ps3_timers.c`, `include/ps3_timers.h` | The timer build: the game thread's time by phase, which the game, the Direct3D device and `src/ps3_gpu.c` add up, logged every 300 frames. |
 | `xbox/ps3_platform.h` | Force-included in the Xbox layer, in place of `port/linux/src/platform.h`. |
 | `xbox/xbox_kernel.c` | Handles, events, mutexes, threads, waits, APCs, time, `GlobalAlloc`. One lv2 lock and condition variable for all waits. |
 | `xbox/xbox_memory.c` | `XPhysicalAlloc`. The Xbox window at `0x80000000`, as on the Xbox. |
 | `xbox/xbox_files.c` | The Win32 file API and the Xbox paths. |
 | `xbox/xbox_tag_swap.c` | The swap of the map data (header, tag data, structure BSPs) to the PS3's byte order when the game reads it. Its layouts are `xbox/xbox_tag_swap_tables.h`, which `tools/ps3_tag_swap.py` writes from Invader's tag definitions (GPLv3). |
-| `xbox/d3d8_rsx.c` | The Direct3D 8 device on `src/ps3_gpu.c`, from `port/linux/src/d3d8_gl.c`: state, vertex shaders, render targets as RSX surfaces, a texture cache in RSX memory (converted again when the texels change), vertices converted to floats: the map's once, into a vertex cache in RSX memory that each map or BSP load empties; the rest at each draw. |
+| `xbox/d3d8_rsx.c` | The Direct3D 8 device on `src/ps3_gpu.c`, from `port/linux/src/d3d8_gl.c`: state, vertex shaders, render targets as RSX surfaces, a texture cache in RSX memory (converted again when the texels change; the texels of the game's texture cache are checked only after it loads them again, see trap 34 in ROADMAP.md), vertices converted to floats: the map's once, into a vertex cache in RSX memory that each map or BSP load empties; the rest at each draw. |
 | `xbox/xbox_texture_layout.c` | The layout of Xbox textures, and their texels for the RSX: A8R8G8B8 in the same order (the RSX swizzles as the NV2A does), DXT blocks as they are. |
 | `xbox/xinput_ps3.c` | XInput on `src/ps3_input.c`: each pad takes the lowest free Xbox port (0 to 3) and keeps it until it disconnects. The game's polls read the pads once a frame. |
 | `xbox/dsound_ps3.c` | DirectSound on `src/ps3_audio.c`, after `port/linux/src/dsound_sdl.c`: a mixer thread (priority 1000) keeps the port's ring 43 ms ahead. Streams decode each packet (Xbox ADPCM or PCM, little-endian) to floats when the game gives it; the packets complete on the game's thread, in `DirectSoundDoWork` and `Flush`. Buffers loop (the loading screen's tones). 3D voices get the Linux build's distance and pan. |
@@ -123,6 +124,7 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 | Map data | `tag data swapped in N ms: ...` and `structure BSP swapped ...`, with the counts and the errors | |
 | Pads | `[pad] port N connected`; `XInput:` lines: the Xbox port of each pad, the game's open and close, and the buttons the game gets at each change | The D-pad and the left stick move in the menus, CROSS chooses (A), CIRCLE goes back (B) |
 | Drawing | `[gpu] ready`; `Direct3D:` lines: each vertex shader translated, the first pixel shaders, and every 600 frames the draws, the skips, the texture uploads and the vertex cache (the vertex elements converted into it and at draws, its use); `[gpu] frame N` every 600 frames: the programs and the scratch use | The game's picture, 4:3 in the middle of the display |
+| Timers | `[time]` lines every 300 frames (`src/ps3_timers.c`): the game thread's ms a frame by phase (game ticks, render and its parts, Direct3D draws, waits). With `TIMER_PROBE_FRAMES` 30 (now 0, off), also the RSX's ms by part in probe frames (the game thread waits for the RSX after each part) | |
 | Sound | `[aud] port N` at the start; `DirectSound:` every 10 s: the streams and buffers that play, the packets decoded, the mixer's time per 5333 us chunk, and the port blocks played silent or partial (underruns) | The game's sound on the PS3 audio output |
 | Exit | `[ps3] exit 0` | PS button > Quit Game goes back to the XMB |
 | Failure | `EXCEPTION halt` and the call stack: `./build.sh symbols ADDRESSES="..."` names its functions | A red pulse until PS button > Quit Game |
