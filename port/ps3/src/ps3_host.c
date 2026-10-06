@@ -19,6 +19,7 @@ mmapper calls of the Xbox memory window, and lv2 file system calls (thread-safe,
 #include <sys/process.h>
 #include <sys/systime.h>
 #include <sys/thread.h>
+#include <sysmodule/sysmodule.h>
 
 /* ---------- errors */
 
@@ -448,6 +449,11 @@ int ps3_host_file_truncate(int32_t descriptor, uint64_t size)
 	return errno_from_lv2(sysLv2FsFtruncate(descriptor, size));
 }
 
+int ps3_host_file_sync(int32_t descriptor)
+{
+	return errno_from_lv2(sysLv2FsFsync(descriptor));
+}
+
 static void information_from_stat(const sysFSStat *status, struct ps3_host_file_information *information)
 {
 	memset(information, 0, sizeof(*information));
@@ -516,13 +522,36 @@ int ps3_host_path_set_times(const char *path, int64_t access_time, int64_t modif
 
 int ps3_host_disk_space(const char *path, uint64_t *free_bytes, uint64_t *total_bytes)
 {
+	static int module_loaded;
 	struct ps3_host_file_information information;
+	const char *slash = path[0] == '/' ? strchr(path + 1, '/') : NULL;
+	char device[64];
+	u32 block_size = 0;
+	u64 free_blocks = 0;
+	s32 result;
 
-	/* 8 GB: the free size call is in a system module (sys_fs) that is not loaded here */
 	if (ps3_host_path_information(path, &information) != 0)
 		return ENOENT;
-	*free_bytes = 8ull << 30;
-	*total_bytes = 8ull << 30;
+	if (!module_loaded)
+	{
+		result = sysModuleLoad(SYSMODULE_FS);
+		if (result != 0 && result != (s32)SYSMODULE_ERR_DUPLICATE)
+		{
+			ps3_log_printf("[fs] sysModuleLoad(FS)=0x%08x\n", (unsigned)result);
+			return EIO;
+		}
+		module_loaded = 1;
+	}
+	/* the call takes a mount point: /dev_hdd0 of /dev_hdd0/data/HaloCE/u */
+	snprintf(device, sizeof(device), "%.*s", slash ? (int)(slash - path) : (int)strlen(path), path);
+	result = sysFsGetFreeSize(device, &block_size, &free_blocks);
+	if (result != 0)
+	{
+		ps3_log_printf("[fs] sysFsGetFreeSize(%s)=0x%08x\n", device, (unsigned)result);
+		return errno_from_lv2(result);
+	}
+	*free_bytes = (uint64_t)block_size * free_blocks;
+	*total_bytes = *free_bytes;
 	return 0;
 }
 
