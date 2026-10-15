@@ -291,6 +291,25 @@ void directory_create_or_delete_contents(
 	return;
 }
 
+/* port: make the folder when it is missing. An existing folder is left
+alone, including whatever is already in it. */
+void directory_create(
+	const char *directory_name)
+{
+	struct file_reference directory;
+	struct file_reference_info *info = (struct file_reference_info *)&directory;
+
+	memset(info, 0, FILE_REFERENCE_SIZE);
+	info->signature = FILE_REFERENCE_SIGNATURE;
+	info->location = NONE;
+
+	file_reference_add_directory(&directory, directory_name);
+	if (!file_exists(&directory))
+		file_create(&directory);
+
+	return;
+}
+
 boolean datastore_read(
 	const char *file_name,
 	const char *field_name,
@@ -298,7 +317,7 @@ boolean datastore_read(
 	void *data)
 {
 	struct file_reference file_ref;
-	boolean success;
+	boolean success = FALSE;
 	unsigned long datastore_size = 0;
 	struct datastore *datastore;
 
@@ -356,13 +375,6 @@ boolean datastore_read(
 		}
 	}
 
-	/* BUG (preserved for exact matching): success is never initialised, so a missing
-	 * file, a wrong-sized datastore or an absent field returns it unassigned (January
-	 * 0x589370 keeps it in the high byte of the field_name argument slot, [ebp+0xf],
-	 * written only at +0x1f5 and read at +0x19b and +0x20c). Not reached in January:
-	 * cachebeta.exe has no call, jump or address reference to this function. A corrected
-	 * build should initialise success to FALSE. Source-policy approval pending
-	 * (2026-09-27 audit). */
 	return success;
 }
 

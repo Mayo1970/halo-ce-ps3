@@ -20,13 +20,20 @@ enum
 
 enum
 {
-	RASTERIZER_MEMORY_POOL_SIZE = 0x18000,
+	/* port: the Xbox pool (0x18000) held a frame of 1024 particles. The
+	native particle pool is larger, and a full co-op Library spends the Xbox
+	pool before the frame is drawn */
+	RASTERIZER_MEMORY_POOL_SIZE = 0x18000 * (HALO_PORT_MAXIMUM_PARTICLES / 1024),
 	RASTERIZER_MAXIMUM_TRIANGLES_PER_TRIANGLE_BUFFER = 24576,
 	RASTERIZER_MAXIMUM_DEBUG_PRIMITIVES = 131072,
 	RASTERIZER_MAXIMUM_DEBUG_VERTICES = 393216,
-	RASTERIZER_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS = 384,
+	/* port: the native builds' larger pool (halo_port_capacity.h) */
+	RASTERIZER_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS = HALO_PORT_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS,
 	RASTERIZER_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS2 = 32,
-	RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLES = 32768,
+	/* port: the structure's 32768 triangles (render.h) and, past them, as
+	much again as the Xbox's 16384 left a frame for its lights, shadows and
+	contrails (a request that would fill the buffer is refused) */
+	RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLES = 49152,
 	RASTERIZER_MAXIMUM_DYNAMIC_TRIANGLE_BUFFERS = 1024,
 	/* four per particle (build_sprites_begin), for the native builds' larger
 	particle pool (halo_port_capacity.h) */
@@ -160,7 +167,9 @@ struct rasterizer_dynamic_screen_geometry_parameters
 	short map1_to_2_blend_function;
 	short framebuffer_blend_function;
 	boolean point_sampled;
-	byte pad8B;
+	/* port: the maps' color is weighted by their alpha before the
+	framebuffer blend (Halo PC's HUD overlays, hud_draw.c) */
+	boolean alpha_weighted;
 };
 
 typedef char verify_rasterizer_dynamic_screen_geometry_parameters_size[

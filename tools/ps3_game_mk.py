@@ -24,9 +24,12 @@ def main() -> None:
 
     config = json.loads(args.config.read_text(encoding="utf-8"))
     game = config["game"]
-    excluded = set(game.get("exclude", []))
+    excluded = game.get("exclude", [])
+    # a name ending in "/" excludes a folder (tools/linux_build.py's game_sources)
     sources = sorted(
-        path.as_posix() for path in Path(game["root"]).rglob("*.c") if path.as_posix() not in excluded
+        path.as_posix() for path in Path(game["root"]).rglob("*.c")
+        if not any(path.as_posix() == name or (name.endswith("/") and path.as_posix().startswith(name))
+                   for name in excluded)
     )
     sources += sorted(path.as_posix() for path in Path(config["game_sources"]).glob("*.c"))
 

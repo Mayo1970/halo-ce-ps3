@@ -119,6 +119,10 @@ static void write_to_debug_file(
 	}
 	fprintf(file, "%s%s", prefix, string);
 	fflush(file);
+#ifdef HALO_WEB
+	/* port: and to the page's log (port/web/README.md) */
+	fputs(string, stderr);
+#endif
 }
 
 void write_to_error_file(
@@ -216,9 +220,14 @@ void error(
 			va_list argument_list;
 
 			va_start(argument_list, format);
-			vsprintf(string, format, argument_list);
+			/* port: no longer than the buffer, with room for the "\r\n" */
+			vsnprintf(string, NUMBEROF(string)-2, format, argument_list);
 			va_end(argument_list);
 			csstrcat(string, "\r\n");
+
+			/* (port: the file first: printing used to halt on a long line while this call still held the lock, and the
+			reason never reached debug.txt) */
+			write_to_error_file(string, TRUE);
 
 			/* (port: on screen as config.toml's game.console_log says: an assert that stops the game, and what a typed command
 			logs (its answer), always; the rest, the game's chatter. debug.txt has it whatever that is) */
@@ -228,7 +237,6 @@ void error(
 			{
 				terminal_printf(global_real_argb_white, "%s", string);
 			}
-			write_to_error_file(string, TRUE);
 
 			new_size = csstrlen(string);
 			if (error_globals.message_buffer_size+new_size >= ERROR_MESSAGE_BUFFER_MAXIMUM_SIZE)

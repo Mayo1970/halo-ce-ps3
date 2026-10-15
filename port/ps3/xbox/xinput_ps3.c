@@ -335,6 +335,36 @@ int halo_linux_mouse_aiming(short gamepad_index)
 	return FALSE;
 }
 
+/* (no touch screen, no push-to-talk key) */
+int halo_linux_touch_move(short controller_index, float *forward, float *strafe)
+{
+	(void)controller_index;
+	(void)forward;
+	(void)strafe;
+	return FALSE;
+}
+
+int halo_linux_touch_look(short gamepad_index, float *yaw, float *pitch, float *gyro_yaw, float *gyro_pitch)
+{
+	(void)gamepad_index;
+	(void)yaw;
+	(void)pitch;
+	(void)gyro_yaw;
+	(void)gyro_pitch;
+	return FALSE;
+}
+
+int halo_linux_touch_aiming(short gamepad_index)
+{
+	(void)gamepad_index;
+	return FALSE;
+}
+
+int halo_push_to_talk_held(void)
+{
+	return FALSE;
+}
+
 void halo_input_name(int input, char *name, unsigned int size)
 {
 	(void)input;

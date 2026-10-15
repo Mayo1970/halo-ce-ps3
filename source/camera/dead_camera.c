@@ -181,10 +181,9 @@ void dead_camera_update(
 		}
 		else
 		{
-			next_unit_index = (long)result;
+			next_unit_index = NONE;
 		}
-		/* January bug: with no player, the command pointer becomes the fallback
-		 * object index; a corrected build would use NONE. */
+		/* With no living player, keep observing the dead unit/current position. */
 
 		if (next_unit_index != camera->unit_index && next_unit_index != NONE)
 		{

@@ -28,6 +28,7 @@ PKG             := $(PS3DEV)/bin/pkg
 PS3_DIR  := port/ps3
 TOML_DIR := port/third_party/tomlc17
 MUSL_DIR := port/third_party/musl-math
+ZLIB_DIR := port/third_party/zlib
 
 # ---------- the host layer (port/ps3/src): lv2 and newlib with their own 64-bit long
 
@@ -65,12 +66,11 @@ GAME_ABI = -O2 -mcpu=cell -mhard-float -mno-altivec -fsigned-char -fms-extension
 GAME_WARN ?= -w
 GAME_CFLAGS = -std=gnu89 -D__STRICT_ANSI__ $(GAME_WARN) $(GAME_ABI) -mminimal-toc \
               -include $(PS3_DIR)/include/halo_ps3_prefix.h -include $(SEMANTICS) \
-              -I$(PS3_DIR)/include -Iport/linux/include $(GAME_DEFINES) $(GAME_INCLUDES) \
+              -I$(PS3_DIR)/include -Iport/linux/include -iquote port/linux/game $(GAME_DEFINES) $(GAME_INCLUDES) \
               -idirafter port/include/xdk $(GAME_UNIT_FLAGS) $(GAME_EXTRA)
 
 # the game's main() is called by the PS3's (port/ps3/src/ps3_main.c)
-$(BUILD)/obj/source/shell/shell_xbox.o: GAME_UNIT_FLAGS := -Dmain=halo_xbox_main
-# prototypes libtiff's units lack, kept out of its licensed headers
+$(BUILD)/obj/source/shell/shell_xbox.o: GAME_UNIT_FLAGS := -Dmain=halo_xbox_main# prototypes libtiff's units lack, kept out of its licensed headers
 $(BUILD)/obj/source/bitmaps/libtiff/%.o: GAME_UNIT_FLAGS := -include $(PS3_DIR)/include/halo_ps3_libtiff.h
 
 # the source path can hold spaces, so the shell gets it quoted
@@ -140,6 +140,25 @@ $(MUSL_OBJS): $(BUILD)/obj/%.o: %.c
 	@$(CC) -std=gnu11 -O2 -mcpu=cell -mhard-float -mno-altivec -ffp-contract=off -w -I$(MUSL_DIR)/include \
 		-include $(MUSL_DIR)/include/libm.h -MMD -MP -c $< -o $@
 
+# the port's zlib, its inflate only (tools/linux_build.py's ZLIB_SOURCES and ZLIB_DEFINES)
+ZLIB_SRCS := $(addprefix $(ZLIB_DIR)/,adler32.c crc32.c inffast.c inflate.c inftrees.c uncompr.c zutil.c)
+ZLIB_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(ZLIB_SRCS))
+
+$(ZLIB_OBJS): $(BUILD)/obj/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) -std=gnu11 -DZ_PREFIX -Dz_errmsg=z_port_errmsg -w -MMD -MP -c $< -o $@
+
+# Monocypher: map sharing's BLAKE2b (port_stubs.c's p2p_blake2b_256); stb_vorbis: Custom Edition maps' Ogg
+# Vorbis (custom_edition_sounds.c), with the host's long, which its interface has none of
+THIRD_PARTY_OBJS := $(BUILD)/obj/port/third_party/monocypher/monocypher.o \
+                   $(BUILD)/obj/port/third_party/stb_vorbis/stb_vorbis.o
+
+$(THIRD_PARTY_OBJS): $(BUILD)/obj/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) -std=gnu11 -w -MMD -MP -c $< -o $@
+
 # ---------- the program
 
 .PHONY: all self pkg check clean game bringup bringup-self symbols FORCE
@@ -147,7 +166,7 @@ $(MUSL_OBJS): $(BUILD)/obj/%.o: %.c
 all: $(BUILD)/$(TARGET).elf
 
 # the host objects come first, before libc, so ps3_setjmp.o replaces its setjmp
-ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(GAME_OBJS)
+ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) $(GAME_OBJS)
 
 $(BUILD)/$(TARGET).elf: $(ALL_OBJS)
 	@echo "LD $@"
@@ -211,5 +230,5 @@ symbols: $(BUILD)/$(TARGET).elf
 clean:
 	@rm -rf $(BUILD)
 
--include $(HOST_OBJS:.o=.d) $(XBOX_OBJS:.o=.d) $(TOML_OBJS:.o=.d) $(MUSL_OBJS:.o=.d) $(GAME_OBJS:.o=.d) \
+-include $(HOST_OBJS:.o=.d) $(XBOX_OBJS:.o=.d) $(TOML_OBJS:.o=.d) $(MUSL_OBJS:.o=.d) $(ZLIB_OBJS:.o=.d) $(THIRD_PARTY_OBJS:.o=.d) $(GAME_OBJS:.o=.d) \
 	$(BRINGUP_OBJS:.o=.d)

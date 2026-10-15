@@ -501,10 +501,6 @@ void projectile_export_function_values(
 					value = 0.f;
 				break;
 
-			/* value is left unassigned only by this default arm. Not reached unassigned: the
-			 * arm's assertion failure calls system_exit, which does not return in January
-			 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-			 * Source-policy approval pending (2026-09-27 audit). */
 			default:
 				display_assert(
 					NULL,
@@ -567,8 +563,10 @@ boolean projectile_new(
 
 	attachments = &definition->object.attachments;
 	projectile->projectile.tracer_attachment_index = NONE;
+	/* port: only the attachments the object has (a map's count; the tracer
+	index is written through, and attachments_new reports the rest) */
 	for (attachment_index = 0;
-		attachment_index < attachments->count;
+		attachment_index < MIN(attachments->count, MAXIMUM_NUMBER_OF_ATTACHMENTS_PER_OBJECT);
 		attachment_index++)
 	{
 		struct object_attachment_definition const *attachment = TAG_BLOCK_GET_ELEMENT(
@@ -1196,9 +1194,7 @@ static void projectile_calculate_deceleration(
 			definition,
 			definition->projectile.air_damage_range_lower_bound,
 			definition->projectile.air_damage_range_upper_bound);
-		/* BUG (preserved for exact matching): January loads the water upper bound
-		 * in the air branch. A corrected build should use
-		 * definition->projectile.air_damage_range_upper_bound. */
+		/* (as the original game, kept: in the air the water damage range's upper bound is used) */
 		projectile->projectile.maximum_damage_distance =
 			definition->projectile.water_damage_range_upper_bound;
 

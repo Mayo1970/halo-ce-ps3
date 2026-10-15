@@ -1908,6 +1908,9 @@ static void progress_bar_render(
 		IDirect3DDevice8_SetTextureStageState(global_d3d_device, stage, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
 		IDirect3DDevice8_SetTexture(global_d3d_device, stage, &back_buffer_texture);
 	}
+	/* (back_buffer_texture has what it needs of the surface; the
+	reference IDirect3DDevice8_GetBackBuffer gave is given back) */
+	IDirect3DSurface8_Release(back_buffer);
 
 	if (progress<0.9f)
 		draw_fade_layer(0.f, 0.f, 0.9f);
@@ -2062,6 +2065,9 @@ static void progress_bar_make_stuff_ready(
 		IDirect3DDevice8_SetRenderTarget(global_d3d_device, back_buffer, depth_buffer);
 		IDirect3DDevice8_Clear(global_d3d_device, 0, NULL, 0xf0, 0, 0.f, 0);
 		IDirect3DDevice8_SetRenderTarget(global_d3d_device, front_buffer, depth_buffer);
+		IDirect3DSurface8_Release(back_buffer);
+		IDirect3DSurface8_Release(front_buffer);
+		IDirect3DSurface8_Release(depth_buffer);
 	}
 
 	return;
@@ -2087,9 +2093,18 @@ static void progress_bar_load_loading_texture(
 	file= fopen(source_path, "rb");
 	if (file)
 	{
+		image.width= 0;
+		image.height= 0;
+		image.image_type= 0;
+		image.pixel_depth= 0;
 		tgaLoadHeader(file, &image);
-		image.pixels= pixels;
-		tgaLoadImageData(file, &image);
+		/* port: the file is a map pack's: only an uncompressed 24-bit
+		picture the texture's size is read into it */
+		if (image.image_type==2 && image.pixel_depth==24 && image.width==320 && image.height==240)
+		{
+			image.pixels= pixels;
+			tgaLoadImageData(file, &image);
+		}
 		fclose(file);
 	}
 	IDirect3DTexture8_UnlockRect(*texture, 0);

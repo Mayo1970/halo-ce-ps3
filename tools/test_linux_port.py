@@ -1,5 +1,6 @@
 """Tests for the native Linux build tooling (port/linux, tools/linux_*.py)."""
 
+import os
 import re
 import shutil
 import subprocess
@@ -155,11 +156,15 @@ def test_game_sources_leave_out_the_excluded(tmp_path, monkeypatch):
     write(tmp_path / "source" / "a.c", "")
     write(tmp_path / "source" / "zlib" / "b.c", "")
     write(tmp_path / "source" / "zlib" / "example.c", "")
+    write(tmp_path / "source" / "tiff" / "c.c", "")
+    write(tmp_path / "source" / "tiff" / "deep" / "d.c", "")
+    write(tmp_path / "source" / "tiffx.c", "")
     write(tmp_path / "source" / "a.h", "")
     monkeypatch.chdir(tmp_path)
-    config = {"game": {"root": "source", "exclude": ["source/zlib/example.c"],
+    # (a folder is a name ending in "/": not a file that only starts like it)
+    config = {"game": {"root": "source", "exclude": ["source/zlib/example.c", "source/tiff/"],
                        "defines": ["DEBUG"], "include_dirs": ["source", "source/saved games"]}}
-    assert linux_build.game_sources(config) == [Path("source/a.c"), Path("source/zlib/b.c")]
+    assert linux_build.game_sources(config) == [Path("source/a.c"), Path("source/tiffx.c"), Path("source/zlib/b.c")]
     assert linux_build.game_defines_and_includes(config) == '-DDEBUG -Isource -I"source/saved games"'
 
 
@@ -170,7 +175,7 @@ MENUS = Path(__file__).resolve().parent.parent / "port/assets/menus"
 MENU_ATTRIBUTES = {
     "menus": {"root"},
     "bitmap": {"name", "width", "height", "frames", "platform"},
-    "frame": {"png", "map", "index", "width", "height", "platform"},
+    "frame": {"png", "map", "index", "width", "height", "x", "y", "platform"},
     "strings": {"name", "platform"},
     "string": {"text", "platform"},
     "widget": {"name", "type", "controller", "flags", "bitmap", "text", "strings", "values", "setting", "font",
@@ -227,7 +232,9 @@ def test_menus_are_well_formed():
             where = f"{path.name}: <{element.tag} {element.get('name', '')}>"
             assert element.tag in MENU_ATTRIBUTES, where
             assert set(element.attrib) <= MENU_ATTRIBUTES[element.tag], where
-            assert element.get("platform") in (None, "desktop", "android"), where
+            # (the platforms that show it: menu_files.c's MENU_PLATFORM)
+            assert element.get("platform") is None or \
+                set(element.get("platform").split()) <= {"desktop", "android", "web"}, where
             # (menu_files.c's whole numbers, which the tags keep in shorts,
             # its true/false attributes, and no text but whitespace outside
             # <string>s)
@@ -339,3 +346,215 @@ def test_p2p_signatures_and_listings(tmp_path):
     result = subprocess.run([str(program)], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout
     assert "PASS" in result.stdout
+
+
+
+# port_config.c on its own, with the app's file paths (HALO_DATA_ROOT) and C
+# library calls: "get <setting>" prints it, "write <setting> <value>" sets it
+CONFIG_PROGRAM = r"""
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include "port_config.h"
+
+void platform_log(const char *format, ...)
+{
+    va_list arguments;
+
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
+}
+
+int main(int argc, char **argv)
+{
+    char text[256];
+
+    if (argc == 3 && !strcmp(argv[1], "get") && config_text(argv[2], text, sizeof(text)))
+        return puts(text) < 0;
+    if (argc == 4 && !strcmp(argv[1], "write"))
+        return !config_write(argv[2], argv[3]);
+    return 1;
+}
+"""
+
+
+def test_config_has_each_section_once(tmp_path):
+    """config.toml names each section once, as TOML asks: the defaults the
+    game writes, and a file an older version wrote with [display] twice
+    (which went unread), joined"""
+    compiler = shutil.which("clang") or shutil.which("cc")
+    if not compiler:
+        pytest.skip("needs a C compiler")
+    root = Path(__file__).resolve().parent.parent
+    stubs = tmp_path / "stubs"
+    (stubs / "SDL3").mkdir(parents=True)
+    (stubs / "SDL3" / "SDL.h").write_text("")
+    (stubs / "platform.h").write_text("void platform_log(const char *format, ...);\n")
+    # (beside the stubs, which it then includes instead of the platform layer's)
+    for name in ("port_config.c", "port_config.h"):
+        shutil.copy(root / "port/linux/src" / name, stubs / name)
+    (tmp_path / "main.c").write_text(CONFIG_PROGRAM)
+    program = tmp_path / "config_program"
+    subprocess.run([compiler, "-DHALO_ANDROID=1", "-DHALO_ARM64_GUEST=1", f"-I{stubs}",
+                    f"-I{root}/port/third_party/tomlc17", "-o", str(program),
+                    str(tmp_path / "main.c"), str(stubs / "port_config.c"),
+                    str(root / "port/third_party/tomlc17/tomlc17.c"), "-lpthread"], check=True)
+    data = tmp_path / "data"
+    data.mkdir()
+    config = data / "config.toml"
+
+    def run(*command):
+        result = subprocess.run([str(program), *command], capture_output=True, text=True,
+                                env={**os.environ, "HALO_DATA_ROOT": str(data)})
+        assert result.returncode == 0, result.stderr
+        assert "using the defaults" not in result.stderr, result.stderr
+        return result.stdout.strip(), result.stderr
+
+    def sections():
+        return re.findall(r"^\[(\w+)\]$", config.read_text(), re.M)
+
+    # the defaults
+    assert run("get", "display.first_person_legs")[0] == "false"
+    assert len(sections()) == len(set(sections())), sections()
+    run("write", "display.first_person_legs", "true")
+    assert run("get", "display.first_person_legs")[0] == "true"
+
+    # an older version's
+    config.write_text("[display]\nvsync = false\n\n[game]\nconsole_log = \"all\"\n\n"
+                      "[display]\nfirst_person_legs = true\n")
+    value, log = run("get", "display.first_person_legs")
+    assert value == "true" and "joined" in log
+    assert sections().count("display") == 1
+    assert run("get", "display.vsync")[0] == "false"
+    assert run("get", "game.console_log")[0] == "all"
+
+
+# ---------- system link's stand-in machines (tools/system_link_bots.py)
+
+
+def test_system_link_bots_messages_are_the_games():
+    """the stand-in machines number their messages as network_messages.h does,
+    and send each at the size network_messages.c's fields decode (pad 0,
+    bytes 1, shorts 2, longs 4; an array a count byte and one element)"""
+    import struct
+    import time
+    import types
+    from tools import system_link_bots as bots
+
+    root = Path(__file__).resolve().parents[1]
+    header = (root / "source/networking/network_messages.h").read_text()
+    enum = header[header.index("enum network_game_message_type"):]
+    names = re.findall(r"\t_message_(\w+)", enum[:enum.index("};")])
+    for name, value in vars(bots).items():
+        if name.lower() in names:
+            assert names.index(name.lower()) == value, name
+    sizes = {}
+    source = (root / "source/networking/network_messages.c").read_text()
+    for fields, name in re.findall(r"\t\{\n((?:\t\t.*\n)*?)\t\},\n\tNETWORK_GAME_MESSAGE_DEFINITION\((\w+),", source):
+        sizes[name] = sum(int(count) * {"pad": 0, "bytes": 1, "shorts": 2, "longs": 4}.get(kind, 0) + (kind == "array")
+                          for kind, count in re.findall(r"_data_packet_field_(\w+), (\d+)", fields))
+
+    sent = []
+    machine = bots.Machine(1, "127.0.0.2", "127.0.0.1", print)
+    machine.udp.close()
+    machine.send = sent.append
+    machine.udp = types.SimpleNamespace(sendto=lambda data, address: sent.append(data))
+    machine.joined()
+    machine.handle(bots.SERVER_MACHINE_ACCEPTED, struct.pack(">ih", 0, 1))
+    settings = bytes(0x24) + b"levels\\test\\bloodgulch\\bloodgulch".ljust(0x80, b"\0")
+    machine.handle(bots.SERVER_GAME_SETTINGS_UPDATE, struct.pack(">HHH", len(settings), 0, len(settings)) + settings)
+    machine.tick(time.monotonic())
+    machine.handle(bots.SERVER_BEGIN_GAME, b"")
+    machine.tick(time.monotonic() + 60)
+    machine.handle(bots.SERVER_GAME_UPDATE, struct.pack(">I", 1))
+    machine.tick(time.monotonic())
+    assert len(sent) == 6
+    for data in sent:
+        name = names[data[-1]]
+        assert len(data) - 4 == sizes[name], name
+
+
+# ---------- the wire format (tools/network_format.py)
+
+
+def test_network_format_is_the_recorded_one():
+    """what the machines send each other is what port/linux/network_format.txt
+    records for HALO_PORT_NETWORK_VERSION, and NETCODE.md says what that
+    version changed"""
+    from tools import network_format
+
+    problems = network_format.check()
+    assert not problems, "\n".join(problems)
+
+
+# ---------- the tag validator (port/linux/game/tag_validate.c)
+
+RETAIL_MAPS = Path("assets/maps")
+MAP_VALIDATE = Path("build/linux/map_validate")
+
+
+def _retail_maps():
+    maps = sorted(RETAIL_MAPS.glob("*.map"))
+    if not maps or not MAP_VALIDATE.is_file():
+        pytest.skip("needs the retail maps in assets/maps and ninja linux's build/linux/map_validate")
+    return maps
+
+
+def test_retail_maps_need_no_corrections():
+    """every retail map in assets/maps passes the tag validator, each of its
+    structure bsps too, with no correction: the schemas (tag_schema_*.c)
+    say what the game's own maps hold"""
+    maps = _retail_maps()
+    result = subprocess.run([str(MAP_VALIDATE), "--strict", *map(str, maps)], capture_output=True, text=True,
+                            timeout=1800)
+    assert result.returncode == 0, result.stdout[-6000:]
+
+
+def test_tag_validator_survives_damaged_maps():
+    """retail maps with a few of their tags' words changed at random: the
+    validator never crashes or hangs, and a map it lets through is clean
+    when checked again"""
+    maps = _retail_maps()
+    chosen = [path for path in maps if path.stem in ("bloodgulch", "a10", "ui")] or maps[:1]
+    result = subprocess.run([str(MAP_VALIDATE), "--fuzz", "300", "--seed", "1", *map(str, chosen)],
+                            capture_output=True, text=True, timeout=1800)
+    assert result.returncode == 0, (result.stdout + result.stderr)[-6000:]
+
+
+# ---------- Custom Edition maps (port/linux/game/cache_file_formats.c, custom_edition_cache.c)
+
+def _custom_edition_maps():
+    """the Custom Edition maps (HALO_CUSTOM_EDITION_MAPS, or the gitignored
+    assets/custom_edition), with the bitmaps.map, sounds.map and loc.map
+    they need beside them"""
+    configured = os.environ.get("HALO_CUSTOM_EDITION_MAPS")
+    folder = Path(configured) if configured else Path("assets/custom_edition")
+    maps = [path for path in sorted(folder.glob("*.map"))
+            if path.stem.lower() not in ("bitmaps", "sounds", "loc")]
+    if not maps or not (folder / "bitmaps.map").is_file() or not MAP_VALIDATE.is_file():
+        pytest.skip("needs Custom Edition maps (HALO_CUSTOM_EDITION_MAPS or assets/custom_edition) and "
+                    "ninja linux's build/linux/map_validate")
+    return maps
+
+
+def test_custom_edition_maps_are_loaded_and_checked():
+    """every Custom Edition map is loaded, converted and passed by the tag
+    validator, each of its structure bsps too: none is refused (a community
+    map's own mistakes are corrected and logged)"""
+    maps = _custom_edition_maps()
+    result = subprocess.run([str(MAP_VALIDATE), *map(str, maps)], capture_output=True, text=True, timeout=3600)
+    assert result.returncode == 0, result.stdout[-6000:]
+    assert "refused" not in result.stdout, result.stdout[-6000:]
+
+
+def test_custom_edition_loader_and_validator_survive_damaged_maps():
+    """Custom Edition maps with a few of their file's words changed at random:
+    the loader, the conversion and the validator never crash or hang, and a
+    map they let through is clean when checked again"""
+    maps = _custom_edition_maps()
+    chosen = [path for path in maps if path.stem.lower() in ("bloodgulch", "hugeass", "ui")] or maps[:2]
+    result = subprocess.run([str(MAP_VALIDATE), "--fuzz", "100", "--seed", "1", *map(str, chosen)],
+                            capture_output=True, text=True, timeout=3600)
+    assert result.returncode == 0, (result.stdout + result.stderr)[-6000:]

@@ -160,8 +160,15 @@ static void slayer_engine_player_added(
 	long player_index)
 {
 	struct player_datum *player = player_get(player_index);
+	long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
 
 	player->multiplayer_special = NONE;
+	/* port: a player joining the game in progress can take the slot of one
+	who quit (network_game_spawn_player): not that player's score, nor in
+	free for all, where the slot is the team, the team's */
+	slayer_globals.individual_score[slot] = 0;
+	if (!game_engine_has_teams())
+		slayer_globals.team_score[slot] = 0;
 
 	return;
 }
@@ -230,7 +237,8 @@ static wchar_t *slayer_get_score_header_string(
 {
 	long string_list_index;
 
-	ustrcpy(buffer, GET_MULTIPLAYER_GAME_TEXT(_string_score));
+	/* port: bounded (a map's text, into its callers' score_string[256]) */
+	ustrncpy_terminated(buffer, GET_MULTIPLAYER_GAME_TEXT(_string_score), 256);
 
 	return buffer;
 }
@@ -446,7 +454,7 @@ static boolean slayer_engine_display_score(
 			usnprintf(
 				string,
 				NUMBEROF(string),
-				GET_MULTIPLAYER_GAME_TEXT(_string_n_team_n),
+				ustring_format_checked(GET_MULTIPLAYER_GAME_TEXT(_string_n_team_n), "dd"),
 				slayer_get_score(player_index, _get_score_individual),
 				slayer_get_score(player_index, _get_score_team));
 		}
@@ -468,7 +476,7 @@ static boolean slayer_engine_display_score(
 		usnprintf(
 			buffer,
 			buffer_character_count,
-			GET_MULTIPLAYER_GAME_TEXT(_string_new_target_name),
+			ustring_format_checked(GET_MULTIPLAYER_GAME_TEXT(_string_new_target_name), "s"),
 			target_player->name);
 		break;
 
@@ -481,8 +489,8 @@ static boolean slayer_engine_display_score(
 			usnprintf(
 				buffer,
 				buffer_character_count,
-				GET_MULTIPLAYER_GAME_TEXT(
-					_string_name_kills_score_n_team_score_of_max),
+				ustring_format_checked(GET_MULTIPLAYER_GAME_TEXT(
+					_string_name_kills_score_n_team_score_of_max), "sddd"),
 				place_name,
 				slayer_get_score(player_index, _get_score_individual),
 				slayer_get_score(player_index, _get_score_team),
@@ -496,8 +504,8 @@ static boolean slayer_engine_display_score(
 			usnprintf(
 				buffer,
 				buffer_character_count,
-				GET_MULTIPLAYER_GAME_TEXT(
-					_string_name_kills_score_of_max),
+				ustring_format_checked(GET_MULTIPLAYER_GAME_TEXT(
+					_string_name_kills_score_of_max), "sdd"),
 				place_name,
 				slayer_get_score(player_index, _get_score_team),
 				game_engine_get_variant()->universal_variant.score_to_win);

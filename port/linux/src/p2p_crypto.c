@@ -13,13 +13,13 @@ brokers carry sealed messages, so only holders of the invite read them; the
 tunnel's packets are sealed with keys only its two machines have.
 */
 
-#include "platform.h"
 #include "posix.h"
 #include "p2p_internal.h"
 
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* ---------- SHA-256 */
@@ -649,6 +649,50 @@ int p2p_ed25519_to_x25519(const unsigned char *public_key, unsigned char *x25519
 	return !p2p_equal(product, zero, P2P_KEY_SIZE);
 }
 
+/* ---------- passwords (a password-protected public game's listing holds
+its invite's token sealed with the password's key: p2p_lobby.c) */
+
+/* (Argon2id of 4 MiB and three passes: tens of milliseconds, once for the
+host and once a guess for a joiner) */
+#define PASSWORD_KEY_BLOCKS 4096
+#define PASSWORD_KEY_PASSES 3
+
+void p2p_password_key(const char *password, const unsigned char *salt, unsigned char *key)
+{
+	crypto_argon2_config config = { CRYPTO_ARGON2_ID, PASSWORD_KEY_BLOCKS, PASSWORD_KEY_PASSES, 1 };
+	crypto_argon2_inputs inputs;
+	void *work_area = malloc((size_t)PASSWORD_KEY_BLOCKS * 1024);
+
+	inputs.pass = (const unsigned char *)password;
+	inputs.pass_size = (unsigned int)strlen(password);
+	inputs.salt = salt;
+	inputs.salt_size = P2P_KEY_SIZE;
+	if (!work_area)
+	{
+		/* (no key anyone could guess: nothing opens with it) */
+		posix_random_bytes(key, P2P_PASSWORD_KEY_SIZE);
+		return;
+	}
+	crypto_argon2(key, P2P_PASSWORD_KEY_SIZE, work_area, config, inputs, crypto_argon2_no_extras);
+	crypto_wipe(work_area, (size_t)PASSWORD_KEY_BLOCKS * 1024);
+	free(work_area);
+}
+
+void p2p_seal_token(const unsigned char *key, const unsigned char *signing_key, const unsigned char *token,
+	unsigned char *sealed)
+{
+	/* (a nonce of its own each time: 24 random bytes never repeat) */
+	posix_random_bytes(sealed, 24);
+	crypto_aead_lock(sealed + 24 + 16, sealed + 24, key, sealed, signing_key, P2P_KEY_SIZE, token, P2P_TOKEN_SIZE);
+}
+
+int p2p_unseal_token(const unsigned char *key, const unsigned char *signing_key, const unsigned char *sealed,
+	unsigned char *token)
+{
+	return crypto_aead_unlock(token, sealed + 24, key, sealed, signing_key, P2P_KEY_SIZE, sealed + 24 + 16,
+		P2P_TOKEN_SIZE) == 0;
+}
+
 int p2p_ed25519_verify(const unsigned char *public_key, const void *message, int size,
 	const unsigned char *signature)
 {
@@ -658,4 +702,23 @@ int p2p_ed25519_verify(const unsigned char *public_key, const void *message, int
 	signature a message) */
 	return p2p_ed25519_to_x25519(public_key, x25519_public) &&
 		crypto_ed25519_check(signature, public_key, message, (size_t)size) == 0;
+}
+
+/* a native build's ICE credentials (p2p_webrtc.c) from a session's secret:
+8 and 32 hexadecimal digits */
+void p2p_webrtc_credentials(const unsigned char *secret, char *ufrag, char *password)
+{
+	unsigned char digest[P2P_SHA256_SIZE];
+
+	p2p_hmac_sha256(secret, P2P_SHA256_SIZE, "webrtc ice-ufrag", 16, digest);
+	p2p_hex(digest, 4, ufrag);
+	p2p_hmac_sha256(secret, P2P_SHA256_SIZE, "webrtc ice-pwd", 14, digest);
+	p2p_hex(digest, 16, password);
+}
+
+/* ---------- BLAKE2b (Monocypher's): map sharing's pieces (map_share.c) */
+
+void p2p_blake2b_256(const void *data, unsigned long size, unsigned char *digest)
+{
+	crypto_blake2b(digest, 32, (const uint8_t *)data, (size_t)size);
 }

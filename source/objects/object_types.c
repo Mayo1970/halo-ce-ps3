@@ -4,6 +4,7 @@ upstream halo-ce-universal copy of source/objects/object_types.c. */
 /* ---------- headers */
 
 #include "cseries.h"
+#include "errors.h"
 #include "object_types.h"
 
 #include "cache/cache_files.h"
@@ -23,6 +24,7 @@ upstream halo-ce-universal copy of source/objects/object_types.c. */
 #include "units/bipeds.h"
 #include "units/units.h"
 #include "units/vehicles.h"
+#include "game/game_engine.h" /* port: game_engine_vehicle_placement_begin's type, which WebAssembly calls it by */
 
 /* ---------- constants */
 
@@ -352,11 +354,11 @@ struct object_type_definition *object_type_definitions[NUMBER_OF_OBJECT_TYPES] =
 /* 4 bytes, as the definitions' next pointers that object_types_initialize chains it with */
 struct object_type_definition *HALO_PTR32 first_object_type_definition;
 /* VC7 otherwise emits this tentative definition as a common symbol. */
-#ifndef HALO_ANDROID /* Mach-O section names differ; the default is .bss anyway */
+#ifndef HALO_ARM64_GUEST /* Mach-O section names differ; the default is .bss anyway */
 #pragma bss_seg(".bss")
 #endif
 static word processed_bsp_flags;
-#ifndef HALO_ANDROID
+#ifndef HALO_ARM64_GUEST
 #pragma bss_seg()
 #endif
 
@@ -389,6 +391,20 @@ struct object_type_definition *object_type_definition_get(
 			"#%d isn't a valid object type in [#0,#%d)",
 			object_type,
 			NUMBER_OF_OBJECT_TYPES));
+	/* port: a type that is not one (from a map's data) is scenery's, the
+	type with the least to it, not whatever lies past the table: its
+	procedures are called through it */
+	if (!VALID_INDEX(object_type, NUMBER_OF_OBJECT_TYPES) || !object_type_definitions[object_type])
+	{
+		static boolean logged = FALSE;
+
+		if (!logged)
+		{
+			logged = TRUE;
+			error(_error_silent, "#%d is not an object type: scenery's is used", object_type);
+		}
+		object_type = _object_type_scenery;
+	}
 	match_assert(
 		"c:\\halo\\SOURCE\\objects\\object_types.c",
 		632,
@@ -941,8 +957,10 @@ void object_types_place_objects(
 				{
 					short scenario_datum_index;
 
+					/* port: no more than the short counter reaches (a map's count;
+					retail has up to 1523) */
 					for (scenario_datum_index = 0;
-						scenario_datum_index < scenario_datums->count;
+						scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
 						scenario_datum_index++)
 					{
 						struct scenario_object_datum *scenario_object =
@@ -951,7 +969,14 @@ void object_types_place_objects(
 								scenario_datum_index,
 								element_size);
 
-						if (scenario_object->palette_entry_index!=NONE)
+						/* port: a palette entry the scenario has, naming a tag (a
+						map's index; object_new_from_scenario makes nothing from
+						any other) */
+						if (VALID_INDEX(scenario_object->palette_entry_index, scenario_palette->count) &&
+							TAG_BLOCK_GET_ELEMENT(
+								scenario_palette,
+								scenario_object->palette_entry_index,
+								struct scenario_object_palette_entry)->reference.index!=NONE)
 						{
 							struct scenario_object_palette_entry *palette_entry = TAG_BLOCK_GET_ELEMENT(
 								scenario_palette,
@@ -991,8 +1016,9 @@ void object_types_place_objects(
 					short scenario_datum_index;
 
 					objects_memory_compact();
+					/* port: no more than the short counter reaches (a map's count) */
 					for (scenario_datum_index = 0;
-						scenario_datum_index < scenario_datums->count;
+						scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
 						scenario_datum_index++)
 					{
 						struct scenario_object_datum *scenario_object =
@@ -1064,8 +1090,9 @@ void object_types_place_all(
 					scenario,
 					object_type);
 
+				/* port: no more than the short counter reaches (a map's count) */
 				for (scenario_datum_index = 0;
-					scenario_datum_index < scenario_datums->count;
+					scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
 					scenario_datum_index++)
 				{
 					struct scenario_object_datum *scenario_object =
@@ -1074,10 +1101,15 @@ void object_types_place_all(
 							scenario_datum_index,
 							element_size);
 
-					/* port: the gametype's vehicles of each team (game_variant_options:
-					every machine places the same) */
+					/* port: a Halo Custom Edition map's vehicles are those its
+					placements' multiplayer spawn flags name for the game type, as
+					retail Halo's are (port/linux/game/custom_edition_objects.c);
+					then the gametype's vehicles of each team (game_variant_options:
+					every machine places the same), asked last as it counts those it
+					places */
 					if (object_type == _object_type_vehicle &&
-						!game_engine_vehicle_placement_allowed(scenario_object, scenario_palette))
+						(!custom_edition_vehicle_placement_allowed(scenario_object) ||
+						!game_engine_vehicle_placement_allowed(scenario_object, scenario_palette)))
 					{
 						continue;
 					}
@@ -1115,8 +1147,9 @@ void object_names_postprocess(
 					object_type,
 					&element_size);
 
+				/* port: no more than the short counter reaches (a map's count) */
 				for (scenario_datum_index = 0;
-					scenario_datum_index < scenario_datums->count;
+					scenario_datum_index < MIN(scenario_datums->count, SHORT_MAX);
 					scenario_datum_index++)
 				{
 					struct scenario_object_datum *scenario_object =
@@ -1125,7 +1158,9 @@ void object_names_postprocess(
 							scenario_datum_index,
 							element_size);
 
-					if (scenario_object->name_index!=NONE)
+					/* port: only a name the scenario has (a map's index, which
+					wrote into whatever was there; retail's are below 448) */
+					if (VALID_INDEX(scenario_object->name_index, scenario->object_names.count))
 					{
 						struct scenario_object_name *object_name = TAG_BLOCK_GET_ELEMENT(
 							&scenario->object_names,
@@ -1161,7 +1196,9 @@ long object_type_synchronize(
 	real_matrix4x3 matrix;
 	struct object_datum *object;
 
-	if (scenario_object->palette_entry_index==NONE)
+	/* port: a palette entry the scenario doesn't have is none (a map's
+	index) */
+	if (!VALID_INDEX(scenario_object->palette_entry_index, palette->count))
 	{
 		if (object_index!=NONE)
 		{
@@ -1276,7 +1313,9 @@ long object_type_synchronize(
 		}
 	}
 
-	if (scenario_object->name_index!=NONE)
+	/* port: only a name the scenario has (a map's index, which wrote into
+	whatever was there) */
+	if (VALID_INDEX(scenario_object->name_index, global_scenario_get()->object_names.count))
 	{
 		struct scenario_object_name *object_name = TAG_BLOCK_GET_ELEMENT(
 			&global_scenario_get()->object_names,

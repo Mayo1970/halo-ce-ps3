@@ -201,7 +201,7 @@ typedef char map_leaf_size_assert[
 
 /* ---------- prototypes */
 
-static void node_stack_push(
+static boolean node_stack_push(
 	long node_index);
 static long node_stack_pop(
 	void);
@@ -835,7 +835,9 @@ boolean leaf_map_closure(
 
 /* ---------- private code */
 
-static void node_stack_push(
+/* port: FALSE (nothing pushed) if the stack is full: a bsp deeper than it
+holds has no leaf map */
+static boolean node_stack_push(
 	long node_index)
 {
 	match_assert(
@@ -843,9 +845,15 @@ static void node_stack_push(
 		42,
 		leaf_map_globals.node_stack_count<MAXIMUM_NODE_STACK_COUNT);
 
+	if (leaf_map_globals.node_stack_count >= MAXIMUM_NODE_STACK_COUNT)
+	{
+		leaf_map_globals.error = "the bsp is too deep for a leaf map.";
+		return FALSE;
+	}
+
 	leaf_map_globals.node_stack[leaf_map_globals.node_stack_count++] = node_index;
 
-	return;
+	return TRUE;
 }
 
 static long node_stack_pop(
@@ -1004,7 +1012,10 @@ static void leaf_map_build_leaf_faces(
 	{
 		long child_node_index;
 
-		node_stack_push(child_index != 0 ? node_index : (node_index | LONG_MIN));
+		if (!node_stack_push(child_index != 0 ? node_index : (node_index | LONG_MIN)))
+		{
+			return;
+		}
 
 		child_node_index = node->children[child_index];
 
@@ -1154,7 +1165,10 @@ static void leaf_map_build_portals(
 	{
 		long child_node_index;
 
-		node_stack_push(child_index != 0 ? node_index : (node_index | LONG_MIN));
+		if (!node_stack_push(child_index != 0 ? node_index : (node_index | LONG_MIN)))
+		{
+			return;
+		}
 
 		child_node_index = node->children[child_index];
 
@@ -1296,16 +1310,6 @@ static void leaf_map_build_portal_from_leaves(
 			long portal_index = tag_block_add_element(&leaf_map->portals);
 			short portal_designator_index0 = (short)tag_block_add_element(&leaf0->portal_designators);
 			short portal_designator_index1 = (short)tag_block_add_element(&leaf1->portal_designators);
-
-			/* BUG (preserved for exact matching): January checks vertex_count
-			 * against NONE only after entering the positive-count branch, where
-			 * the assertion cannot fail. A corrected build should perform this
-			 * check immediately after convex_hull2d_intersect returns. */
-			match_vassert(
-				"c:\\halo\\SOURCE\\structures\\leaf_map.c",
-				487,
-				vertex_count!=NONE,
-				"too many vertices in portal");
 
 			if (portal_index != NONE && portal_designator_index0 != NONE && portal_designator_index1 != NONE)
 			{

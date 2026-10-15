@@ -486,6 +486,15 @@ boolean network_connection_connect(
 		return FALSE;
 	}
 	success = TRUE;
+	/* port: a connection made is open, whatever came before it. A write
+	made before connecting (while searching for games, to no socket yet)
+	marked it closed, and every write of the join request then failed. */
+	SET_FLAG(connection->flags, _connection_closed_bit, FALSE);
+	SET_FLAG(connection->flags, _connection_going_stale_bit, FALSE);
+	if (connection->reliable_outgoing_queue)
+	{
+		circular_queue_reset(connection->reliable_outgoing_queue);
+	}
 
 	if (connection->unreliable_endpoint)
 	{
@@ -1326,6 +1335,8 @@ static boolean network_client_reliable_connection_read(
 	return success;
 }
 
+static boolean network_connection_last_read_unreliable;
+
 boolean network_connection_read(
 	struct network_connection *connection,
 	void *buffer,
@@ -1346,12 +1357,23 @@ boolean network_connection_read(
 		connection->flags&FLAG(_connection_create_serverside_client_bit));
 
 	result = network_client_reliable_connection_read(connection, buffer, buffer_size, source_address);
+	network_connection_last_read_unreliable = FALSE;
 	if (!result && TEST_FLAG(connection->flags, _connection_create_clientside_client_bit))
 	{
 		result = network_client_unreliable_connection_read(connection, buffer, buffer_size, source_address);
+		network_connection_last_read_unreliable = result;
 	}
 
 	return result;
+}
+
+/* port: whether the message network_connection_read last gave a client came
+in a datagram (which anyone can send as the host) rather than over its
+connection to the host */
+boolean network_connection_last_read_was_unreliable(
+	void)
+{
+	return network_connection_last_read_unreliable;
 }
 
 boolean network_server_close_client_connection(

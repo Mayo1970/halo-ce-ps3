@@ -74,6 +74,7 @@ symbols in this file:
 #include "scenario/scenario_definitions.h"
 #include "text/draw_string.h"
 #include "text/text_group.h"
+#include "network_coop.h" /* port: port/linux/game/network_coop.c */
 
 /* ---------- constants */
 
@@ -265,6 +266,7 @@ void cinematic_set_title_delayed(
 {
 	short title_slot_index;
 
+	network_coop_note_title(title_index, delay);
 	for (title_slot_index = 0;
 		title_slot_index < MAXIMUM_QUEUED_CINEMATIC_TITLES &&
 		cinematic_globals->queued_titles[title_slot_index].title_index != NONE;
@@ -423,6 +425,10 @@ void cinematic_render(
 				fade_amount = PIN(fade_amount, 0.0f, 1.0f);
 			}
 
+			/* port: not drawn over a menu, as the letterbox is not (the
+			fullscreen overlays come after the players' windows and their
+			menus); the title's time goes on as before */
+			if (!ui_widgets_active())
 			{
 				real_argb_color text_color;
 				long shadow_alpha;

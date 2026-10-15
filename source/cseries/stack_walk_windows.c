@@ -237,7 +237,7 @@ void stack_walk_with_context(
 
 		for (frame_number = levels_dumped - 1; frame_number >= levels_to_ignore; frame_number--)
 		{
-#if defined(HALO_ANDROID) || defined(HALO_PS3)
+#if defined(HALO_ARM64_GUEST) || defined(HALO_PS3)
 			/* the call site (the BL before the return address), for
 			llvm-symbolizer --obj=build/android/halo_guest.elf (ppu-addr2line on the PS3) */
 			unsigned long routine_address = routine_addresses[frame_number] - 4;
@@ -374,12 +374,6 @@ int load_symbol_table(
 			{
 				found_symbols_section = TRUE;
 			}
-			else if (strstr(line, "Timestamp"))
-			{
-				/* BUG (kept for exact matching): the timestamp search's result is ignored; a
-				 * corrected build rejects a map whose timestamp does not match */
-				strstr(line, timestamp_str);
-			}
 		}
 
 		string_storage_size = 0;
@@ -417,22 +411,9 @@ int load_symbol_table(
 					goto corrupt_map_file;
 				}
 
-				/* BUG (kept for exact matching): fgets's failure is not checked on these lines;
-				 * a corrected build rejects EOF before reading line[0] */
-				fgets(line, sizeof(line), map_file);
-				if (!isspace(line[0]))
-				{
-					goto corrupt_map_file;
-				}
-
-				fgets(line, sizeof(line), map_file);
-				if (!strstr(line, "Static symbols"))
-				{
-					goto corrupt_map_file;
-				}
-
-				fgets(line, sizeof(line), map_file);
-				if (!isspace(line[0]))
+				if (!fgets(line, sizeof(line), map_file) || !isspace(line[0]) ||
+					!fgets(line, sizeof(line), map_file) || !strstr(line, "Static symbols") ||
+					!fgets(line, sizeof(line), map_file) || !isspace(line[0]))
 				{
 					goto corrupt_map_file;
 				}
@@ -451,14 +432,13 @@ int load_symbol_table(
 				}
 				symbol_address = strtoul(token, &end_str, 16);
 
-				/* BUG (kept for exact matching): an entry without a name token keeps the last
-				 * symbol_name; a corrected build rejects that entry */
 				token = strtok(NULL, " \t\n\r");
-				if (token)
+				if (!token)
 				{
-					strncpy(symbol_name, token, sizeof(symbol_name)-1);
-					symbol_name[sizeof(symbol_name)-1] = 0;
+					goto corrupt_map_file;
 				}
+				strncpy(symbol_name, token, sizeof(symbol_name)-1);
+				symbol_name[sizeof(symbol_name)-1] = 0;
 			}
 
 			token = strtok(NULL, " \t\n\r");
@@ -473,9 +453,8 @@ int load_symbol_table(
 				stack_walk_globals.fixup = rva_base - (unsigned long)load_symbol_table;
 			}
 
-			/* BUG (kept for exact matching): five bytes are skipped with only strtoul's end
-			 * pointer checked; a corrected build validates the conversion and the width */
-			if (!end_str)
+			/* (the address's five columns, " f   ", before the object name) */
+			if (!end_str || strlen(end_str) < 5)
 			{
 				goto corrupt_map_file;
 			}
@@ -585,9 +564,8 @@ finished:
 			sizeof(*symbol_table->symbols),
 			symbol_sort_proc);
 
-		/* BUG (kept for exact matching): the trim assumes a nonzero RVA; a corrected build
-		 * stops before number_of_symbols reaches zero */
-		while (symbol_table->symbols[symbol_table->number_of_symbols-1].rva_base==0)
+		while (symbol_table->number_of_symbols > 0 &&
+			symbol_table->symbols[symbol_table->number_of_symbols-1].rva_base==0)
 		{
 			symbol_table->number_of_symbols--;
 		}
@@ -621,8 +599,10 @@ static int symbol_sort_proc(
 	const struct debug_symbol *symbol1 = elem1;
 	const struct debug_symbol *symbol2 = elem2;
 
-	/* BUG (kept for exact matching): two zero RVAs give 1, which breaks antisymmetry; a
-	 * corrected build returns 0 for them */
+	if (symbol1->rva_base == symbol2->rva_base)
+	{
+		return 0;
+	}
 	if (symbol1->rva_base==0 || symbol1->rva_base > symbol2->rva_base)
 	{
 		return 1;
@@ -657,7 +637,7 @@ static unsigned long walk_up(
 		routine_address = caller_frame ? (unsigned long)*(__uint64 *)(caller_frame + 16) : 0;
 		walk_up_current_frame = (unsigned long)caller_frame;
 #else
-#ifdef HALO_ANDROID
+#ifdef HALO_ARM64_GUEST
 		/* an AArch64 frame record: the caller's frame pointer, then the
 		return address, 8 bytes each (the upper halves are zero) */
 		routine_address = ((unsigned long *)walk_up_current_frame)[2];

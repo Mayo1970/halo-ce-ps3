@@ -1,4 +1,4 @@
-/* MSVC runtime functions the game (and its libtiff and zlib) calls that the C library lacks, and
+/* MSVC runtime functions the game (and its zlib) calls that the C library lacks, and
 the fopen/open family by Xbox path that its headers redirect to (port/linux/include/stdio.h). */
 
 #include "platform.h"
@@ -297,7 +297,7 @@ static unsigned short msvc_to_control_word(unsigned int value, unsigned short wo
 	return word;
 }
 
-#ifdef HALO_ANDROID
+#ifdef HALO_ARM64_GUEST
 /* AArch64: the rounding mode in FPCR.RMode, the sticky flags in FPSR; precision control and
 exception unmasking have no equivalent, so the rest of the control word is only remembered. */
 static unsigned int msvc_control_word = CW_DEFAULT;
@@ -419,6 +419,33 @@ unsigned int _clearfp(void)
 	/* FX, OX, UX, ZX, XX and the invalid-operation details (VX sums them) */
 	fpscr_write(fpscr_read() & ~(__uint64)0x9ff80700);
 	return status;
+}
+#elif defined(HALO_WEB)
+/* WebAssembly: rounding to nearest and no exception flags, always. The MSVC
+control word is only remembered, so that the game reads back what it set. */
+static unsigned int msvc_control_word = CW_DEFAULT;
+
+unsigned int _control87(unsigned int new_value, unsigned int mask)
+{
+	if (mask)
+		msvc_control_word = (msvc_control_word & ~mask) | (new_value & mask);
+	return msvc_control_word;
+}
+
+unsigned int _controlfp(unsigned int new_value, unsigned int mask)
+{
+	/* _controlfp ignores the denormal mask */
+	return _control87(new_value, mask & ~_EM_DENORMAL);
+}
+
+unsigned int _statusfp(void)
+{
+	return 0;
+}
+
+unsigned int _clearfp(void)
+{
+	return 0;
 }
 #else
 /* x87: glibc's fenv holds the control and status words (fesetenv loads the whole x87
@@ -829,7 +856,8 @@ int _fileno(FILE *stream)
 	return fileno(stream);
 }
 
-/* libtiff maps its POSIX calls onto the MSVC underscore names itself */
+/* the MSVC underscore names of the POSIX file calls (the game's libtiff
+used them; the builds leave it out: port.json) */
 
 int _open(const char *path, int flags, ...)
 {

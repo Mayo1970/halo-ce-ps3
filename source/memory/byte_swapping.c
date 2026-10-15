@@ -139,7 +139,7 @@ static void _byte_swap_data(
 {
 	long code;
 	long offset;
-	long code_index;
+	long code_index = 0;
 	register long array_count;
 	long repeat_count;
 	long local_size;
@@ -285,8 +285,6 @@ next_iteration:
 	}
 	while (repeat_count!=0);
 
-/* A zero array count stores code_index unassigned through next_code. Not reached: cachebeta.exe's 15 _begin_bs_array
- * entries have count 1; byte_swap_definitions use static tables. Source-policy approval pending (2026-09-27 audit). */
 done:
 	if (size)
 		*size = offset;

@@ -453,6 +453,8 @@ static long ai_communication_find_actor_to_reply_to_player(
 static long ai_conversation_new(
 	short scenario_conversation_index,
 	boolean scripted);
+static short ai_conversation_participant_count(
+	struct ai_conversation const *definition);
 
 /* ---------- globals */
 
@@ -1861,9 +1863,7 @@ static long ai_communication_find_global_actor_to_talk(
 	}
 	if (cause_unit_index != NONE)
 	{
-		/* BUG (preserved for exact matching): January asks for the subject position again here and leaves cause_point
-		 * uninitialized. A corrected build should call unit_get_head_position(cause_unit_index, &cause_point). */
-		unit_get_head_position(subject_unit_index, &subject_point);
+		unit_get_head_position(cause_unit_index, &cause_point);
 	}
 
 	actor_iterator_new(&iterator, TRUE);
@@ -2266,7 +2266,8 @@ void ai_conversation_finish(
 			.finish_time = game_time_get();
 
 		participant_index = 0;
-		while ((long)participant_index < definition->participants.count)
+		/* port: the participants the conversation's arrays hold (a map's count) */
+		while ((long)participant_index < ai_conversation_participant_count(definition))
 		{
 			participant_bitmask = conversation->participant_bitmask;
 			if ((participant_bitmask & FLAG(participant_index)) != 0 &&
@@ -2751,8 +2752,9 @@ static boolean ai_conversation_find_participant(
 		}
 
 		nearby_unit_count = 0;
+		/* port: the participants the conversation's arrays hold (a map's count) */
 		for (slot_index = 0;
-			slot_index < conversation_definition->participants.count;
+			slot_index < ai_conversation_participant_count(conversation_definition);
 			slot_index = (short)(slot_index + 1))
 		{
 			long actor_index = conversation->actor_indices[slot_index];
@@ -2844,8 +2846,9 @@ static boolean ai_conversation_find_participant(
 				continue;
 			}
 
+			/* port: the participants the conversation's arrays hold (a map's count) */
 			for (slot_index = 0;
-				slot_index < conversation_definition->participants.count;
+				slot_index < ai_conversation_participant_count(conversation_definition);
 				slot_index = (short)(slot_index + 1))
 			{
 				if (candidate_actor_index == conversation->actor_indices[slot_index])
@@ -2853,7 +2856,8 @@ static boolean ai_conversation_find_participant(
 					break;
 				}
 			}
-			if (slot_index < conversation_definition->participants.count)
+			/* port: the participants the conversation's arrays hold (a map's count) */
+			if (slot_index < ai_conversation_participant_count(conversation_definition))
 			{
 				rejection_counts[2]++;
 				continue;
@@ -3443,8 +3447,9 @@ static boolean ai_conversation_begin(
 	csmemset(conversation->actor_indices, NONE, sizeof(conversation->actor_indices));
 	csmemset(conversation->dialogue_indices, NONE, sizeof(conversation->dialogue_indices));
 
+	/* port: the participants the conversation's arrays hold (a map's count) */
 	for (index = 0;
-		index < definition->participants.count;
+		index < ai_conversation_participant_count(definition);
 		index = (short)(index + 1))
 	{
 		struct scenario_conversation_participant_view *participant =
@@ -3475,8 +3480,9 @@ static boolean ai_conversation_begin(
 
 	if (try_alternate)
 	{
+		/* port: the participants the conversation's arrays hold (a map's count) */
 		for (index = 0;
-			index < definition->participants.count;
+			index < ai_conversation_participant_count(definition);
 			index = (short)(index + 1))
 		{
 			struct scenario_conversation_participant_view *participant =
@@ -3515,8 +3521,9 @@ static boolean ai_conversation_begin(
 
 	participant_not_ready = FALSE;
 	participant_missing = FALSE;
+	/* port: the participants the conversation's arrays hold (a map's count) */
 	for (index = 0;
-		index < definition->participants.count;
+		index < ai_conversation_participant_count(definition);
 		index = (short)(index + 1))
 	{
 		struct scenario_conversation_participant_view *participant =
@@ -3636,8 +3643,9 @@ static boolean ai_conversation_begin(
 				{
 					real nearest_prop_distance = REAL_MAX;
 
+					/* port: the participants the conversation's arrays hold (a map's count) */
 					for (index = 0;
-						index < definition->participants.count;
+						index < ai_conversation_participant_count(definition);
 						index = (short)(index + 1))
 					{
 						long actor_index = conversation->actor_indices[index];
@@ -3708,8 +3716,9 @@ static boolean ai_conversation_begin(
 		{
 			if (player->unit_index != NONE)
 			{
+				/* port: the participants the conversation's arrays hold (a map's count) */
 				for (index = 0;
-					index < definition->participants.count;
+					index < ai_conversation_participant_count(definition);
 					index = (short)(index + 1))
 				{
 					long actor_index = conversation->actor_indices[index];
@@ -3752,8 +3761,9 @@ static boolean ai_conversation_begin(
 
 	if (can_begin)
 	{
+		/* port: the participants the conversation's arrays hold (a map's count) */
 		for (index = 0;
-			index < definition->participants.count;
+			index < ai_conversation_participant_count(definition);
 			index = (short)(index + 1))
 		{
 			if (TEST_FLAG(conversation->participant_bitmask, index) &&
@@ -4448,7 +4458,8 @@ void ai_conversation_actor_deleted(
 			conversation->scenario_conversation_index,
 			struct ai_conversation);
 		participant_index = 0;
-		while ((long)participant_index < definition->participants.count)
+		/* port: the participants the conversation's arrays hold (a map's count) */
+		while ((long)participant_index < ai_conversation_participant_count(definition))
 		{
 			if (conversation->actor_indices[participant_index] == actor_index)
 			{
@@ -4528,7 +4539,8 @@ void ai_conversation_unit_died(
 				_ai_conversation_stop_if_anyone_dies_bit)) != 0)
 		{
 			participant_index = 0;
-			if (participant_index < definition->participants.count)
+			/* port: the participants the conversation's arrays hold (a map's count) */
+			if (participant_index < ai_conversation_participant_count(definition))
 			{
 				do
 				{
@@ -4561,7 +4573,8 @@ void ai_conversation_unit_died(
 
 					participant_index = (short)(participant_index + 1);
 				}
-				while (participant_index < definition->participants.count);
+				/* port: the participants the conversation's arrays hold (a map's count) */
+				while (participant_index < ai_conversation_participant_count(definition));
 			}
 
 			if (referenced)
@@ -4679,8 +4692,9 @@ static boolean ai_conversation_line_begin(
 		struct scenario_conversation_line_view);
 	participant_index = line->participant_index;
 	result = FALSE;
+	/* port: the participants the conversation's arrays hold (a map's count) */
 	if (participant_index >= 0 &&
-		participant_index < definition->participants.count &&
+		participant_index < ai_conversation_participant_count(definition) &&
 		(conversation->participant_bitmask & FLAG(participant_index)) != 0)
 	{
 		participant = TAG_BLOCK_GET_ELEMENT(
@@ -4712,8 +4726,9 @@ static boolean ai_conversation_line_begin(
 				break;
 
 			case _ai_conversation_address_participant:
+				/* port: the participants the conversation's arrays hold (a map's count) */
 				if (line->address_participant_index >= 0 &&
-					line->address_participant_index < definition->participants.count &&
+					line->address_participant_index < ai_conversation_participant_count(definition) &&
 					conversation->actor_indices[line->address_participant_index] != NONE)
 				{
 					actor = actor_get(
@@ -4785,7 +4800,8 @@ static boolean ai_conversation_line_perform(
 					FLAG(_ai_conversation_line_wait_until_everyone_nearby_bit))) != 0)
 				{
 					participant_index = 0;
-					while ((long)participant_index < definition->participants.count)
+					/* port: the participants the conversation's arrays hold (a map's count) */
+					while ((long)participant_index < ai_conversation_participant_count(definition))
 					{
 						participant_actor_index =
 							conversation->actor_indices[participant_index];
@@ -5139,8 +5155,9 @@ void ai_conversation_update(
 		{
 			short participant_index;
 
+			/* port: the participants the conversation's arrays hold (a map's count) */
 			for (participant_index = 0;
-				participant_index < definition->participants.count;
+				participant_index < ai_conversation_participant_count(definition);
 				participant_index++)
 			{
 				if (TEST_FLAG(conversation->participant_bitmask, participant_index) &&
@@ -6662,3 +6679,29 @@ void ai_communication_event(
 }
 
 /* ---------- private code */
+
+/* port: the participants a conversation's fixed arrays hold (actor_indices,
+dialogue_indices and participant_bitmask, MAXIMUM_PARTICIPANTS_PER_CONVERSATION
+of them; a map's count): the conversation is held by its first ones, and it
+is said once. Every retail conversation fits. */
+static short ai_conversation_participant_count(
+	struct ai_conversation const *definition)
+{
+	if (definition->participants.count > MAXIMUM_PARTICIPANTS_PER_CONVERSATION)
+	{
+		static boolean reported = FALSE;
+
+		if (!reported)
+		{
+			error(_error_silent, "conversation %s has %ld participants (only %d are used)",
+				definition->name,
+				definition->participants.count,
+				MAXIMUM_PARTICIPANTS_PER_CONVERSATION);
+			reported = TRUE;
+		}
+
+		return MAXIMUM_PARTICIPANTS_PER_CONVERSATION;
+	}
+
+	return (short)MAX(definition->participants.count, 0);
+}

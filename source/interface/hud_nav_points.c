@@ -123,6 +123,7 @@ symbols in this file:
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
 #include "units/units.h"
+#include "network_coop.h" /* port: port/linux/game/network_coop.c */
 
 /* ---------- constants */
 
@@ -496,6 +497,7 @@ void hud_activate_team_nav_point_with_flag(
 	short flag_index,
 	float vertical_offset)
 {
+	network_coop_note_nav_point(_coop_nav_point_team_flag, nav_index, team_index, flag_index, vertical_offset);
 	hud_activate_team_nav_point(nav_index, team_index, _hud_nav_point_type_flag, flag_index, vertical_offset);
 
 	return;
@@ -507,6 +509,7 @@ void hud_activate_team_nav_point_with_object(
 	long object_index,
 	float vertical_offset)
 {
+	network_coop_note_nav_point(_coop_nav_point_team_object, nav_index, team_index, object_index, vertical_offset);
 	hud_activate_team_nav_point(nav_index, team_index, _hud_nav_point_type_object, object_index, vertical_offset);
 
 	return;
@@ -553,6 +556,7 @@ void hud_deactivate_team_nav_point_with_flag(
 	short team_index,
 	short flag_index)
 {
+	network_coop_note_nav_point(_coop_nav_point_team_flag, NONE, team_index, flag_index, 0.0f);
 	hud_deactivate_team_nav_point(team_index, _hud_nav_point_type_flag, flag_index);
 
 	return;
@@ -562,6 +566,7 @@ void hud_deactivate_team_nav_point_with_object(
 	short team_index,
 	long object_index)
 {
+	network_coop_note_nav_point(_coop_nav_point_team_object, NONE, team_index, object_index, 0.0f);
 	hud_deactivate_team_nav_point(team_index, _hud_nav_point_type_object, object_index);
 
 	return;
@@ -575,6 +580,7 @@ void hud_unit_activate_nav_point_with_flag(
 {
 	long player_index = player_index_from_unit_index(unit_index);
 
+	network_coop_note_nav_point(_coop_nav_point_unit_flag, nav_index, unit_index, flag_index, vertical_offset);
 	if (player_index!=NONE)
 	{
 		hud_activate_nav_point(nav_index, player_index, _hud_nav_point_type_flag, flag_index, vertical_offset);
@@ -591,6 +597,7 @@ void hud_unit_activate_nav_point_with_object(
 {
 	long player_index = player_index_from_unit_index(unit_index);
 
+	network_coop_note_nav_point(_coop_nav_point_unit_object, nav_index, unit_index, object_index, vertical_offset);
 	if (player_index!=NONE)
 	{
 		hud_activate_nav_point(nav_index, player_index, _hud_nav_point_type_object, object_index, vertical_offset);
@@ -605,6 +612,7 @@ void hud_unit_deactivate_nav_point_with_flag(
 {
 	long player_index = player_index_from_unit_index(unit_index);
 
+	network_coop_note_nav_point(_coop_nav_point_unit_flag, NONE, unit_index, flag_index, 0.0f);
 	if (player_index!=NONE)
 	{
 		hud_deactivate_nav_point(player_index, _hud_nav_point_type_flag, flag_index);
@@ -619,6 +627,7 @@ void hud_unit_deactivate_nav_point_with_object(
 {
 	long player_index = player_index_from_unit_index(unit_index);
 
+	network_coop_note_nav_point(_coop_nav_point_unit_object, NONE, unit_index, object_index, 0.0f);
 	if (player_index!=NONE)
 	{
 		hud_deactivate_nav_point(player_index, _hud_nav_point_type_object, object_index);
@@ -903,7 +912,7 @@ void hud_render_nav_points(
 		for (nav_point_index = 0; nav_point_index<MAXIMUM_NUMBER_OF_NAV_POINTS; nav_point_index++)
 		{
 			struct hud_nav_point_datum *nav_point = &datum->nav_points[nav_point_index];
-			real_point3d position;
+			real_point3d position = { 0 };
 
 			if (nav_point->nav_index==NONE ||
 				nav_point->reference_index==NONE ||
@@ -944,10 +953,6 @@ void hud_render_nav_points(
 				}
 				break;
 
-			/* position is left unassigned only by this default arm. Not reached unassigned: the
-			 * arm's assertion failure calls system_exit, which does not return in January
-			 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-			 * Source-policy approval pending (2026-09-27 audit). */
 			default:
 				match_assert("c:\\halo\\SOURCE\\interface\\hud_nav_points.c", 725, !"unreachable");
 				break;
@@ -1049,11 +1054,6 @@ static void hud_update_nav_point_local_player(
 				break;
 			}
 
-			/* The default arm leaves position unassigned. Not reached: every store to
-			 * nav_point->type in this file writes one of the three types handled above or NONE
-			 * (the map-start memset and the deactivations), the nav point array is private to
-			 * this file, and NONE entries are skipped above. Source-policy approval pending
-			 * (2026-09-27 audit). */
 			position.z += nav_point->z_offset;
 			nav_point->screen_type = hud_get_nav_point_render_type(
 				local_player_index,

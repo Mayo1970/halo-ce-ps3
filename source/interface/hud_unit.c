@@ -67,6 +67,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries/cseries.h"
+#include "cseries/errors.h"
 #include "cutscene/cinematics.h"
 #include "effects/player_effects.h"
 #include "game/game.h"
@@ -381,6 +382,20 @@ void scripted_hud_blink_motion_sensor(
 	return;
 }
 
+/* port: the scripts' show and blink flags, for network co-op
+(port/linux/game/network_coop.c) */
+long hud_unit_port_script_flags(
+	void)
+{
+	return unit_hud_globals->script_flags;
+}
+
+void hud_unit_port_set_script_flags(
+	long flags)
+{
+	unit_hud_globals->script_flags = flags;
+}
+
 void hud_play_unit_sounds(
 	struct player_datum const *player,
 	boolean show_hud)
@@ -479,7 +494,8 @@ void hud_play_unit_sounds(
 					sound_flags,
 					&hud_definition->warning_sounds,
 					hud_state->last_sound_handles,
-					&hud_state->sound_flags);
+					&hud_state->sound_flags,
+					(short)NUMBEROF(hud_state->last_sound_handles));
 			}
 		}
 	}
@@ -514,20 +530,46 @@ static void hud_update_unit_local_player(
 
 			if (hud_state->last_shield_vitality > unit->object.shield_vitality)
 			{
-				if (hud_state->fade_time < 0.0f || hud_state->fade_time > 1.0f)
-					hud_state->last_shield_hit_time = game_time_get();
+				real shield_drop = hud_state->last_shield_vitality - unit->object.shield_vitality;
 
-				if (game_time_get() - hud_state->last_shield_hit_time < 15)
+				/* port: the host drains an overshield by about 0.00074 a tick
+				and moves this meter's memory with it (hud_tick_shield). A
+				client does not drain shields. The lower value arrived as a
+				hit, so the meter flashed and the shield damage sound played
+				for the whole overshield. A small step from past full is that
+				drain (no more than about 25 ticks of it). A larger step is a
+				hit, and the meter still flashes. The step is closed here, so
+				one late packet cannot leave the meter a little behind and keep
+				the flash going, and a hit's flash already fading goes on
+				fading, as when the shield holds still. */
+				if (hud_state->last_shield_vitality > 1.0f && shield_drop <= 0.02f)
 				{
-					hud_state->fade_time = 0.0f;
+					hud_state->last_shield_vitality = unit->object.shield_vitality;
+					if (hud_state->fade_time > 0.0f)
+					{
+						hud_state->fade_time +=
+							(real)(game_time_get() - hud_state->last_shield_hit_time) *
+							(1.0f / TICKS_PER_SECOND);
+					}
+					hud_state->last_shield_hit_time = game_time_get();
 				}
 				else
 				{
-					hud_state->last_shield_vitality = unit->object.shield_vitality;
-					hud_state->fade_time +=
-						(real)(game_time_get() - hud_state->last_shield_hit_time) *
-						(1.0f / TICKS_PER_SECOND);
-					hud_state->last_shield_hit_time = game_time_get();
+					if (hud_state->fade_time < 0.0f || hud_state->fade_time > 1.0f)
+						hud_state->last_shield_hit_time = game_time_get();
+
+					if (game_time_get() - hud_state->last_shield_hit_time < 15)
+					{
+						hud_state->fade_time = 0.0f;
+					}
+					else
+					{
+						hud_state->last_shield_vitality = unit->object.shield_vitality;
+						hud_state->fade_time +=
+							(real)(game_time_get() - hud_state->last_shield_hit_time) *
+							(1.0f / TICKS_PER_SECOND);
+						hud_state->last_shield_hit_time = game_time_get();
+					}
 				}
 			}
 			else if (hud_state->last_shield_vitality < unit->object.shield_vitality)
@@ -591,8 +633,8 @@ void hud_render_damage_indicators(
 	{
 		struct hud_damage_indicators_definition *definition =
 			&hud_globals->damage_indicators;
-		real theta;
-		real_point2d screen_position;
+		real theta = 0.0f;
+		real_point2d screen_position = { 0 };
 		real scale = hud_globals_get_scale(local_player_count() > 1);
 		byte damage_indicators[NUMBER_OF_HUD_DAMAGE_INDICATOR_DIRECTIONS];
 		short direction;
@@ -655,10 +697,6 @@ void hud_render_damage_indicators(
 							render.camera.viewport_bounds.y1) / 2);
 					break;
 
-				/* theta and screen_position are left unassigned only by this default arm. Not reached unassigned: the
-				 * arm's assertion failure calls system_exit, which does not return in January
-				 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-				 * Source-policy approval pending (2026-09-27 audit). */
 				default:
 					match_assert(
 						"c:\\halo\\SOURCE\\interface\\hud_unit.c",
@@ -1205,6 +1243,26 @@ void hud_render_unit_interface(
 							&hud_definition->auxilary_meters,
 							meter_index,
 							struct auxilary_meter_definition);
+
+						/* port: the type is the map's and indexes the flash times
+						and values (one type, the integrated light, which every
+						retail meter is): a meter of any other is not drawn, and
+						that is said once */
+						if (!VALID_INDEX(meter->type, (short)NUMBEROF(hud_state->auxilary_flash_time)))
+						{
+							static boolean bad_meter_type_reported = FALSE;
+
+							if (!bad_meter_type_reported)
+							{
+								bad_meter_type_reported = TRUE;
+								error(
+									_error_silent,
+									"unit hud auxilary meter of type %d (of %d) not drawn",
+									meter->type,
+									(short)NUMBEROF(hud_state->auxilary_flash_time));
+							}
+							continue;
+						}
 
 						if (TEST_FLAG(
 								hud_state->auxilary_active_type_flags,

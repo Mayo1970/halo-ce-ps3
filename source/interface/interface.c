@@ -38,6 +38,7 @@ upstream halo-ce-universal copy of source/interface/interface.c. */
 #include "text/draw_string.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#include "map_share.h" /* port: port/linux/game/map_share.c */
 
 /* ---------- constants */
 
@@ -315,6 +316,8 @@ void interface_draw_fullscreen_overlays(
 	cinematic_render();
 	interface_splitscreen_render();
 	hud_render_timer();
+	/* port: a map's download (port/linux/game/map_share.c) */
+	map_share_render();
 	terminal_draw();
 	main_framerate_render();
 	render_debug_profile();
@@ -1151,6 +1154,9 @@ static void interface_splitscreen_render(
 {
 	rectangle2d bounds;
 	short window_count;
+	/* port: the screen's width, wider than the Xbox's 640 on a wide screen,
+	whose middle the windows split at (compute_window_bounds) */
+	short width = (short)halo_screen_width();
 
 	if (game_engine_force_single_screen() || cinematic_in_progress())
 		return;
@@ -1163,7 +1169,7 @@ static void interface_splitscreen_render(
 	bounds.y0 = 239;
 	bounds.x0 = 0;
 	bounds.y1 = 241;
-	bounds.x1 = 640;
+	bounds.x1 = width;
 	draw_quad(&bounds, 0xFF000000);
 
 	if (window_count <= 2)
@@ -1172,18 +1178,18 @@ static void interface_splitscreen_render(
 	if (window_count == 3)
 	{
 		bounds.y0 = 240;
-		bounds.x0 = 319;
+		bounds.x0 = width / 2 - 1;
 		bounds.y1 = 480;
-		bounds.x1 = 321;
+		bounds.x1 = width / 2 + 1;
 		draw_quad(&bounds, 0xFF000000);
 
 		return;
 	}
 
 	bounds.y0 = 0;
-	bounds.x0 = 319;
+	bounds.x0 = width / 2 - 1;
 	bounds.y1 = 480;
-	bounds.x1 = 321;
+	bounds.x1 = width / 2 + 1;
 
 	match_assert(
 		"c:\\halo\\SOURCE\\interface\\interface.c",

@@ -6,19 +6,13 @@ of port/linux/src/memory_watch.c (see there for the design). The pages behind
 a cached texture are made read-only; a vectored exception handler catches
 the first write, records a new generation for the page and makes it
 writable again.
-
-This file also reports crashes, which the game's own __try handler cannot
-(port/windows/include/halo_windows_prefix.h).
 */
 
 #include <windows.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <string.h>
 
-/* the Xbox memory window (port/linux/src/platform.h) */
+/* the Xbox memory window (port/linux/src/platform.h: the desktop builds') */
 #define PLATFORM_CONTIGUOUS_BASE 0x80000000UL
-#define PLATFORM_CONTIGUOUS_SIZE 0x08000000UL
+#define PLATFORM_CONTIGUOUS_SIZE 0x20000000UL
 
 #define WATCH_PAGE_SIZE 0x1000UL
 #define WATCH_PAGE_COUNT (PLATFORM_CONTIGUOUS_SIZE / WATCH_PAGE_SIZE)
@@ -162,65 +156,7 @@ void memory_watch_forget(void *address, unsigned long size)
 	}
 }
 
-/* ---------- crash reports */
-
-/* errors.c's: debug.txt, whose first lines (its reference address) place
-the addresses here in the build */
-void write_to_error_file(char *string, unsigned char date);
-
-/* a line of the report, to the console and to debug.txt (a player sends
-debug.txt; the console closes with the game) */
-static void crash_line(const char *format, ...)
+/* page protection sees each write at once: nothing to do per frame */
+void memory_watch_begin_frame(void)
 {
-	char line[256];
-	va_list arguments;
-	size_t length;
-
-	va_start(arguments, format);
-	vsnprintf(line, sizeof(line) - 2, format, arguments);
-	va_end(arguments);
-	platform_log("%s", line);
-	length = strlen(line);
-	line[length] = '\r';
-	line[length + 1] = '\n';
-	line[length + 2] = 0;
-	write_to_error_file(line, 1);
-}
-
-static LONG WINAPI crash_filter(EXCEPTION_POINTERS *exception)
-{
-	EXCEPTION_RECORD *record = exception->ExceptionRecord;
-	CONTEXT *context = exception->ContextRecord;
-	const DWORD *stack = (const DWORD *)context->Esp;
-
-	crash_line("crash: exception %08lx at %p (accessing %p), eip %08lx ebp %08lx esp %08lx",
-		record->ExceptionCode, record->ExceptionAddress,
-		record->NumberParameters >= 2 ? (void *)record->ExceptionInformation[1] : NULL,
-		context->Eip, context->Ebp, context->Esp);
-	if (!IsBadReadPtr(stack, 6 * sizeof(DWORD)))
-	{
-		crash_line("crash: stack %08lx %08lx %08lx %08lx %08lx %08lx",
-			stack[0], stack[1], stack[2], stack[3], stack[4], stack[5]);
-	}
-	{
-		/* the EBP frame chain (the game keeps frame pointers) */
-		const DWORD *frame = (const DWORD *)context->Ebp;
-		int depth;
-
-		for (depth = 0; depth < 32 && frame && !IsBadReadPtr(frame, 2 * sizeof(DWORD)); depth++)
-		{
-			crash_line("crash: called from %08lx", frame[1]);
-			if ((const DWORD *)frame[0] <= frame)
-				break;
-			frame = (const DWORD *)frame[0];
-		}
-	}
-	fflush(stderr);
-	return EXCEPTION_CONTINUE_SEARCH;
-}
-
-__attribute__((constructor))
-static void crash_reports_install(void)
-{
-	SetUnhandledExceptionFilter(crash_filter);
 }

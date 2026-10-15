@@ -167,8 +167,6 @@ static void control_toggle(
 		case 3:
 			desired_value= definition->control.call_value;
 			break;
-		/* desired_value stays unassigned only here, and never read: the assertion's system_exit does not return in
-		 * January (0x47c960 jumps to halt_and_catch_fire 0x4f21c0). Source-policy approval pending (2026-09-27 audit). */
 		default:
 			display_assert(
 				NULL,

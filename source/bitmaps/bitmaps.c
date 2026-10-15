@@ -911,8 +911,6 @@ pixel32 bitmap_2d_get_pixel(
 			x &= 3;
 			y &= 3;
 
-			/* BUG (original, kept for matching, owner-approved 2026-09-27): "lod=%f" gets the short mipmap_index, as in
-			 * January (0x46c140 +0x2e2/+0x373; it shows lod=0.000000 before the halt). A corrected build passes lod. */
 			match_vassert(
 				"c:\\halo\\SOURCE\\bitmaps\\bitmaps.c",
 				0x2A0,
@@ -926,7 +924,7 @@ pixel32 bitmap_2d_get_pixel(
 					(short)bitmap->mipmap_count,
 					fast_ftol((real)width * point->x - 0.5f) % width,
 					fast_ftol((real)height * point->y - 0.5f) % height,
-					mipmap_index));
+					lod));
 			match_vassert(
 				"c:\\halo\\SOURCE\\bitmaps\\bitmaps.c",
 				0x2A9,
@@ -940,7 +938,7 @@ pixel32 bitmap_2d_get_pixel(
 					(short)bitmap->mipmap_count,
 					fast_ftol((real)width * point->x - 0.5f) % width,
 					fast_ftol((real)height * point->y - 0.5f) % height,
-					mipmap_index));
+					lod));
 
 			switch (bitmap->format)
 			{
@@ -974,11 +972,10 @@ pixel32 bitmap_2d_get_pixel(
 					0x2B7,
 					FALSE,
 					"### ERROR unsupported bitmap format");
+				pixel = 0;
 				break;
 			}
 
-			/* BUG (original, kept for matching, owner-approved 2026-09-27): the default arm leaves pixel
-			 * unassigned, but its assertion's system_exit never returns (halt_and_catch_fire) */
 			/* port: the decoders' s3tc_color bytes (blue first) are a little-endian a8r8g8b8 texel */
 			return TEXEL32(pixel);
 		}

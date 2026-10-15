@@ -87,6 +87,8 @@ symbols in this file:
 #include "effects/weather_particle_systems.h"
 #include "main/main.h"
 #include "structures/structures.h"
+/* port: static transparent part links for the newly loaded model tags. */
+#include "models/models.h"
 
 /* ---------- constants */
 
@@ -170,6 +172,8 @@ void render_initialize(
 void render_initialize_for_new_map(
 	void)
 {
+	/* port: preserve retail's energy-then-two-sided-glass compositing. */
+	models_fix_transparent_part_links();
 	render_objects_initialize_for_new_map();
 }
 
@@ -430,6 +434,16 @@ static void render_window(
 		PS3_TIMER_SPLIT(_ps3_timer_window_effects);
 		structure_render_fog_screen();
 		rasterizer_lens_flares_draw();
+		/* port: the 3D view antialiased (display.anti_aliasing), before the
+		HUD and menus are drawn over it */
+		if (rasterizer_target == _render_target_primary)
+		{
+			halo_screen_anti_alias(
+				rasterizer_camera->viewport_bounds.x0,
+				rasterizer_camera->viewport_bounds.y0,
+				rasterizer_camera->viewport_bounds.x1,
+				rasterizer_camera->viewport_bounds.y1);
+		}
 		interface_draw_screen();
 		rasterizer_screen_flash();
 		halo_screen_ui_offset(TRUE);

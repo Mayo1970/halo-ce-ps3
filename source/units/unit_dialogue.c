@@ -94,6 +94,9 @@ symbols in this file:
 #include "tag_files/tag_groups.h"
 #include "unit_definitions.h"
 
+/* port: the AI's speech goes to the clients' copies (port/linux/game/network_actors.c) */
+void network_actors_note_speech(long unit_index, long sound_definition_index);
+
 /* ---------- constants */
 
 enum unit_play_speech_type
@@ -272,6 +275,10 @@ short unit_test_speech(
 				144,
 				(vocalization_type >= 0) &&
 					(vocalization_type < NUMBER_OF_VOCALIZATION_TYPES));
+			/* port: a vocalization that is not one (from a map's command
+			list or a script) has no sound */
+			if (vocalization_type < 0 || vocalization_type >= NUMBER_OF_VOCALIZATION_TYPES)
+				break;
 
 			sound_definition_index =
 				dialogue_definition->vocalizations[vocalization_type].index;
@@ -404,7 +411,8 @@ void unit_dialogue_determine_variant(
 		short variant_count = 0;
 		short variant_index;
 
-		for (variant_index = 0; variant_index < definition->unit.dialogue_variants.count; variant_index++)
+		/* port: a short counter stops at SHORT_MAX (a map's count) */
+		for (variant_index = 0; variant_index < MIN(definition->unit.dialogue_variants.count, SHORT_MAX); variant_index++)
 		{
 			struct unit_dialogue_variant *variant = TAG_BLOCK_GET_ELEMENT(
 				&definition->unit.dialogue_variants,
@@ -889,7 +897,7 @@ boolean unit_scream(
 	short scream_type)
 {
 	struct unit_datum *unit = unit_get(unit_index);
-	short vocalization_type;
+	short vocalization_type = 0;
 
 	match_assert(
 		"c:\\halo\\SOURCE\\units\\unit_dialogue.c",
@@ -919,10 +927,6 @@ boolean unit_scream(
 	case _unit_scream_resurrection:
 		vocalization_type = _vocalization_resurrect;
 		break;
-	/* vocalization_type is left unassigned only by this default arm. Not reached unassigned: the
-	 * arm's assertion failure calls system_exit, which does not return in January
-	 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-	 * Source-policy approval pending (2026-09-27 audit). */
 	default:
 		match_assert(
 			"c:\\halo\\SOURCE\\units\\unit_dialogue.c",
@@ -990,12 +994,8 @@ void unit_dialogue_update(
 
 	if (unit->unit.speech.damage_minor_timer > 0)
 		unit->unit.speech.damage_minor_timer--;
-	/* BUG (preserved for exact matching): January decrements damage_minor_timer
-	 * (+0x39C) a second time here and never touches damage_major_timer (+0x39E,
-	 * the field unit_make_damage_sound tests against zero and sets to 60), so a
-	 * unit's major pain vocalization is suppressed for good once one has played.
-	 * A corrected build should decrement damage_major_timer in this statement.
-	 */
+	/* (as the original game, kept: the minor pain timer counts down twice and the major one
+	not at all, so a unit cries out in major pain once) */
 	if (unit->unit.speech.damage_minor_timer > 0)
 		unit->unit.speech.damage_minor_timer--;
 
@@ -1036,6 +1036,15 @@ void unit_dialogue_update(
 						&position,
 						&forward,
 						1.0f);
+					/* port: the AI's speech, heard on the clients too (they
+					play pain and death sounds themselves) */
+					if (unit->unit.player_index == NONE &&
+						unit->unit.speech.current.priority != _unit_speech_pain &&
+						unit->unit.speech.current.priority != _unit_speech_involuntary &&
+						unit->unit.speech.current.priority != _unit_speech_death)
+					{
+						network_actors_note_speech(unit_index, unit->unit.speech.current.sound_definition_index);
+					}
 				}
 
 				ai_communication_started(
@@ -1117,15 +1126,35 @@ static long unit_find_dialogue_variant(
 	short variant_count = 0;
 	short variant_index;
 
-	for (variant_index = 0; variant_index < definition->unit.dialogue_variants.count; variant_index++)
+	/* port: a short counter stops at SHORT_MAX (a map's count) */
+	for (variant_index = 0; variant_index < MIN(definition->unit.dialogue_variants.count, SHORT_MAX); variant_index++)
 	{
 		struct unit_dialogue_variant *variant = TAG_BLOCK_GET_ELEMENT(
 			&definition->unit.dialogue_variants,
 			variant_index,
 			struct unit_dialogue_variant);
 
-		if (variant_number == NONE || variant->variant_number == variant_number)
+		/* port: a variant with no dialogue is skipped (a Custom Edition map's
+		unit can have one, which asserted when picked) */
+		if ((variant_number == NONE || variant->variant_number == variant_number) &&
+			variant->dialogue_index != NONE)
+		{
+			/* port: no more than the array holds (a map's count; released
+			maps have at most 6 variants) */
+			if (variant_count >= (short)NUMBEROF(variant_indices))
+			{
+				static boolean reported = FALSE;
+
+				if (!reported)
+				{
+					reported = TRUE;
+					error(_error_silent, "unit_find_dialogue_variant overflowed variant array");
+				}
+				break;
+			}
+
 			variant_indices[variant_count++] = variant_index;
+		}
 	}
 
 	if (variant_count > 0)

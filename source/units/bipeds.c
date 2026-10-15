@@ -275,6 +275,11 @@ symbols in this file:
 #include "render/render_debug.h"
 #include "scenario/scenario.h"
 #include "structures/structure_bsp_definitions.h"
+#include "network_coop.h" /* port: port/linux/game/network_coop.c */
+
+/* port: port/linux/game/network_objects.c's (a client deletes the host's
+objects on the host's word alone) */
+boolean network_objects_may_delete(long object_index);
 
 /* port: an unarmed player's melee's length, in ticks (a weapon's is about
 this: its first person melee animation, sped up a quarter) */
@@ -317,6 +322,9 @@ enum
 	_biped_physics_in_dead_bit,
 	_biped_physics_in_pass_through_bipeds_bit,
 	_biped_physics_in_climb_anything_bit,
+	/* port: a player's, in a co-op game without player collisions: the other
+	players' bipeds are not in its way (network_coop_player_collisions) */
+	_biped_physics_in_pass_through_players_bit,
 };
 
 enum
@@ -514,6 +522,8 @@ static void biped_update_jumping(
 	struct unit_animation_update_data *animation);
 static void biped_update_physics(
 	struct biped_physics *physics);
+/* units.c's: whether the unit gets the animation enhancements */
+boolean unit_animation_enhanced(long unit_index);
 static void biped_snap_facing(
 	long biped_index);
 
@@ -526,6 +536,17 @@ boolean debug_biped_limp_body_disable = FALSE;
 boolean rider_ejection = TRUE;
 
 static struct profile_section biped_update_section = {"biped_update", NONE, TRUE};
+
+/* port: coop_scripts.c sets this around one teleport */
+static boolean biped_fix_ignores_players;
+
+void biped_fix_ignore_players(
+	boolean ignore)
+{
+	biped_fix_ignores_players = ignore;
+
+	return;
+}
 
 extern boolean debug_objects_biped_autoaim_pills;
 extern boolean debug_objects_biped_physics_pills;
@@ -826,9 +847,12 @@ static void biped_falling_damage(
 				object_cause_damage(&damage, biped_index, NONE, NONE, NONE, NULL);
 			}
 
+			/* (port: not the host's biped on a client, which the host erases:
+			the delete was refused, and logged as done) */
 			if (!game_engine_running() &&
 				TEST_FLAG(biped->object.flags, _object_outside_of_map_bit) &&
-				player_index_from_unit_index(biped_index) == NONE)
+				player_index_from_unit_index(biped_index) == NONE &&
+				network_objects_may_delete(biped_index))
 			{
 				long actor_index = biped->unit.swarm_actor_index;
 
@@ -1146,6 +1170,12 @@ boolean biped_fix_position(
 				_biped_passes_through_bipeds_bit) ?
 				_collision_test_for_bipeds_passthrough_living_flags :
 				_collision_test_for_bipeds_living_flags;
+			/* port: (where it fits among the other players, as it moves:
+			_biped_physics_in_pass_through_players_bit). A scripted co-op
+			teleport can also stand on a teammate for this one call. */
+			if (biped_fix_ignores_players ||
+				(biped->unit.player_index != NONE && !network_coop_player_collisions()))
+				collision_flags |= FLAG(_collision_test_skip_player_bipeds_bit);
 		}
 
 		if (new_position)
@@ -2573,6 +2603,8 @@ static void biped_update_physics(
 		collision_flags = TEST_FLAG(physics->in_flags, _biped_physics_in_pass_through_bipeds_bit) ?
 			_collision_test_for_bipeds_passthrough_living_flags :
 			_collision_test_for_bipeds_living_flags;
+		if (TEST_FLAG(physics->in_flags, _biped_physics_in_pass_through_players_bit))
+			collision_flags |= FLAG(_collision_test_skip_player_bipeds_bit);
 	}
 
 	position = physics->position;
@@ -2637,6 +2669,7 @@ static void biped_update_physics(
 				physics->existing_support_surface_index,
 				struct collision_surface);
 			long edge_index = surface->first_edge_index;
+			short edge_count = 0;
 			real_plane3d plane;
 			real_plane3d best_plane;
 			real best_velocity_dot;
@@ -2654,14 +2687,41 @@ static void biped_update_physics(
 
 			do
 			{
-				struct collision_edge *edge = TAG_BLOCK_GET_ELEMENT(
+				struct collision_edge *edge;
+				boolean reverse;
+				long neighbor_surface_index;
+
+				/* port: the surface's ring of edges ends as
+				collision_surface_edge_ring_continues says, or at an edge
+				whose vertices aren't the bsp's (a map's indices; the
+				retail rings all close within 3 to 8 edges) */
+				if (!collision_surface_edge_ring_continues(bsp, edge_index, edge_count++))
+				{
+					break;
+				}
+				edge = TAG_BLOCK_GET_ELEMENT(
 					&bsp->edges,
 					edge_index,
 					struct collision_edge);
-				boolean reverse = physics->existing_support_surface_index == edge->surface_indices[1];
-				long neighbor_surface_index = edge->surface_indices[!reverse];
+				if (!VALID_INDEX(edge->vertex_indices[0], bsp->vertices.count) ||
+					!VALID_INDEX(edge->vertex_indices[1], bsp->vertices.count))
+				{
+					static boolean reported = FALSE;
 
-				if (neighbor_surface_index != NONE)
+					if (!reported)
+					{
+						reported = TRUE;
+						error(_error_silent, "collision edge #%ld's vertices are not the bsp's", edge_index);
+					}
+					break;
+				}
+				reverse = physics->existing_support_surface_index == edge->surface_indices[1];
+				neighbor_surface_index = edge->surface_indices[!reverse];
+
+				/* port: (and a neighbor that is no surface of the bsp's is
+				none) */
+				if (neighbor_surface_index != NONE &&
+					collision_bsp_valid_surface_index(bsp, neighbor_surface_index))
 				{
 					struct collision_surface *neighbor_surface = TAG_BLOCK_GET_ELEMENT(
 						&bsp->surfaces,
@@ -3295,6 +3355,14 @@ static void biped_update_turning(
 	{
 		boolean flaming =
 			biped->unit.animation.base_seat_index==_unit_base_seat_flaming;
+		/* port: a player throwing a grenade turns with the aim, as one
+		meleeing does: the melee plays over the moving or idle state, the
+		throw is a state of its own, which the original never turned in
+		(game.enhanced_animations: unit_animation_enhanced) */
+		boolean throwing_turn =
+			biped->unit.player_index!=NONE &&
+			biped->unit.animation.state==_unit_state_throw_grenade &&
+			unit_animation_enhanced(biped_index);
 		real_vector3d turn_axis;
 		real turn_error;
 		real facing_alignment;
@@ -3358,7 +3426,8 @@ static void biped_update_turning(
 		}
 
 		if (biped->biped.state==biped_state_moving ||
-			TEST_FLAG(flags, _biped_turns_without_animating_bit))
+			TEST_FLAG(flags, _biped_turns_without_animating_bit) ||
+			throwing_turn)
 		{
 			if (!TEST_FLAG(biped->unit.control_flags, _unit_control_look_dont_turn_bit))
 			{
@@ -3917,6 +3986,8 @@ static void biped_update_moving(
 	}
 	if (TEST_FLAG(definition->biped.flags, _biped_passes_through_bipeds_bit))
 		SET_FLAG(in_flags, _biped_physics_in_pass_through_bipeds_bit, TRUE);
+	if (biped->unit.player_index != NONE && !network_coop_player_collisions())
+		SET_FLAG(in_flags, _biped_physics_in_pass_through_players_bit, TRUE);
 	if (TEST_FLAG(definition->biped.flags, _biped_climbs_anything_bit) &&
 		!TEST_FLAG(biped->object.damage_flags, _object_dead_bit))
 	{

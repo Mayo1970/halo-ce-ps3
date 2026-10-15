@@ -222,7 +222,12 @@ static void oddball_engine_prespawn_player_update(
 static void oddball_engine_player_added(
 	long player_index)
 {
-	player_get(player_index);
+	long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+
+	/* port: not the score of a player who quit from the slot (as slayer's) */
+	oddball_globals.individual_score[slot] = 0;
+	if (!game_engine_has_teams())
+		oddball_globals.team_score[slot] = 0;
 
 	return;
 }
@@ -400,9 +405,11 @@ static real_point3d find_position_for_ball(
 {
 	struct scenario *scenario = global_scenario_get();
 	long flag_index = NONE;
-	/* BUG (original): after the fatal missing-spawn assertion, January returns
-	the untouched value. A corrected build should report failure explicitly. */
-	real_point3d position;
+	/* port: the first player starting location (else the origin) when the map has no ball spawn, as a CE map may not:
+	the original returned stack garbage after its missing-spawn assertion, which a release build carries on past */
+	real_point3d position = scenario->players.count > 0 ?
+		TAG_BLOCK_GET_ELEMENT(&scenario->players, 0, struct player_starting_location)->position :
+		*global_origin3d;
 
 	if (!game_engine_get_variant()->game_engine_variant.oddball.random_start)
 	{
@@ -898,11 +905,13 @@ static wchar_t *oddball_get_score_header_string(
 		string_index = _multiplayer_game_text_time;
 
 	string_list_index = tag_loaded('ustr', "ui\\multiplayer_game_text");
-	ustrcpy(
+	/* port: bounded (a map's text, into its callers' score_string[256]) */
+	ustrncpy_terminated(
 		buffer,
 		string_list_index != NONE ?
 			unicode_string_list_get_string(string_list_index, string_index) :
-			L"");
+			L"",
+		256);
 
 	return buffer;
 }
@@ -1099,7 +1108,7 @@ static boolean oddball_engine_display_score(
 			}
 			else
 				string = L"";
-			usnprintf(buffer, buffer_size, string, other_player->name);
+			usnprintf(buffer, buffer_size, ustring_format_checked(string, "s"), other_player->name);
 		}
 		break;
 
@@ -1142,7 +1151,7 @@ static boolean oddball_engine_display_score(
 			}
 			else
 				string = L"";
-			usnprintf(buffer, buffer_size, string, other_player->name);
+			usnprintf(buffer, buffer_size, ustring_format_checked(string, "s"), other_player->name);
 		}
 		break;
 
@@ -1167,7 +1176,7 @@ static boolean oddball_engine_display_score(
 				}
 				else
 					string = L"";
-				usnprintf(buffer, buffer_size, string, place_name, score);
+				usnprintf(buffer, buffer_size, ustring_format_checked(string, "sd"), place_name, score);
 			}
 			else if (message == _oddball_message_ally_has_the_ball_tick)
 			{
@@ -1180,7 +1189,7 @@ static boolean oddball_engine_display_score(
 				}
 				else
 					string = L"";
-				usnprintf(buffer, buffer_size, string, other_player->name, score);
+				usnprintf(buffer, buffer_size, ustring_format_checked(string, "sd"), other_player->name, score);
 			}
 			else if (message == _oddball_message_enemy_has_the_ball_tick)
 			{
@@ -1193,7 +1202,7 @@ static boolean oddball_engine_display_score(
 				}
 				else
 					string = L"";
-				usnprintf(buffer, buffer_size, string, other_player->name, score);
+				usnprintf(buffer, buffer_size, ustring_format_checked(string, "sd"), other_player->name, score);
 			}
 		}
 		break;

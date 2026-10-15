@@ -501,13 +501,7 @@ static void profile_assert(
 		}
 		else
 		{
-			/* BUG (preserved for exact matching): January pushes the same varargs (profile, message) in both branches (the /Od
-			 * build at 0x8004c0 too), so %s consumes the NONE profile value, not the message. Fix: pass only message. */
-			error(
-				_error_silent,
-				"### PROFILE: %s -- tell Bernie!",
-				profile,
-				message);
+			error(_error_silent, "### PROFILE: %s -- tell Bernie!", message);
 		}
 
 		rasterizer_profile_error_count++;

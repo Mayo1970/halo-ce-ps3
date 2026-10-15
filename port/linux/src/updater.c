@@ -29,9 +29,9 @@ update.h's: posix_update.c on Linux, win32_update.c on Windows.
 #include "port_config.h"
 #include "update.h"
 
-#ifndef HALO_ANDROID
+#if !defined(HALO_ANDROID) && !defined(HALO_WEB)
 
-#include "memory/zlib/zlib.h"
+#include "zlib_prefixed.h"
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
@@ -46,7 +46,7 @@ update.h's: posix_update.c on Linux, win32_update.c on Windows.
 #define HALO_BUILD_FLAVOR "release"
 #endif
 
-#define UPDATE_REPOSITORY "cybersecurity/halo-ce-universal"
+#define UPDATE_REPOSITORY "OpenCommunityEdition/OpenCE"
 #ifdef _WIN32
 #define UPDATE_PLATFORM "windows"
 #define PATH_SEPARATOR "\\"
@@ -164,6 +164,13 @@ static int zip_extract_entry(SDL_IOStream *zip, unsigned long local_offset, int 
 				if (result != Z_OK && result != Z_STREAM_END)
 					break;
 				produced = sizeof(output) - stream.avail_out;
+				/* (no more than the entry says, before it is on the disk) */
+				if (written + (unsigned long)produced > size)
+				{
+					snprintf(reason, reason_size, "it unpacks to more than %lu bytes", size);
+					result = Z_ERRNO;
+					break;
+				}
 				if (SDL_WriteIO(file, output, produced) != produced)
 				{
 					snprintf(reason, reason_size, "could not write %s after %lu bytes (%s)", path, written, SDL_GetError());
@@ -185,9 +192,9 @@ static int zip_extract_entry(SDL_IOStream *zip, unsigned long local_offset, int 
 				break;
 			}
 		}
-		/* (the game's zlib is 1.1, which can want a byte past the end of a
-		raw stream before it says the stream has ended: all of the input
-		unpacked is enough, as the size and the CRC are checked) */
+		/* (all of the input unpacked is enough, as the size and the CRC are
+		checked: the game's zlib 1.1, used here before, could want a byte past
+		the end of a raw stream before it said the stream had ended) */
 		if (ended || !remaining)
 		{
 			if (written != size)
@@ -407,6 +414,7 @@ static int updater_download_zip(const char *zip_path, char *error, size_t error_
 	thread = SDL_CreateThread(updater_download_thread, "update download", &download);
 	if (!thread)
 	{
+		SDL_DestroyMutex(download.lock);
 		snprintf(error, error_size, "could not start the download");
 		return 0;
 	}
@@ -518,7 +526,8 @@ static void updater_clean_up(void)
 {
 	static const char *const names[] =
 	{
-		"halo.old", "halo.exe.old", "SDL3.dll.old", "extract-xiso-LICENSE.txt.old", "mbedtls-LICENSE.txt.old",
+		"halo.old", "halo.exe.old", "SDL3.dll.old", "libSDL3.so.0.old", "SDL3-LICENSE.txt.old",
+		"extract-xiso-LICENSE.txt.old", "mbedtls-LICENSE.txt.old",
 	};
 	char path[1200];
 	size_t index;
@@ -645,5 +654,15 @@ void updater_poll(SDL_Window *window)
 void updater_start(void)
 {
 }
+
+#ifdef HALO_WEB
+#include <SDL3/SDL.h>
+
+/* (the site updates itself: port/web/site/sw.js) */
+void updater_poll(SDL_Window *window)
+{
+	(void)window;
+}
+#endif
 
 #endif

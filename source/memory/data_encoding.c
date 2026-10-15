@@ -471,8 +471,6 @@ void *data_decode_array(
 	case -8:
 		element_count = (long)data_decode_int64(state);
 		break;
-	/* element_count is unassigned only in this default arm, whose assert's system_exit never returns in
-	January (0x47c960 jumps to halt_and_catch_fire 0x4f21c0). Source-policy approval pending (2026-09-27 audit). */
 	default:
 		display_assert(NULL, "c:\\halo\\SOURCE\\memory\\data_encoding.c", 370, TRUE);
 		system_exit(-1);

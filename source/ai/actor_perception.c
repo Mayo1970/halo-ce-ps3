@@ -1216,8 +1216,6 @@ void actor_situation_update_target_status(
 				(target_prop->definitely_located != FALSE) + 5;
 			break;
 
-		/* target_type is unassigned only in this default arm, not reached unassigned: its assert's system_exit (0x47c960)
-		 * never returns in January (halt_and_catch_fire 0x4f21c0). Source-policy approval pending (2026-09-27 audit). */
 		default:
 			display_assert(
 				NULL,
@@ -3093,9 +3091,7 @@ void actor_emotion_update(
 		actor->emotions.forced_to_charge = TRUE;
 	}
 
-	/* BUG (preserved for exact matching): the scan starts at 9 (January +0xf5 mov eax,9), one past specific_threats' end:
-	 * cumulative_threats[_actor_threat_none], which nothing writes, so it is zero and harmless (layout asserted above). */
-	for (priority = NUMBER_OF_ACTOR_THREAT_TYPES;
+	for (priority = NUMBER_OF_ACTOR_THREAT_TYPES - 1;
 		priority > 0 &&
 			actor->situation.specific_threats[priority] <= 0;
 		priority--)
@@ -3547,8 +3543,8 @@ void prop_status_refresh(
 							prop->preferred_target = TRUE;
 							break;
 
-						/* BUG (preserved for exact matching): January compares platoon references with squad_index (actor+0x3a) and
-						 * squad references with platoon_index (actor+0x3c), the reverse of actor_action_handle_vehicle_entry. */
+						/* (as the original game, kept: a platoon reference is compared with the actor's squad,
+						and a squad reference with its platoon) */
 						case _ai_reference_type_squad:
 							if ((short)(((unsigned long)actor->external_orders.desired_target_ai_index >> 16) & UNSIGNED_CHAR_MAX) ==
 								prop_actor->meta.platoon_index)
@@ -5497,8 +5493,8 @@ static void actor_perception_refresh(
 				}
 				else
 				{
-					/* BUG (preserved for exact matching): January walks the perceiving actor's swarm unit list (actor+0x24 via
-					 * actor_get(actor_index)), not the uncached swarm actor's; fix: start at swarm_actor->meta.swarm_unit_index. */
+					/* (as the original game, kept: the perceiving actor's swarm is walked, not the swarm
+					actor's) */
 					long unit_index = actor->meta.swarm_unit_index;
 
 					while (unit_index != NONE)
@@ -5620,8 +5616,7 @@ static void actor_perception_refresh(
 					prop_position_refresh(actor_index, prop_index, &position, FALSE, FALSE);
 				}
 
-				/* BUG (preserved for exact matching): January leaves the loop before advancing past the entry that reached the
-				 * limit, so the discard loop below also deletes that entry when it was an existing prop. */
+				/* (as the original game, kept: the entry that reached the limit is discarded below too) */
 				if (++enemies.accepted_count >= 4)
 				{
 					break;
@@ -6219,7 +6214,7 @@ void actor_perception_update(
 				{
 					short knowledge_type = actor_get_perception_knowledge(actor_index, iterator.index);
 					short awareness_speed;
-					real awareness_delta;
+					real awareness_delta = 0.0f;
 
 #line 489 "c:\\halo\\SOURCE\\ai\\actor_perception.c"
 					assert((knowledge_type >= 0) && (knowledge_type < NUMBER_OF_ACTOR_KNOWLEDGE_TYPES));
@@ -6249,8 +6244,6 @@ void actor_perception_update(
 						awareness_delta = 1.0f;
 						break;
 
-					/* awareness_delta is unassigned only in this arm, not reached unassigned: its assert's system_exit (0x47c960)
-					 * never returns in January (halt_and_catch_fire 0x4f21c0). Source-policy approval pending (2026-09-27 audit). */
 					default:
 #line 516 "c:\\halo\\SOURCE\\ai\\actor_perception.c"
 						assert(!"unreachable");

@@ -94,6 +94,7 @@ symbols in this file:
 
 #include "cseries.h"
 #include "periodic_functions.h"
+#include "cseries/errors.h"
 #include "tag_files/tag_groups.h"
 
 /* ---------- constants */
@@ -142,6 +143,9 @@ static void transition_function_build_table(
 static void periodic_function_build_table(
 	short function_type,
 	byte *table);
+static void function_type_error(
+	char const *kind,
+	short function_type);
 
 /* ---------- globals */
 
@@ -239,6 +243,14 @@ real periodic_function_evaluate(
 		157,
 		function_type>=0 && function_type<NUMBER_OF_PERIODIC_FUNCTIONS);
 
+	/* port: a type the tables have, or the default, one (a map's type; it
+	picked a table pointer from past the tables) */
+	if (!VALID_INDEX(function_type, NUMBER_OF_PERIODIC_FUNCTIONS))
+	{
+		function_type_error("periodic", function_type);
+		return 1.0f;
+	}
+
 	if (function_tables_initialized)
 	{
 		time *= 25.6f;
@@ -291,6 +303,14 @@ real transition_function_evaluate(
 		"c:\\halo\\SOURCE\\math\\periodic_functions.c",
 		216,
 		function_type>=0 && function_type<NUMBER_OF_TRANSITION_FUNCTIONS);
+
+	/* port: a type the tables have, or the default, linear (a map's type; it
+	picked a table pointer from past the tables) */
+	if (!VALID_INDEX(function_type, NUMBER_OF_TRANSITION_FUNCTIONS))
+	{
+		function_type_error("transition", function_type);
+		return value;
+	}
 
 	if (function_tables_initialized)
 	{
@@ -367,10 +387,6 @@ static void transition_function_build_table(
 		case _transition_function_cosine:
 			result = ((real)sin(value*3.1415927f-1.5707964f)+1.0f)*0.5f;
 			break;
-		/* result is left unassigned only by this default arm. Not reached unassigned: the
-		 * arm's assertion failure calls system_exit, which does not return in January
-		 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-		 * Source-policy approval pending (2026-09-27 audit). */
 		default:
 			display_assert(NULL, "c:\\halo\\SOURCE\\math\\periodic_functions.c", 411, TRUE);
 			system_exit(-1);
@@ -459,10 +475,6 @@ static void periodic_function_build_table(
 			result = (real)fmod((double)random_x, 1.0);
 			result *= result;
 			break;
-		/* result is left unassigned only by this default arm. Not reached unassigned: the
-		 * arm's assertion failure calls system_exit, which does not return in January
-		 * (0x47c960 jumps to halt_and_catch_fire 0x4f21c0, which loops or calls exit).
-		 * Source-policy approval pending (2026-09-27 audit). */
 		default:
 			display_assert(NULL, "c:\\halo\\SOURCE\\math\\periodic_functions.c", 499, TRUE);
 			system_exit(-1);
@@ -542,6 +554,27 @@ void periodic_functions_initialize(
 		{
 			function_tables_initialized = FALSE;
 		}
+	}
+
+	return;
+}
+
+/* port: a map's function type past the tables, reported once (functions are
+evaluated every tick) */
+static void function_type_error(
+	char const *kind,
+	short function_type)
+{
+	static boolean function_type_reported = FALSE;
+
+	if (!function_type_reported)
+	{
+		function_type_reported = TRUE;
+		error(
+			_error_silent,
+			"### ERROR a %s function has type #%d; it is evaluated as the default",
+			kind,
+			function_type);
 	}
 
 	return;

@@ -9,8 +9,10 @@ a message can name one: made, deleted, moved and what units carry (port/linux/NE
 #include "objects/objects.h"
 #include "objects/damage.h"
 #include "objects/object_definitions.h"
+#include "models/model_animation_definitions.h"
 #include "models/model_definitions.h"
 #include "units/units.h"
+#include "units/bipeds.h"
 #include "units/biped_definitions.h"
 #include "units/vehicle_definitions.h"
 #include "units/vehicle_datum.h"
@@ -18,7 +20,11 @@ a message can name one: made, deleted, moved and what units carry (port/linux/NE
 #include "items/weapons.h"
 #include "items/weapon_definitions.h"
 #include "items/equipment_definitions.h"
+#include "camera/observer.h"
+#include "cutscene/cinematics.h"
+#include "network_coop.h"
 #include "network_distributed.h"
+#include "profile_sections.h"
 
 #include <math.h>
 
@@ -71,6 +77,10 @@ enum
 	EMPTY_INVENTORY_TICKS = 3 * INVENTORY_REFRESH_TICKS,
 	/* the host's objects at rest sent each tick, round them all */
 	RESTING_STATES_PER_TICK = 4,
+	/* an object come to rest is sent to every client this many times, this many ticks apart: one lost left a falling
+	body hanging until its turn came round, many seconds in a large game */
+	REST_STATE_REPEATS = 3,
+	REST_STATE_REPEAT_TICKS = 8,
 	/* a client asks for the host's objects again until it has them (a host still loading misses the asking),
 	after this, twice as long each time up to the most */
 	CLIENT_READY_INTERVAL_TICKS = TICKS_PER_SECOND,
@@ -182,6 +192,10 @@ enum
 	/* (struct distributed_object_state, the host's) the host has the vehicle
 	where the client it goes to had it at the tick in time */
 	_distributed_object_predicted_bit,
+	/* (struct distributed_object_state) a unit's integrated light is on, and
+	the host sent it at all: older builds leave both 0, which is not "off" */
+	_distributed_object_light_sent_bit,
+	_distributed_object_light_on_bit,
 };
 
 struct distributed_object_change
@@ -189,7 +203,11 @@ struct distributed_object_change
 	byte change;
 	byte flags;
 	byte owner_player_index;
-	byte pad;
+	/* which bitmap of its shaders it draws with, when not its tag's (0). An
+	AI unit's actor variant sets it after the unit is made
+	(actor_customize_unit): the Elite major's and commander's armor are 1
+	and 2. Builds before it sent 0 here. */
+	byte forced_shader_permutation_index;
 	long object_index;
 	long definition_index;
 	short owner_team_index;
@@ -261,9 +279,11 @@ static long objects_host_told[MAXIMUM_TRACKED_OBJECTS];
 static long objects_host_resting_cursor;
 /* ... past the highest of them */
 static long objects_host_told_count;
-/* ... whether each was moving at the last tick (one come to rest is sent
-once more, to every client) */
+/* ... whether each was moving at the last tick, and when each last came to
+rest (NONE: not since it was told of), to send it to every client
+(REST_STATE_REPEATS) */
 static boolean objects_host_state_moving[MAXIMUM_TRACKED_OBJECTS];
+static long objects_host_rest_times[MAXIMUM_TRACKED_OBJECTS];
 /* ... what each unit's inventory was last sent as (in all, and its weapons and grenades), when to every client,
 and when its ammunition alone last changed (NONE: not since); when it last carried anything (NONE: never) */
 static struct
@@ -274,12 +294,14 @@ static struct
 	long ammunition_time;
 	long carried_time;
 } objects_host_inventories[MAXIMUM_TRACKED_OBJECTS];
-/* ... each client machine, found once a tick: where its players' living units are, those units, and the
-vehicles they drive (with the player's absolute index) */
+/* ... each client machine, found once a tick: where its players' living units are, those units, and the vehicles
+they drive (with the player's absolute index); and every player's living unit, for a machine with none (it watches one) */
 static struct
 {
 	short count;
 	long indices[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+	short player_unit_count;
+	real_point3d player_unit_origins[MAXIMUM_TRACKED_PLAYERS];
 	struct
 	{
 		short unit_count;
@@ -570,6 +592,86 @@ static void distributed_vector_clamp(
 	}
 }
 
+/* Whether the object is a vehicle no player drives in co-op (a Pelican on
+its flight path): nothing on a client steers it, so its copy is kept at rest
+there (no physics of its own) and moved only to where the host has it. In
+multiplayer an empty vehicle (one bailed out of, or tumbling) keeps its own
+physics between updates. */
+static boolean distributed_vehicle_unsteered(
+	long object_index)
+{
+	struct unit_datum *vehicle;
+
+	if (!network_coop_active() || object_get(object_index)->object.type != _object_type_vehicle)
+		return FALSE;
+	vehicle = unit_get(object_index);
+	return vehicle->unit.driver_object_index == NONE ||
+		unit_get(vehicle->unit.driver_object_index)->unit.player_index == NONE;
+}
+
+/* the object if it is a body (a dead biped), else NULL */
+static struct biped_datum *distributed_body_get(
+	long object_index)
+{
+	struct biped_datum *biped = (struct biped_datum *)object_try_and_get_and_verify_type(object_index,
+		_object_mask_biped);
+
+	return biped && TEST_FLAG(biped->object.damage_flags, _object_dead_bit) ? biped : NULL;
+}
+
+/* A body lying limp here, which the host moves: its pose, fixed in the world
+where it came to rest (bipeds.c), would stay there as the body goes, drawn
+hanging in the air or in a wall. Unfixed, as the push of the explosion that
+moved the host's body would have unfixed it here (that push reaches only the
+machines that see the body's player, network_damage.c); it lies limp again
+where it comes to rest (units.c). */
+static void distributed_body_unfix_pose(
+	long object_index)
+{
+	if (distributed_body_get(object_index))
+		biped_stop_limp_body_physics(object_index);
+}
+
+/* A body at rest or moving as the host has it. Moving, its pose goes with
+it, however close it is. At rest, it is on the ground, as the host's is:
+not airborne, which only its physics clears, and rest stops its physics
+(bipeds.c); left airborne, it would keep the pose of its fall, in the air,
+and never lie limp. */
+static void distributed_body_set_at_rest(
+	long object_index,
+	boolean at_rest)
+{
+	struct biped_datum *biped = distributed_body_get(object_index);
+
+	if (!biped)
+		return;
+	if (!at_rest)
+		distributed_body_unfix_pose(object_index);
+	else
+		SET_FLAG(biped->biped.flags, _biped_airborne_bit, FALSE);
+}
+
+/* whether this machine's player drives the unit: it is their biped, or the
+vehicle they drive */
+static boolean distributed_unit_driven_here(
+	long unit_index)
+{
+	struct unit_datum *unit = unit_get(unit_index);
+
+	if (unit->unit.driver_object_index != NONE)
+		unit = unit_get(unit->unit.driver_object_index);
+	return unit->unit.player_index != NONE && distributed_player_is_local(unit->unit.player_index);
+}
+
+/* Whether a client puts its copy exactly where the host has it, rather than
+closing on it: an unsteered vehicle, and anything in a co-op cutscene
+(where it keeps up with the host's camera). */
+static boolean distributed_object_follows_host(
+	long object_index)
+{
+	return (network_coop_active() && cinematic_in_progress()) || distributed_vehicle_unsteered(object_index);
+}
+
 /* (the transform checked) */
 static void distributed_object_move(
 	long object_index,
@@ -586,12 +688,16 @@ static void distributed_object_move(
 	offset.i = object->object.position.x - position->x;
 	offset.j = object->object.position.y - position->y;
 	offset.k = object->object.position.z - position->z;
+	distributed_body_unfix_pose(object_index);
 	object_set_position(object_index, position, forward, up);
 	if (velocity)
 		object->object.translational_velocity = *velocity;
 	if (angular_velocity)
 		object->object.angular_velocity = *angular_velocity;
-	render_interpolation_correct_object(object_index, &offset);
+	if (!distributed_object_follows_host(object_index))
+		render_interpolation_correct_object(object_index, &offset);
+	if (distributed_vehicle_unsteered(object_index))
+		SET_FLAG(object->object.flags, _object_at_rest_bit, TRUE);
 }
 
 void network_objects_correct(
@@ -636,15 +742,34 @@ boolean network_objects_reconcile(
 		distributed_object_move(object_index, position, &valid_forward, &valid_up, velocity, angular_velocity);
 		return TRUE;
 	}
-	/* (half of the way: the tick's snapshots draw it moving, no jump) */
-	blended.x = object->object.position.x + dx * 0.5f;
-	blended.y = object->object.position.y + dy * 0.5f;
-	blended.z = object->object.position.z + dz * 0.5f;
-	object_set_position(object_index, &blended, &valid_forward, &valid_up);
+	/* Move halfway, and draw the move as a glide over the next few frames,
+	as larger corrections are. Drawn as one step, a unit corrected every tick
+	or two (a distant enemy) visibly hitched each time. */
+	if (distributed_object_follows_host(object_index))
+		blended = *position;
+	else
+	{
+		blended.x = object->object.position.x + dx * 0.5f;
+		blended.y = object->object.position.y + dy * 0.5f;
+		blended.z = object->object.position.z + dz * 0.5f;
+	}
+	{
+		real_vector3d offset;
+
+		offset.i = object->object.position.x - blended.x;
+		offset.j = object->object.position.y - blended.y;
+		offset.k = object->object.position.z - blended.z;
+		distributed_body_unfix_pose(object_index);
+		object_set_position(object_index, &blended, &valid_forward, &valid_up);
+		if (!distributed_object_follows_host(object_index))
+			render_interpolation_correct_object(object_index, &offset);
+	}
 	if (velocity)
 		object->object.translational_velocity = *velocity;
 	if (angular_velocity)
 		object->object.angular_velocity = *angular_velocity;
+	if (distributed_vehicle_unsteered(object_index))
+		SET_FLAG(object->object.flags, _object_at_rest_bit, TRUE);
 	return FALSE;
 }
 
@@ -675,6 +800,12 @@ static void distributed_state_from_object(
 	SET_FLAG(state->flags, _distributed_object_at_rest_bit, TEST_FLAG(object->object.flags, _object_at_rest_bit));
 	SET_FLAG(state->flags, _distributed_object_dead_bit, TEST_FLAG(_object_mask_unit, object->object.type) &&
 		TEST_FLAG(object->object.damage_flags, _object_dead_bit));
+	if (TEST_FLAG(_object_mask_unit, object->object.type))
+	{
+		SET_FLAG(state->flags, _distributed_object_light_sent_bit, TRUE);
+		SET_FLAG(state->flags, _distributed_object_light_on_bit,
+			TEST_FLAG(unit_get(object_index)->unit.flags, _unit_integrated_light_on_bit));
+	}
 	state->position = object->object.position;
 	distributed_vector_pack(&object->object.forward, DISTRIBUTED_UNIT_SCALE, &state->forward);
 	distributed_vector_pack(&object->object.up, DISTRIBUTED_UNIT_SCALE, &state->up);
@@ -699,6 +830,175 @@ static long distributed_driven_vehicle(
 		object_get(unit_index)->object.parent_object_index : NONE;
 }
 
+/* ---------- damage animations
+
+A unit's flinches and deaths are animations picked by where the damage came
+from and at random among their permutations, so a client replaying the
+host's damage could pick others. The host sends its picks (each in three
+ticks' messages, in case one is lost). A client plays the host's pick when
+it gets there first, or switches to it if its own has only just begun
+(unit_port_correct_damage_animation). */
+
+enum
+{
+	DAMAGE_ANIMATION_SENDS = 3,
+	MAXIMUM_QUEUED_DAMAGE_ANIMATIONS = 32,
+	/* how long a client keeps the host's pick for a hit it hasn't replayed yet */
+	DAMAGE_ANIMATION_KEPT_TICKS = 2 * TICKS_PER_SECOND,
+};
+
+/* type: units.h's _unit_damage_animation_soft_ping and the rest; number:
+the pick's, so a client tells a pick sent again from a new one */
+struct distributed_damage_animation
+{
+	long unit_index;
+	short animation_index;
+	byte type;
+	byte number;
+};
+
+struct distributed_damage_animations_message
+{
+	struct distributed_message_header header;
+	struct distributed_damage_animation animations[MAXIMUM_QUEUED_DAMAGE_ANIMATIONS];
+};
+
+/* host: the picks still to be sent */
+static struct
+{
+	struct distributed_damage_animation animation;
+	short sends;
+} host_damage_animations[MAXIMUM_QUEUED_DAMAGE_ANIMATIONS];
+static short host_damage_animation_count;
+static byte host_damage_animation_number;
+
+/* client: the host's latest pick of each type for each unit, by absolute
+index: its number, and when it came (NONE once played) */
+static struct
+{
+	long unit_index;
+	short animation_index[NUMBER_OF_UNIT_DAMAGE_ANIMATIONS];
+	byte number[NUMBER_OF_UNIT_DAMAGE_ANIMATIONS];
+	long time[NUMBER_OF_UNIT_DAMAGE_ANIMATIONS];
+} client_damage_animations[MAXIMUM_TRACKED_OBJECTS];
+
+/* whether the animation is one of the unit's graph */
+static boolean distributed_unit_has_animation(
+	long unit_index,
+	short animation_index)
+{
+	long graph_index = unit_definition_get(unit_get(unit_index)->definition_index)->object.animation_graph.index;
+
+	return graph_index != NONE && animation_index >= 0 &&
+		animation_index < animation_graph_definition_get(graph_index)->animations.count;
+}
+
+/* units.c, as a unit flinches or dies: the host notes the animation it
+picked; a client takes the host's pick when it has one */
+short network_objects_damage_animation(
+	long unit_index,
+	short type,
+	short animation_index)
+{
+	short connection = game_connection();
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(unit_index);
+
+	if (type < 0 || type >= NUMBER_OF_UNIT_DAMAGE_ANIMATIONS)
+		return animation_index;
+	if (connection == _game_connection_network_server && animation_index != NONE &&
+		host_damage_animation_count < MAXIMUM_QUEUED_DAMAGE_ANIMATIONS)
+	{
+		struct distributed_damage_animation *animation =
+			&host_damage_animations[host_damage_animation_count].animation;
+
+		animation->unit_index = unit_index;
+		animation->animation_index = animation_index;
+		animation->type = (byte)type;
+		animation->number = ++host_damage_animation_number;
+		host_damage_animations[host_damage_animation_count++].sends = DAMAGE_ANIMATION_SENDS;
+	}
+	else if (connection == _game_connection_network_client && absolute_index >= 0 &&
+		absolute_index < MAXIMUM_TRACKED_OBJECTS && client_damage_animations[absolute_index].unit_index == unit_index)
+	{
+		long *time = &client_damage_animations[absolute_index].time[type];
+
+		if (*time != NONE && game_time_get() - *time < DAMAGE_ANIMATION_KEPT_TICKS)
+		{
+			*time = NONE;
+			return client_damage_animations[absolute_index].animation_index[type];
+		}
+	}
+	return animation_index;
+}
+
+/* host, each tick: the picks still to be sent, to every client */
+static void distributed_host_send_damage_animations(
+	void)
+{
+	struct distributed_damage_animations_message message;
+	short count = 0;
+	short index;
+
+	for (index = 0; index < host_damage_animation_count; index++)
+	{
+		message.animations[count++] = host_damage_animations[index].animation;
+		if (--host_damage_animations[index].sends <= 0)
+			host_damage_animations[index--] = host_damage_animations[--host_damage_animation_count];
+	}
+	if (count > 0)
+	{
+		distributed_send(&message, _distributed_message_damage_animations, count,
+			(word)(sizeof(message.header) + count * sizeof(message.animations[0])), _distributed_to_clients);
+	}
+}
+
+word network_objects_damage_animation_entry_size(
+	void)
+{
+	return sizeof(struct distributed_damage_animation);
+}
+
+void network_objects_handle_damage_animations(
+	void const *entries,
+	short count)
+{
+	struct distributed_damage_animation const *animations = entries;
+	short index;
+
+	for (index = 0; index < count; index++)
+	{
+		struct distributed_damage_animation const *animation = &animations[index];
+		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(animation->unit_index);
+		short type;
+
+		if (!distributed_object_index_valid(animation->unit_index) || absolute_index >= MAXIMUM_TRACKED_OBJECTS ||
+			animation->type >= NUMBER_OF_UNIT_DAMAGE_ANIMATIONS || !network_objects_client_has(animation->unit_index) ||
+			!object_try_and_get_and_verify_type(animation->unit_index, _object_mask_unit) ||
+			!distributed_unit_has_animation(animation->unit_index, animation->animation_index))
+		{
+			continue;
+		}
+		if (client_damage_animations[absolute_index].unit_index != animation->unit_index)
+		{
+			csmemset(&client_damage_animations[absolute_index], 0, sizeof(client_damage_animations[absolute_index]));
+			client_damage_animations[absolute_index].unit_index = animation->unit_index;
+			for (type = 0; type < NUMBER_OF_UNIT_DAMAGE_ANIMATIONS; type++)
+				client_damage_animations[absolute_index].time[type] = NONE;
+		}
+		/* (a pick sent again) */
+		else if (client_damage_animations[absolute_index].number[animation->type] == animation->number)
+		{
+			continue;
+		}
+		client_damage_animations[absolute_index].number[animation->type] = animation->number;
+		client_damage_animations[absolute_index].animation_index[animation->type] = animation->animation_index;
+		/* (replayed here already: switched to the host's if it has only just begun) */
+		client_damage_animations[absolute_index].time[animation->type] =
+			unit_port_correct_damage_animation(animation->unit_index, animation->type, animation->animation_index) ?
+			NONE : game_time_get();
+	}
+}
+
 /* ---------- the host */
 
 static void distributed_change_from_object(
@@ -714,6 +1014,7 @@ static void distributed_change_from_object(
 	change->owner_player_index = distributed_player_to_byte(object->object.owner_player_index);
 	change->owner_team_index = object->object.owner_team_index;
 	change->variant_number = object->object.variant_number;
+	change->forced_shader_permutation_index = (byte)PIN(object->object.forced_shader_permutation_index, 0, 0xFF);
 	change->position = object->object.position;
 	change->forward = object->object.forward;
 	change->up = object->object.up;
@@ -810,6 +1111,29 @@ static void distributed_host_update_objects(
 	}
 }
 
+/* the order a newly loaded client receives the host's objects in, most needed first: players' units (it may spectate
+them), the vehicles players and AI ride, other units, then everything else */
+enum
+{
+	_send_rank_player_unit,
+	_send_rank_vehicle,
+	_send_rank_unit,
+	_send_rank_other,
+	NUMBER_OF_SEND_RANKS
+};
+
+static short distributed_object_send_rank(
+	long object_index)
+{
+	struct object_datum *object = object_get(object_index);
+
+	if (object->object.type == _object_type_vehicle)
+		return _send_rank_vehicle;
+	if (object_try_and_get_and_verify_type(object_index, _object_mask_unit))
+		return unit_get(object_index)->unit.player_index != NONE ? _send_rank_player_unit : _send_rank_unit;
+	return _send_rank_other;
+}
+
 /* a client has loaded the game: every object the host has, to it alone, and word that that is all; asked again,
 only the word (they are on their way ahead of it), unless it failed to make one since it last asked (again) */
 void network_objects_client_asked(
@@ -820,6 +1144,7 @@ void network_objects_client_asked(
 	short count = 0;
 	short limit = MIN(MAXIMUM_ENTRIES_PER_MESSAGE, RELIABLE_ENTRIES(struct distributed_object_change));
 	long absolute_index;
+	short rank;
 	long *player_list;
 
 	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
@@ -847,14 +1172,22 @@ void network_objects_client_asked(
 		/* (what every unit carries, with the next of them) */
 		objects_host_inventories[absolute_index].checksum = 0;
 		objects_host_inventories[absolute_index].weapons_checksum = 0;
-		if (objects_host_told[absolute_index] == NONE)
-			continue;
-		distributed_change_from_object(objects_host_told[absolute_index], &message.changes[count]);
-		if (++count == limit)
+	}
+	for (rank = 0; rank < NUMBER_OF_SEND_RANKS; rank++)
+	{
+		for (absolute_index = 0; absolute_index < objects_host_told_count; absolute_index++)
 		{
-			distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_object_changes, count,
-				(word)(sizeof(message.header) + count * sizeof(struct distributed_object_change)));
-			count = 0;
+			long object_index = objects_host_told[absolute_index];
+
+			if (object_index == NONE || distributed_object_send_rank(object_index) != rank)
+				continue;
+			distributed_change_from_object(object_index, &message.changes[count]);
+			if (++count == limit)
+			{
+				distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_object_changes, count,
+					(word)(sizeof(message.header) + count * sizeof(struct distributed_object_change)));
+				count = 0;
+			}
 		}
 	}
 	if (count)
@@ -898,8 +1231,24 @@ static void distributed_host_find_viewers(
 {
 	short machine_number;
 
+	struct data_iterator iterator;
+	struct player_datum *player;
+
 	objects_host_viewers.count = distributed_client_machines(objects_host_viewers.indices,
 		HALO_PORT_MAXIMUM_NETWORK_MACHINES);
+	objects_host_viewers.player_unit_count = 0;
+	data_iterator_new(&iterator, player_data);
+	while ((player = data_iterator_next(&iterator)) != NULL &&
+		objects_host_viewers.player_unit_count < MAXIMUM_TRACKED_PLAYERS)
+	{
+		long unit_index = distributed_living_unit(player);
+
+		if (unit_index != NONE)
+		{
+			object_get_origin(unit_index,
+				&objects_host_viewers.player_unit_origins[objects_host_viewers.player_unit_count++]);
+		}
+	}
 	for (machine_number = 0; machine_number < objects_host_viewers.count; machine_number++)
 	{
 		long *player_list = machine_get_player_list(objects_host_viewers.indices[machine_number]);
@@ -931,18 +1280,40 @@ static void distributed_host_find_viewers(
 	}
 }
 
-/* how often (ticks) the host sends that client machine an object where it is, moving: by its nearest player;
-every tick to one with none in the world (dead, it watches anyone) */
+/* how often (ticks) the host sends a client machine a moving object's position: by its nearest player; for one with
+none in the world (dead or joining, it spectates) by every player's (each tick flooded it on campaign levels) */
 static short distributed_host_object_period(
 	short machine_number,
 	real_point3d const *position)
 {
+	short count = objects_host_viewers.machines[machine_number].unit_count;
+	real_point3d const *origins = objects_host_viewers.machines[machine_number].origins;
 	real nearest = -1.0f;
 	short index;
 
-	for (index = 0; index < objects_host_viewers.machines[machine_number].unit_count; index++)
+	if (!count)
 	{
-		real_point3d const *origin = &objects_host_viewers.machines[machine_number].origins[index];
+		count = objects_host_viewers.player_unit_count;
+		origins = objects_host_viewers.player_unit_origins;
+	}
+	/* in a co-op cutscene every client looks through the host's camera, so
+	what it films is sent as often as what's next to the client's players
+	(b30's sword Elite walking out of the door) */
+	if (network_coop_active() && cinematic_in_progress())
+	{
+		real_point3d const *camera = &observer_get_camera(0)->position;
+		real dx = position->x - camera->x;
+		real dy = position->y - camera->y;
+		real dz = position->z - camera->z;
+
+		nearest = dx * dx + dy * dy + dz * dz;
+	}
+	/* nobody is alive anywhere, so nothing needs to be sent often */
+	if (!count && nearest < 0.0f)
+		return MAXIMUM_OBJECT_PERIOD_TICKS;
+	for (index = 0; index < count; index++)
+	{
+		real_point3d const *origin = &origins[index];
 		real dx = position->x - origin->x;
 		real dy = position->y - origin->y;
 		real dz = position->z - origin->z;
@@ -956,6 +1327,21 @@ static short distributed_host_object_period(
 		nearest < FAR_OBJECT_DISTANCE * FAR_OBJECT_DISTANCE ? 3 : MAXIMUM_OBJECT_PERIOD_TICKS;
 }
 
+/* ... for other units sent by a machine's index (network_actors.c) */
+short network_objects_send_period(
+	long machine_index,
+	real_point3d const *position)
+{
+	short machine_number;
+
+	for (machine_number = 0; machine_number < objects_host_viewers.count; machine_number++)
+	{
+		if (objects_host_viewers.indices[machine_number] == machine_index)
+			return distributed_host_object_period(machine_number, position);
+	}
+	return 1;
+}
+
 /* the kinds of states sent this tick */
 enum
 {
@@ -965,8 +1351,19 @@ enum
 	_host_state_to_all,
 };
 
-/* where the moving objects are: to each client, nearer its players more often, its own vehicle every few ticks, at
-which of its ticks the host has it; to all, each come to rest and a few at rest, in turn (a lost move put right) */
+/* whether an object at rest is due to every client again: it came to rest
+this tick, or REST_STATE_REPEAT_TICKS after one of its sends */
+static boolean distributed_host_rest_state_due(
+	long absolute_index)
+{
+	long since = game_time_get() - objects_host_rest_times[absolute_index];
+
+	return objects_host_rest_times[absolute_index] != NONE &&
+		since < REST_STATE_REPEATS * REST_STATE_REPEAT_TICKS && since % REST_STATE_REPEAT_TICKS == 0;
+}
+
+/* where the moving objects are: to each client, nearer its players more often, its own vehicle every few ticks, at which
+of its ticks the host has it; to all, each come to rest (REST_STATE_REPEATS times), and a few at rest, in turn */
 static void distributed_host_send_states(
 	void)
 {
@@ -994,7 +1391,9 @@ static void distributed_host_send_states(
 			continue;
 		at_rest = TEST_FLAG(object_get(object_index)->object.flags, _object_at_rest_bit);
 		objects_host_state_moving[absolute_index] = !at_rest;
-		if (at_rest && !was_moving)
+		if (at_rest && was_moving)
+			objects_host_rest_times[absolute_index] = game_time_get();
+		if (at_rest && !distributed_host_rest_state_due(absolute_index))
 			continue;
 		distributed_state_from_object(object_index, &states[state_count]);
 		kinds[state_count++] = at_rest ? _host_state_to_all : _host_state_moving;
@@ -1397,6 +1796,10 @@ void network_objects_apply_vehicle_predictions(
 		{
 			continue;
 		}
+		/* (not from a co-op client still loading the host's BSP: the
+		vehicle falls there with no ground under it) */
+		if (!network_coop_player_has_structure_bsp(driver->unit.player_index))
+			continue;
 		dx = state->position.x - vehicle->object.position.x;
 		dy = state->position.y - vehicle->object.position.y;
 		dz = state->position.z - vehicle->object.position.z;
@@ -1534,14 +1937,22 @@ void network_objects_apply_vehicle_predictions(
 	}
 }
 
+/* the host tick's steps, timed in the profiling build */
+PROFILE_SECTION(objects_host_tick_update_objects_section, "network_objects_host_tick.update_objects")
+PROFILE_SECTION(objects_host_tick_find_viewers_section, "network_objects_host_tick.find_viewers")
+PROFILE_SECTION(objects_host_tick_send_states_section, "network_objects_host_tick.send_states")
+PROFILE_SECTION(objects_host_tick_send_inventories_section, "network_objects_host_tick.send_inventories")
+PROFILE_SECTION(objects_host_tick_send_damage_animations_section, "network_objects_host_tick.send_damage_animations")
+
 void network_objects_host_tick(
 	void)
 {
-	distributed_host_update_objects();
-	distributed_host_find_viewers();
-	distributed_host_send_states();
+	profile_scope(objects_host_tick_update_objects_section, distributed_host_update_objects();)
+	profile_scope(objects_host_tick_find_viewers_section, distributed_host_find_viewers();)
+	profile_scope(objects_host_tick_send_states_section, distributed_host_send_states();)
 	if (game_time_get() % INVENTORY_INTERVAL_TICKS == 0)
-		distributed_host_send_inventories();
+		profile_scope(objects_host_tick_send_inventories_section, distributed_host_send_inventories();)
+	profile_scope(objects_host_tick_send_damage_animations_section, distributed_host_send_damage_animations();)
 }
 
 /* ---------- a client */
@@ -1703,6 +2114,12 @@ static boolean distributed_client_change_valid(
 		team_count = game_engine_get_variant()->game_engine_index == game_engine_ctf ? CTF_FLAG_TEAMS : ODDBALL_TEAMS;
 	if (change->owner_team_index != NONE && (change->owner_team_index < 0 || change->owner_team_index >= team_count))
 		return FALSE;
+	/* (a flag or ball of no team would index the game type's arrays at -1) */
+	if (type == _object_type_weapon && ((weapon_definition_get(change->definition_index)->weapon.flags >> 3) & 1) &&
+		change->owner_team_index == NONE)
+	{
+		return FALSE;
+	}
 	/* (its colors numbers) */
 	{
 		short color_index;
@@ -1730,6 +2147,21 @@ static void distributed_client_apply_change(
 	struct object_datum *object = object_get(object_index);
 
 	csmemcpy(object->object.base_change_colors, change->change_colors, sizeof(object->object.base_change_colors));
+	if (change->forced_shader_permutation_index)
+		object->object.forced_shader_permutation_index = change->forced_shader_permutation_index;
+	/* (and the colors drawn, which object_new chose from the tag: an AI unit's
+	are its variant's, set after it was made, actors.c) */
+	{
+		short color_index;
+
+		for (color_index = 0; color_index < NUMBER_OF_OBJECT_CHANGE_COLORS; color_index++)
+		{
+			object->object.outgoing_change_colors[color_index].red = PIN(change->change_colors[color_index].red, 0.0f, 1.0f);
+			object->object.outgoing_change_colors[color_index].green =
+				PIN(change->change_colors[color_index].green, 0.0f, 1.0f);
+			object->object.outgoing_change_colors[color_index].blue = PIN(change->change_colors[color_index].blue, 0.0f, 1.0f);
+		}
+	}
 	/* (a permutation the model has, or none: the model's renderer takes it
 as it is) */
 	{
@@ -1845,6 +2277,12 @@ static void distributed_client_create(
 		return;
 	}
 	objects_client_has[absolute_index] = object_index;
+	/* (a unit's grenades are the host's, which its inventories bring: none
+	until they come, not the tag's that unit_new gave it, which the host's
+	game engine replaces with the game's at a player's spawn: a player
+	spawned with the button held threw one here the host's copy had not) */
+	if (TEST_FLAG(_object_mask_unit, object_get(object_index)->object.type))
+		csmemset(unit_get(object_index)->unit.grenade_counts, 0, sizeof(unit_get(object_index)->unit.grenade_counts));
 	distributed_client_apply_change(object_index, change);
 }
 
@@ -1978,6 +2416,20 @@ static void distributed_client_dead_biped(
 	}
 }
 
+/* client: a vehicle the host says is dead is destroyed here too, with its
+explosion. No killing blow comes for vehicles, only for bipeds. */
+static void distributed_client_dead_vehicle(
+	long object_index)
+{
+	struct unit_datum *vehicle = (struct unit_datum *)object_try_and_get_and_verify_type(object_index,
+		_object_mask_vehicle);
+
+	if (!vehicle || TEST_FLAG(vehicle->object.damage_flags, _object_dead_bit))
+		return;
+	unit_kill_no_statistics(object_index);
+	object_damage_update(object_index);
+}
+
 void network_objects_handle_states(
 	void const *entries,
 	short count)
@@ -1994,13 +2446,27 @@ void network_objects_handle_states(
 		real blend_distance = REMOTE_BLEND_DISTANCE;
 		real_vector3d forward, up, velocity, angular_velocity;
 		real dx, dy, dz;
+		boolean own_vehicle = FALSE;
+		boolean at_rest;
 
 		if (!distributed_object_index_valid(state->object_index) || !network_objects_client_has(state->object_index))
 			continue;
 		object = object_get(state->object_index);
+		/* (the unit's light as the host has it: only presses toggle it here,
+		so one missed, or made before this machine joined, left it wrong for
+		good. Not for what this machine's player drives: their press lands
+		here first) */
+		if (TEST_FLAG(state->flags, _distributed_object_light_sent_bit) &&
+			TEST_FLAG(_object_mask_unit, object->object.type) &&
+			!distributed_unit_driven_here(state->object_index))
+		{
+			SET_FLAG(unit_get(state->object_index)->unit.flags, _unit_integrated_light_on_bit,
+				TEST_FLAG(state->flags, _distributed_object_light_on_bit));
+		}
 		if (TEST_FLAG(state->flags, _distributed_object_dead_bit))
 		{
 			distributed_client_dead_biped(state->object_index);
+			distributed_client_dead_vehicle(state->object_index);
 			/* (a body its tag destroys at once is gone) */
 			if (!object_try_and_get_and_verify_type(state->object_index, _object_mask_all))
 				continue;
@@ -2033,6 +2499,12 @@ void network_objects_handle_states(
 
 			if (blend_distance > 0.0f)
 				blend_distance = REMOTE_VEHICLE_BLEND_DISTANCE;
+			/* (one no player drives follows every move the host sends, however small) */
+			if (distributed_vehicle_unsteered(state->object_index))
+			{
+				tolerance = 0.0f;
+				angle_tolerance = 2.0f;
+			}
 			if (vehicle->unit.driver_object_index != NONE &&
 				distributed_player_is_local(unit_get(vehicle->unit.driver_object_index)->unit.player_index))
 			{
@@ -2045,8 +2517,16 @@ void network_objects_handle_states(
 				/* (turned as it drives it) */
 				angle_tolerance = -1.0f;
 				blend_distance = 0.0f;
+				own_vehicle = TRUE;
 			}
 		}
+		/* (at rest as the host has it, however close: a copy left at rest
+		while the host's falls hangs there; but not one this machine drives,
+		which the host's word, a round trip old, would stop as it sets off) */
+		at_rest = TEST_FLAG(state->flags, _distributed_object_at_rest_bit) || distributed_vehicle_unsteered(state->object_index);
+		if (!own_vehicle)
+			SET_FLAG(object->object.flags, _object_at_rest_bit, at_rest);
+		distributed_body_set_at_rest(state->object_index, at_rest);
 		dx = state->position.x - object->object.position.x;
 		dy = state->position.y - object->object.position.y;
 		dz = state->position.z - object->object.position.z;
@@ -2063,7 +2543,9 @@ void network_objects_handle_states(
 		{
 			distributed_count_correction();
 		}
-		SET_FLAG(object->object.flags, _object_at_rest_bit, TEST_FLAG(state->flags, _distributed_object_at_rest_bit));
+		/* (one it drives, put where the host has it, is as the host has it) */
+		if (own_vehicle)
+			SET_FLAG(object->object.flags, _object_at_rest_bit, at_rest);
 	}
 }
 
@@ -2282,8 +2764,8 @@ void network_objects_client_picked_up_weapon(
 	picked_up->time = game_time_get();
 }
 
-/* weapons its own players picked up, readied once they have them as unit_add_weapon_to_inventory readies a pickup
-(not while firing): a client chooses its weapons in hand (distributed_client_apply_inventory); the host follows */
+/* weapons its own players picked up, readied once they have them as unit_add_weapon_to_inventory readies a pickup (a
+second weapon too, while firing): a client chooses its weapons in hand (distributed_client_apply_inventory); the host follows */
 static void distributed_client_ready_picked_up_weapons(
 	void)
 {
@@ -2307,21 +2789,39 @@ static void distributed_client_ready_picked_up_weapons(
 			continue;
 		}
 		unit = unit_get(unit_index);
-		for (weapon_slot = 0; weapon_slot < MAXIMUM_WEAPONS_PER_UNIT; weapon_slot++)
 		{
-			long weapon_index = unit->unit.weapon_object_indices[weapon_slot];
-			struct weapon_datum *weapon = weapon_index != NONE ? weapon_try_and_get(weapon_index) : NULL;
+			short current_slot = unit->unit.current_weapon_index;
+			short matched_slot = NONE;
+			long current_weapon_index = unit_inventory_get_weapon(unit_index, current_slot);
+			struct weapon_datum *current_weapon = current_weapon_index != NONE ?
+				weapon_try_and_get(current_weapon_index) : NULL;
 
-			if (weapon && weapon->definition_index == picked_up->definition_index)
-				break;
+			/* already the one in hand (a swap into that slot): nothing to ready */
+			if (current_weapon && current_weapon->definition_index == picked_up->definition_index)
+			{
+				picked_up->definition_index = NONE;
+				continue;
+			}
+			for (weapon_slot = 0; weapon_slot < MAXIMUM_WEAPONS_PER_UNIT; weapon_slot++)
+			{
+				long weapon_index = unit->unit.weapon_object_indices[weapon_slot];
+				struct weapon_datum *weapon = weapon_index != NONE ? weapon_try_and_get(weapon_index) : NULL;
+
+				if (weapon && weapon_slot != current_slot &&
+					weapon->definition_index == picked_up->definition_index)
+				{
+					matched_slot = weapon_slot;
+				}
+			}
+			if (matched_slot == NONE)
+				continue;
+			weapon_slot = matched_slot;
 		}
-		if (weapon_slot == MAXIMUM_WEAPONS_PER_UNIT)
-			continue;
-		if (!TEST_FLAG(unit->unit.control_flags, _unit_control_weapon_primary_trigger_bit))
-		{
-			player_control_set_desired_weapon(unit_index, weapon_slot);
-			unit->unit.desired_weapon_index = weapon_slot;
-		}
+		/* port: a one-weapon loadout's second weapon is readied when it
+		arrives, including while firing. Dropping the announcement on a
+		held trigger left it holstered until a manual switch. */
+		player_control_set_desired_weapon(unit_index, weapon_slot);
+		unit->unit.desired_weapon_index = weapon_slot;
 		picked_up->definition_index = NONE;
 	}
 }
@@ -2362,6 +2862,24 @@ void network_objects_set_seat(
 			seat_index >= unit_definition_get(vehicle->definition_index)->unit.seats.count)
 		{
 			return;
+		}
+		/* (and not one the unit carries, however far down: a ring of
+		parents would turn every walk up them forever) */
+		{
+			long ancestor_index = vehicle->object.parent_object_index;
+			long steps;
+
+			for (steps = 0; ancestor_index != NONE; steps++)
+			{
+				struct object_header_datum const *ancestor;
+
+				if (ancestor_index == unit_index || steps >= 16)
+					return;
+				ancestor = (struct object_header_datum const *)datum_try_and_get(object_header_data, ancestor_index);
+				if (!ancestor || !ancestor->datum)
+					return;
+				ancestor_index = ancestor->datum->object.parent_object_index;
+			}
 		}
 	}
 	if (unit->object.parent_object_index != NONE && unit->unit.parent_seat_index != NONE)
@@ -2472,6 +2990,51 @@ static void distributed_client_remove_own_objects(
 	objects_client_new_object_count = 0;
 }
 
+/* Client: keeps each AI-driven vehicle (such as a Pelican on its flight
+path) moving at the velocity the host last sent. These vehicles are held at
+rest here, and a distant one is only updated every few ticks, so otherwise
+it would stop between updates and jump on each one. */
+static void distributed_client_carry_unsteered_vehicles(
+	void)
+{
+	struct object_iterator iterator;
+	struct object_datum *object;
+
+	object_iterator_new(&iterator, _object_mask_vehicle, 0);
+	while ((object = object_iterator_next(&iterator)) != NULL)
+	{
+		real_vector3d const *velocity = &object->object.translational_velocity;
+		real_vector3d axis = object->object.angular_velocity;
+		real_vector3d forward = object->object.forward;
+		real_vector3d up = object->object.up;
+		real_point3d position;
+		real angle;
+
+		if (object->object.parent_object_index != NONE || unit_get(iterator.index)->unit.driver_object_index == NONE ||
+			!distributed_vehicle_unsteered(iterator.index))
+		{
+			continue;
+		}
+		angle = normalize3d(&axis);
+		if (velocity->i == 0.0f && velocity->j == 0.0f && velocity->k == 0.0f && angle == 0.0f)
+			continue;
+		position.x = object->object.position.x + velocity->i;
+		position.y = object->object.position.y + velocity->j;
+		position.z = object->object.position.z + velocity->k;
+		/* rotate the same way physics.c applies angular velocity */
+		if (angle != 0.0f)
+		{
+			real_matrix4x3 rotation;
+
+			matrix4x3_rotation_from_axis_and_angle(&rotation, &axis, (real)sin(angle), (real)cos(angle));
+			matrix4x3_transform_vector(&rotation, &object->object.forward, &forward);
+			matrix4x3_transform_vector(&rotation, &object->object.up, &up);
+		}
+		if (distributed_transform_valid(&position, &forward, &up, NULL, NULL, &forward, &up))
+			object_set_position(iterator.index, &position, &forward, &up);
+	}
+}
+
 void network_objects_client_tick(
 	void)
 {
@@ -2499,6 +3062,7 @@ void network_objects_client_tick(
 	distributed_client_ready_picked_up_weapons();
 	distributed_client_note_own_inventories();
 	distributed_client_send_vehicles();
+	distributed_client_carry_unsteered_vehicles();
 	/* (who it is, as its Discord told it: once its ready went, which makes
 	it a machine the host takes messages of) */
 	if (objects_client_ready_time != NONE)
@@ -2516,10 +3080,13 @@ void network_objects_new_game(
 	short index;
 
 	csmemset(objects_host_inventories, 0, sizeof(objects_host_inventories));
+	host_damage_animation_count = 0;
+	csmemset(client_damage_animations, 0, sizeof(client_damage_animations));
 	for (absolute_index = 0; absolute_index < MAXIMUM_TRACKED_OBJECTS; absolute_index++)
 	{
 		objects_host_told[absolute_index] = NONE;
 		objects_host_state_moving[absolute_index] = FALSE;
+		objects_host_rest_times[absolute_index] = NONE;
 		objects_host_inventories[absolute_index].carried_time = NONE;
 		objects_host_inventories[absolute_index].ammunition_time = NONE;
 		objects_client_has[absolute_index] = NONE;

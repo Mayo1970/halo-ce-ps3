@@ -28,6 +28,10 @@ graphics) run a program on the integrated one unless it exports these */
 __declspec(dllexport) DWORD NvOptimusEnablement = 1;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 
+/* win32_crash.c's: whether this process is a crash reporter, which leaves
+halo.log to the game it reports */
+int crash_reporter_process(void);
+
 __attribute__((constructor))
 static void windows_startup(void)
 {
@@ -37,6 +41,24 @@ static void windows_startup(void)
 	/* Sleep() waits in 1 ms steps rather than the default 15.6 ms: the
 	game's frame pacing sleeps for short intervals */
 	timeBeginPeriod(1);
+	/* a release build has no console (/SUBSYSTEM:WINDOWS), so the platform
+	layer's log (platform_log's stderr: invite links, the data root, crash
+	reports) goes to halo.log next to halo.exe, unless stderr already goes
+	somewhere (a pipe or a file the game was started with) */
+	if (_fileno(stderr) < 0 && !crash_reporter_process())
+	{
+		char path[MAX_PATH];
+		DWORD length = GetModuleFileNameA(NULL, path, sizeof(path));
+		char *slash;
+
+		if (length && length < sizeof(path) && (slash = strrchr(path, '\\')) &&
+			(size_t)(slash + 1 - path) + sizeof("halo.log") <= sizeof(path))
+		{
+			strcpy(slash + 1, "halo.log");
+			if (freopen(path, "w", stderr))
+				setvbuf(stderr, NULL, _IONBF, 0);
+		}
+	}
 }
 
 static int errno_from_windows_error(DWORD error)
@@ -286,6 +308,28 @@ int pthread_cond_broadcast(pthread_cond_t *condition)
 
 /* ---------- time */
 
+typedef VOID (WINAPI *system_time_proc)(LPFILETIME);
+
+/* the wall clock: GetSystemTimePreciseAsFileTime where Windows has it
+(Windows 8 and later), else GetSystemTimeAsFileTime. Importing the precise
+one directly would keep the game from starting on Windows 7. Threads that
+race here store the same pointer. */
+static void system_time(FILETIME *now)
+{
+	static system_time_proc volatile proc;
+	system_time_proc get_time = proc;
+
+	if (!get_time)
+	{
+		get_time = (system_time_proc)(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"),
+			"GetSystemTimePreciseAsFileTime");
+		if (!get_time)
+			get_time = GetSystemTimeAsFileTime;
+		proc = get_time;
+	}
+	get_time(now);
+}
+
 int clock_gettime(clockid_t clock, struct timespec *time)
 {
 	if (clock == CLOCK_MONOTONIC)
@@ -305,7 +349,7 @@ int clock_gettime(clockid_t clock, struct timespec *time)
 		FILETIME now;
 		unsigned long long intervals;
 
-		GetSystemTimePreciseAsFileTime(&now);
+		system_time(&now);
 		intervals = ((unsigned long long)now.dwHighDateTime << 32) | now.dwLowDateTime;
 		intervals -= 116444736000000000ULL;
 		time->tv_sec = (time_t)(intervals / 10000000ULL);

@@ -4,7 +4,7 @@ builds. It gives the MSVC/XDK environment of the game, so the source stays as MS
 #ifndef __HALO_LINUX_PREFIX_H
 #define __HALO_LINUX_PREFIX_H
 
-#if !defined(__i386__) && !defined(HALO_ANDROID) && !defined(HALO_PS3)
+#if !defined(__i386__) && !defined(HALO_ARM64_GUEST) && !defined(__wasm32__) && !defined(HALO_PS3)
 #error the Linux port targets 32-bit x86: game data structures assume 32-bit pointers
 #endif
 
@@ -17,6 +17,12 @@ already, and the PS3 prefix sets it for LP64 */
 /* MSVC's unsigned 64-bit integer; the PS3 prefix makes it a typedef, as its __int64 is one */
 #ifndef HALO_PS3
 #define __uint64 unsigned __int64
+#endif
+
+/* ---------- WebAssembly: no return addresses: Emscripten makes one up from a JavaScript stack trace, which datum lookups
+and the HUD's stack checks asked for thousands of times a frame; it would name nothing a log could use, so it is 0 */
+#ifdef __wasm32__
+#define __builtin_return_address(level) ((void *)0)
 #endif
 
 /* ---------- XDK architecture selection (MSVC predefines these) */

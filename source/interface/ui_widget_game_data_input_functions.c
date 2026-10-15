@@ -23,6 +23,7 @@ upstream halo-ce-universal copy of source/interface/ui_widget_game_data_input_fu
 #include "saved games/playlist_profile.h"
 #include "text/text_group.h"
 #include "text/unicode.h"
+#include "custom_edition_maps.h" /* port: port/linux/game/custom_edition_maps.c */
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
 
 /* ---------- constants */
@@ -354,6 +355,17 @@ static byte const local_player_controller_bitmap_frames[2][MAXIMUM_LOCAL_PLAYERS
 	{{3, 4, 5}, {6, 7, 8}, {9, 10, 11}, {12, 13, 14}},
 	{{3, 5, 4}, {6, 8, 7}, {9, 11, 10}, {12, 14, 13}}
 };
+
+/* port: the display index of a Custom Edition multiplayer map this machine
+has, which the menus show by its own name and picture even when its name
+holds an Xbox level's (port/linux/game/custom_edition_maps.c), or NONE */
+static short custom_edition_map_display_index(
+	char const *map_name)
+{
+	short display_index = custom_edition_maps_display_index(map_name);
+
+	return display_index != NONE && !custom_edition_maps_campaign(display_index) ? display_index : NONE;
+}
 
 /* ---------- public code */
 
@@ -821,6 +833,9 @@ static void server_list_menu_update(
 					map_bitmap->animation.current_frame_index = 12;
 				else
 					map_bitmap->animation.current_frame_index = 13;
+				/* port: a Custom Edition map shows its own name and picture */
+				if (custom_edition_map_display_index(map_name) != NONE)
+					map_bitmap->animation.current_frame_index = custom_edition_map_display_index(map_name);
 
 				open_closed_text->parameters.text_box.string_list_index =
 					(server->open == TRUE) ? 20 : 21;
@@ -1927,7 +1942,7 @@ static void game_options_menu_update_text_desc(
 	struct widget_instance *extended_description;
 	struct widget_instance *spinner_list;
 	struct ui_widget_definition *definition;
-	long description_index;
+	long description_index = 0;
 
 	match_vassert(
 		"c:\\halo\\SOURCE\\interface\\ui_widget_game_data_input_functions.c",
@@ -1989,8 +2004,6 @@ static void game_options_menu_update_text_desc(
 		}
 	}
 
-	/* BUG (preserved for exact matching): without a focused child, January's description_index is the low word of the
-	 * widget argument (0x4e1ce0 +0xa4 -> +0x119 mov dx,[ebp+8]). Fix: initialise to 0; approval pending (2026-09-27) */
 	extended_description->parameters.text_box.string_list_index = (short)description_index;
 	return;
 }
@@ -2002,7 +2015,7 @@ static void game_options_menu_update_pic_desc(
 	struct widget_instance *extended_description;
 	struct widget_instance *spinner_list;
 	struct ui_widget_definition *definition;
-	long description_index;
+	long description_index = 0;
 
 	match_vassert(
 		"c:\\halo\\SOURCE\\interface\\ui_widget_game_data_input_functions.c",
@@ -2054,8 +2067,6 @@ static void game_options_menu_update_pic_desc(
 		}
 	}
 
-	/* BUG (preserved for exact matching): as in game_options_menu_update_text_desc, without a focused child January
-	 * stores the widget argument's low word (0x4e1ea0 +0x119 mov dx,[ebp+8]). Fix: initialise to 0; approval pending */
 	extended_description->animation.current_frame_index = (short)description_index;
 	return;
 }
@@ -2076,6 +2087,12 @@ static void multiplayer_game_set_text_box_for_map_name(
 	if (game)
 	{
 		map_name = game->map.name;
+	/* port: a Custom Edition map shows its own name */
+	if (custom_edition_map_display_index(map_name) != NONE)
+	{
+		widget->parameters.text_box.string_list_index = custom_edition_map_display_index(map_name);
+		return;
+	}
 	if (strstr(map_name, "beavercreek"))
 	{
 		widget->parameters.text_box.string_list_index = 0;
@@ -2344,6 +2361,12 @@ static void multiplayer_game_set_bitmap_for_map(
 	if (game)
 	{
 		map_name = game->map.name;
+	/* port: a Custom Edition map shows its own picture */
+	if (custom_edition_map_display_index(map_name) != NONE)
+	{
+		widget->animation.current_frame_index = custom_edition_map_display_index(map_name);
+		return;
+	}
 	if (strstr(map_name, "beavercreek"))
 	{
 		widget->animation.current_frame_index = 0;
@@ -2564,14 +2587,15 @@ static void multiplayer_game_directions(
 
 	if (server)
 	{
+		/* port: one machine and one player may start (server_alone) */
 		boolean waiting_for_machines = !network_game_is_splitscreen_local() &&
 			game &&
-			game->machine_count < 2;
+			game->machine_count < 1;
 
 		if (!waiting_for_machines &&
 			network_game_is_splitscreen_local() &&
 			game &&
-			game->player_count < 2)
+			game->player_count < 1)
 		{
 			widget->parameters.text_box.string_list_index =
 				_multiplayer_game_text_string_waiting_for_player;
@@ -3887,6 +3911,10 @@ static void mp_level_select_list_update_displayed_items(
 				_ui_widget_type_text_box,
 			"expected a text box widget for the list item's third child (map description)");
 
+		/* port: the Custom Edition maps after the Xbox levels show their own
+		names, pictures and descriptions (port/linux/game/custom_edition_maps.c) */
+		displayed_item_indices[item_index] = custom_edition_maps_level_display_index(
+			(short)displayed_item_indices[item_index]);
 		map_name->parameters.text_box.string_list_index =
 			(short)displayed_item_indices[item_index];
 		map_bitmap->animation.current_frame_index =

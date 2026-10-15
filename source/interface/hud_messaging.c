@@ -34,6 +34,7 @@ upstream halo-ce-universal copy of source/interface/hud_messaging.c. */
 #include "text/font_group.h"
 #include "text/text_group.h"
 #include "text/unicode.h"
+#include "network_coop.h" /* port: port/linux/game/network_coop.c */
 
 #include <stddef.h>
 
@@ -495,6 +496,7 @@ void scripted_hud_set_state_message(
 {
 	struct scenario *scenario = global_scenario_get();
 
+	network_coop_note_hud(_coop_hud_help_text, message_index);
 	if (hud_scripted_globals->show_hud_help_text &&
 		scenario->hud_messages.index != NONE)
 	{
@@ -515,6 +517,7 @@ void scripted_hud_set_flashing_state(
 {
 	long time;
 
+	network_coop_note_hud(_coop_hud_help_flash, flash);
 	if (flash && !hud_messaging_globals->use_flash)
 	{
 		time = game_time_get();
@@ -545,6 +548,7 @@ void scripted_hud_set_objective(
 {
 	struct scenario *scenario = global_scenario_get();
 
+	network_coop_note_hud(_coop_hud_objective, message_index);
 	if (scenario->hud_messages.index != NONE)
 	{
 		struct hud_message_text_definition *hud_messages =
@@ -624,6 +628,47 @@ void scripted_hud_show_timer(
 {
 	hud_messaging_globals->timer.enabled = show;
 	return;
+}
+
+/* port: the script timer and the scenario's message count, for network
+co-op (port/linux/game/network_coop.c) */
+void hud_messaging_port_timer_get(
+	struct hud_timer_state *state)
+{
+	struct hud_timer_data_definition const *timer = &hud_messaging_globals->timer;
+
+	state->reference_time = timer->reference_time;
+	state->ticks = timer->ticks;
+	state->flash_cutoff = timer->flash_cutoff;
+	state->x = timer->position.n[0];
+	state->y = timer->position.n[1];
+	state->corner = timer->corner;
+	state->paused = timer->paused;
+	state->enabled = timer->enabled;
+}
+
+void hud_messaging_port_timer_set(
+	struct hud_timer_state const *state)
+{
+	struct hud_timer_data_definition *timer = &hud_messaging_globals->timer;
+
+	timer->reference_time = state->reference_time;
+	timer->ticks = state->ticks;
+	timer->flash_cutoff = state->flash_cutoff;
+	timer->position.n[0] = state->x;
+	timer->position.n[1] = state->y;
+	timer->corner = PIN(state->corner, 0, 4);
+	timer->paused = state->paused;
+	timer->enabled = state->enabled;
+}
+
+short hud_messaging_port_message_count(
+	void)
+{
+	struct scenario *scenario = global_scenario_get();
+
+	return scenario->hud_messages.index != NONE ?
+		(short)HUD_MESSAGE_TEXT_DEFINITION_GET(scenario->hud_messages.index)->messages.count : 0;
 }
 
 void scripted_hud_pause_timer(
@@ -1018,6 +1063,7 @@ void scripted_hud_messages_clear(
 	struct hud_messaging_datum_definition *datum = hud_messaging_globals->message_data;
 	long datum_count = NUMBER_OF_HUD_MESSAGING_DATUMS;
 
+	network_coop_note_hud(_coop_hud_messages_clear, 0);
 	do
 	{
 		struct hud_message_definition *message = datum->messages;
@@ -1445,6 +1491,24 @@ void hud_messaging_update(
 										0x457,
 										custom_index < NUMBER_OF_HUD_CUSTOM_ICONS,
 										"custom_index<NUMBER_OF_HUD_CUSTOM_ICONS");
+									/* port: the icon is the map's (a message element's
+									data, retail up to custom 2) and indexes the message's
+									8 custom icons: one past them is not drawn, said once */
+									if (custom_index >= NUMBER_OF_HUD_CUSTOM_ICONS)
+									{
+										static boolean bad_custom_icon_reported = FALSE;
+
+										if (!bad_custom_icon_reported)
+										{
+											bad_custom_icon_reported = TRUE;
+											error(
+												_error_silent,
+												"hud message uses custom icon %d (of %d)",
+												custom_index,
+												NUMBER_OF_HUD_CUSTOM_ICONS);
+										}
+										break;
+									}
 									if (TEST_FLAG(state_message->is_text_flags, custom_index))
 									{
 										short string_index = state_message->info[custom_index].text.string_index;
@@ -1510,7 +1574,17 @@ void hud_messaging_update(
 								}
 								else
 								{
-									error(_error_silent, "help text cannot use custom icons");
+									/* port: help text has no custom icons: this one
+									is left out (the button icons' list is not
+									theirs, and its index is still NONE) */
+									static boolean help_custom_icon_reported = FALSE;
+
+									if (!help_custom_icon_reported)
+									{
+										help_custom_icon_reported = TRUE;
+										error(_error_silent, "help text cannot use custom icons");
+									}
+									break;
 								}
 							}
 							else
@@ -1518,7 +1592,7 @@ void hud_messaging_update(
 								icon_index = element->data;
 							}
 
-							if (icon_index < hud_globals->messaging.button_icons.count)
+							if (icon_index >= 0 && icon_index < hud_globals->messaging.button_icons.count)
 							{
 								struct icon_hud_element_definition const *icon;
 
@@ -1700,10 +1774,15 @@ void hud_messaging_update(
 					wchar_t formatted[256];
 					short value_scale = MAX(item->item.hud_message_value_scale, 1);
 
-					usprintf(
-						formatted,
-						item_text,
-						message->quantity / value_scale);
+					/* port: the item's text (the map's) is the format: as
+					one only if it takes the count alone, and bounded */
+					if (item_text && ustring_format_takes(item_text, "d"))
+					{
+						usnprintf(formatted, NUMBEROF(formatted), item_text, message->quantity / value_scale);
+						formatted[NUMBEROF(formatted) - 1] = 0;
+					}
+					else
+						ustrncpy_terminated(formatted, item_text, NUMBEROF(formatted));
 					rasterizer_draw_unicode_string(
 						&message_bounds,
 						NULL,

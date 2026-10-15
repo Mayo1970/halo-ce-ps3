@@ -58,6 +58,9 @@ only look up and create stand-ins.
 #include "port_config.h"
 #include "p2p_internal.h"
 #include "ikcp.h"
+#ifdef HALO_PROFILE
+#include "profile_trace.h"
+#endif
 
 #include <stddef.h>
 #include <stdio.h>
@@ -118,6 +121,8 @@ enum
 	PEER_TIMEOUT = 20000,
 	PUNCH_TIMEOUT = 30000,
 	JOIN_TIMEOUT = 90000,
+	/* another player of the game joined, asked for (p2p_reach_player) */
+	PLAYER_REACH_TIMEOUT = 30000,
 	STREAM_LINGER_TIME = 10000,
 	PROXY_IDLE_TIME = 60000,
 	STUN_RETRY_INTERVAL = 500,
@@ -179,7 +184,15 @@ struct peer
 	unsigned long long receive_window;
 	unsigned long virtual_address;
 	int is_host;
+	/* (a host's: another player of its game, reached for map sharing:
+	p2p_reach_player) */
+	int is_player;
+	/* the hash of its public key, which another machine reaches it by */
+	unsigned char key_hash[P2P_KEY_HASH_SIZE];
 	int connected;
+	/* the WebRTC connection carrying its tunnel (p2p_webrtc.c: a browser's),
+	or -1 (the UDP tunnel) */
+	int connection;
 	struct p2p_candidate candidates[P2P_MAXIMUM_CANDIDATES];
 	int candidate_count;
 	struct p2p_candidate endpoint;
@@ -230,6 +243,8 @@ struct retired_session
 {
 	unsigned char secret[P2P_SHA256_SIZE];
 	unsigned long virtual_address;
+	/* the machine whose it was */
+	unsigned char identifier[P2P_IDENTIFIER_SIZE];
 };
 
 /* a TCP stand-in for one port of a peer: takes the game's connections */
@@ -275,6 +290,32 @@ struct stun_server
 };
 
 pthread_mutex_t p2p_lock = PTHREAD_MUTEX_INITIALIZER;
+
+#ifdef HALO_PROFILE
+/* the p2p thread's own track of the profiling build's recording
+(profile_trace.c): profile.c's sections are the game thread's alone */
+static struct
+{
+	int pass;
+	int tunnel_receive;
+	int kcp_update;
+	int streams;
+} p2p_profile_names;
+
+/* the recording's track lock: the game thread flips the recording and its
+arenas under it, and this thread records under it, so each record lands in
+one arena; a pass that drops the lock (DNS, key exchange) can straddle a
+cut, and profile_trace_end drops that scope */
+void p2p_profile_lock(void)
+{
+	pthread_mutex_lock(&p2p_lock);
+}
+
+void p2p_profile_unlock(void)
+{
+	pthread_mutex_unlock(&p2p_lock);
+}
+#endif
 
 static struct
 {
@@ -330,6 +371,22 @@ static struct
 	int game_player_maximum;
 	int reported_player_count;
 	int reported_player_maximum;
+
+	/* answering the other players of the game joined (map sharing:
+	p2p_set_answering_players): wanted, and doing (p2p_signal_host with the
+	token joined with) */
+	int answer_players;
+	int answering_players;
+	/* the other players of the game joined being reached (p2p_reach_player):
+	the hash of each one's key, and since when */
+	struct
+	{
+		int used;
+		int asked;
+		unsigned char hash[P2P_KEY_HASH_SIZE];
+		unsigned char identifier[P2P_IDENTIFIER_SIZE];
+		unsigned long time;
+	} reaching[P2P_MAXIMUM_PLAYER_JOINS];
 
 	/* joining: until the host is reached, or JOIN_TIMEOUT */
 	int join_requested;
@@ -728,7 +785,24 @@ static int is_virtual_address(unsigned long address)
 	return (network_long(address) & 0xFFC00000) == 0x64400000;
 }
 
-/* an address in 100.64.0.0/10 from the identifier, not one another peer has */
+/* whether address was another machine's than the identifier's, recently: the
+game may still have traffic for that machine, which a new peer at the
+address would take (and whose traffic would seem to come from it) */
+static int address_retired_by_another(unsigned long address, const unsigned char *peer_identifier)
+{
+	int index;
+
+	for (index = 0; index < MAXIMUM_RETIRED_SESSIONS; index++)
+	{
+		if (p2p.retired[index].virtual_address == address &&
+			memcmp(p2p.retired[index].identifier, peer_identifier, P2P_IDENTIFIER_SIZE))
+			return 1;
+	}
+	return 0;
+}
+
+/* an address in 100.64.0.0/10 from the identifier, not one another peer has
+or had lately (the same machine reached again has its own back) */
 static unsigned long virtual_address_for(const unsigned char *peer_identifier)
 {
 	unsigned char digest[P2P_SHA256_SIZE];
@@ -741,7 +815,8 @@ static unsigned long virtual_address_for(const unsigned char *peer_identifier)
 		unsigned long address = 0x64400000 | (value & 0x3FFFFF);
 
 		/* no .0 or .255, which look like network and broadcast addresses */
-		if ((address & 255) != 0 && (address & 255) != 255 && !find_peer_by_address(network_long(address)))
+		if ((address & 255) != 0 && (address & 255) != 255 && !find_peer_by_address(network_long(address)) &&
+			!address_retired_by_another(network_long(address), peer_identifier))
 			return network_long(address);
 		value++;
 	}
@@ -774,7 +849,7 @@ static void peer_send_to(struct peer *peer, const struct p2p_candidate *to, cons
 	int sealed;
 	int index;
 
-	if (p2p.tunnel_socket < 0 || size > MAXIMUM_INNER_SIZE)
+	if ((p2p.tunnel_socket < 0 && peer->connection < 0) || size > MAXIMUM_INNER_SIZE)
 		return;
 	/* the header, authenticated with the rest */
 	counter = ++peer->send_counter;
@@ -785,6 +860,12 @@ static void peer_send_to(struct peer *peer, const struct p2p_candidate *to, cons
 	packet_nonce(packet, nonce);
 	sealed = p2p_aead_seal(peer->send_key, nonce, packet, TUNNEL_HEADER_SIZE, inner, size,
 		packet + TUNNEL_HEADER_SIZE);
+	/* (a browser's: over its WebRTC connection, wherever that goes) */
+	if (peer->connection >= 0)
+	{
+		p2p_webrtc_send(peer->connection, packet, TUNNEL_HEADER_SIZE + sealed);
+		return;
+	}
 	make_address(&address, to->address, to->port);
 	posix_socket_sendto(p2p.tunnel_socket, packet, TUNNEL_HEADER_SIZE + sealed, 0, &address, sizeof(address));
 }
@@ -864,7 +945,8 @@ static void drop_peer(struct peer *peer, const char *reason)
 	struct retired_session *retired = &p2p.retired[p2p.retired_next++ % MAXIMUM_RETIRED_SESSIONS];
 	int ask_again = p2p.joining && peer->is_host && !memcmp(peer->identifier, p2p.join_host, P2P_IDENTIFIER_SIZE);
 
-	platform_log("Internet play: %s %s: %s", peer->is_host ? "host" : "player", peer->name, reason);
+	platform_log("Internet play: %s %s: %s", peer->is_host && !peer->is_player ? "host" : "player", peer->name,
+		reason);
 	if (peer->connected)
 	{
 		unsigned char bye = _packet_bye;
@@ -872,10 +954,13 @@ static void drop_peer(struct peer *peer, const char *reason)
 		peer_send(peer, &bye, 1);
 	}
 	release_peer_links((int)(peer - p2p.peers), 0);
+	if (peer->connection >= 0)
+		p2p_webrtc_close(peer->connection);
 	/* a session that ended does not come back: its packets would pass
 	again */
 	memcpy(retired->secret, peer->secret, P2P_SHA256_SIZE);
 	retired->virtual_address = peer->virtual_address;
+	memcpy(retired->identifier, peer->identifier, P2P_IDENTIFIER_SIZE);
 	memset(peer, 0, sizeof(*peer));
 	/* still joining: a new request, with a nonce of its own (the host
 	makes no second session from one request, which anyone who saw it could
@@ -955,10 +1040,12 @@ int p2p_peer_turned_away(const unsigned char *peer_identifier, int is_host)
 	return 1;
 }
 
-int p2p_peer_offered(const unsigned char *peer_identifier, const unsigned char *secret,
-	const struct p2p_candidate *candidates, int count, int is_host)
+int p2p_peer_offered(const unsigned char *peer_identifier, const unsigned char *public_key, const unsigned char *secret,
+	const struct p2p_candidate *candidates, int count, const struct p2p_webrtc *webrtc, int offered)
 {
 	struct peer *peer = find_peer(peer_identifier);
+	/* (a player answering as a host does: the keys of a host's session) */
+	int is_host = offered != _p2p_offered_joiner;
 
 	if (!memcmp(peer_identifier, identifier, P2P_IDENTIFIER_SIZE))
 		return 0;
@@ -991,22 +1078,43 @@ int p2p_peer_offered(const unsigned char *peer_identifier, const unsigned char *
 		peer->receive_window = 1;
 		peer->virtual_address = virtual_address_for(peer_identifier);
 		peer->is_host = is_host;
+		peer->is_player = offered == _p2p_offered_player;
+		p2p_key_hash(public_key, peer->key_hash);
+		peer->connection = -1;
 		peer->offered_time = p2p_now();
-		platform_log("Internet play: reaching %s %s", is_host ? "host" : "player", peer->name);
+		platform_log("Internet play: reaching %s %s%s", offered == _p2p_offered_host ? "host" : "player", peer->name,
+			webrtc->kind == _p2p_webrtc_browser ? " (a browser)" : "");
 	}
 	add_candidates(peer, candidates, count);
+	peer->connection = p2p_webrtc_offered(peer->connection, (int)(peer - p2p.peers), peer->secret, webrtc,
+		candidates, count, peer->is_host);
 	return 1;
 }
 
 int p2p_peer_reoffered(const unsigned char *peer_identifier, const unsigned char *secret,
-	const struct p2p_candidate *candidates, int count)
+	const struct p2p_candidate *candidates, int count, const struct p2p_webrtc *webrtc)
 {
 	struct peer *peer = find_peer(peer_identifier);
 
 	if (!peer || memcmp(peer->secret, secret, P2P_SHA256_SIZE))
 		return 0;
 	add_candidates(peer, candidates, count);
+	if (count || webrtc->ufrag[0])
+	{
+		peer->connection = p2p_webrtc_offered(peer->connection, (int)(peer - p2p.peers), peer->secret, webrtc,
+			candidates, count, peer->is_host);
+	}
 	return 1;
+}
+
+void p2p_peer_name(int peer, char *name)
+{
+	memcpy(name, p2p.peers[peer].name, sizeof(p2p.peers[peer].name));
+}
+
+unsigned short p2p_tunnel_local_port(void)
+{
+	return p2p.tunnel_port;
 }
 
 /* whether a packet of this number from the peer is new: not received yet,
@@ -1049,9 +1157,9 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short 
 		peer->endpoint.address = address;
 		peer->endpoint.port = port;
 		peer->endpoint_heard_time = now;
-		platform_log("Internet play: connected to %s %s at %s", peer->is_host ? "host" : "player", peer->name,
-			address_text(address, port, text));
-		if (peer->is_host)
+		platform_log("Internet play: connected to %s %s at %s", peer->is_host && !peer->is_player ? "host" : "player",
+			peer->name, address_text(address, port, text));
+		if (peer->is_host && !peer->is_player)
 		{
 			if (p2p.joining && !memcmp(p2p.join_host, peer->identifier, P2P_IDENTIFIER_SIZE))
 			{
@@ -1104,7 +1212,13 @@ static void update_peers(void)
 		{
 			int candidate;
 
-			for (candidate = 0; candidate < peer->candidate_count; candidate++)
+			/* (every address it gave, until a packet sealed by it arrives
+			from one: then only that one, above. The addresses are anyone's
+			who has the invite to give, so they are sent to no longer than
+			this. A browser's go over its WebRTC connection, once it is open) */
+			if (peer->connection >= 0)
+				peer_ping(peer, &peer->endpoint);
+			for (candidate = 0; candidate < peer->candidate_count && peer->connection < 0; candidate++)
 				peer_ping(peer, &peer->candidates[candidate]);
 			peer->sent_time = p2p_now();
 		}
@@ -1138,6 +1252,10 @@ static void stun_setup(void)
 {
 	const char *text = config_string("network.stun_servers");
 
+#ifdef HALO_WEB
+	/* (a page's addresses are its WebRTC connections' own: web_p2p.c) */
+	text = "";
+#endif
 	while (*text && p2p.stun_count < MAXIMUM_STUN_SERVERS)
 	{
 		const char *end = text + strcspn(text, ",");
@@ -1295,7 +1413,10 @@ int p2p_local_candidates(struct p2p_candidate *candidates, int maximum_count)
 		candidates[count].address = lan;
 		candidates[count++].port = p2p.tunnel_port;
 	}
-	/* (the port the router forwards here, UPnP) */
+	/* (the port the router forwards here, UPnP; STUN's addresses are offered
+	too, even where the router names another: then either may be the one
+	that works, and a machine on the LAN that answers as the router cannot
+	take the real address's place) */
 	if (p2p.upnp_forwarded && count < maximum_count)
 		candidates[count++] = p2p.upnp_candidate;
 	for (index = 0; index < p2p.stun_count && count < maximum_count; index++)
@@ -1332,6 +1453,26 @@ static int stun_settled(void)
 			return 0;
 	}
 	return 1;
+}
+
+/* the p2p thread was stopped for longer than a peer lasts: the process was
+suspended (a phone app in the background) or the machine slept (a laptop).
+The NAT's mapping of the tunnel may have lapsed, so this machine's public
+address is asked again before an offer names it, and the brokers'
+connections, which the network may have dropped, are made anew rather than
+at their silence timeout */
+static void network_resumed(unsigned long stopped)
+{
+	int index;
+
+	for (index = 0; index < p2p.stun_count; index++)
+	{
+		p2p.stun[index].has_mapped = 0;
+		p2p.stun[index].attempts = 0;
+	}
+	p2p_signal_reconnect();
+	platform_log("Internet play: the game was stopped for %lu seconds; its public address is asked again and "
+		"the brokers reconnected", stopped / 1000);
 }
 
 /* ---------- stand-ins for peers' ports */
@@ -1732,8 +1873,9 @@ void p2p_socket_port(int socket, int stream, int listening, unsigned short port)
 		entry->stream = (unsigned char)(stream != 0);
 		entry->listening |= (unsigned char)(listening != 0);
 	}
-	/* the game listens for connections while it hosts */
-	if (stream && listening)
+	/* the game listens for connections while it hosts (on any port but map
+	sharing's, which every player of a game listens on) */
+	if (stream && listening && port != network_short(P2P_MAP_SHARE_PORT))
 		p2p.hosting_socket = socket;
 	/* (and no stand-in that closed has the port now) */
 	forget_closed(stream != 0, port);
@@ -2225,6 +2367,24 @@ static void tunnel_received(const unsigned char *packet, int size, const struct 
 	}
 }
 
+void p2p_tunnel_packet(const unsigned char *packet, int size, unsigned long address, unsigned short port)
+{
+	struct sockaddr_in from;
+
+	make_address(&from, address, port);
+	tunnel_received(packet, size, &from);
+}
+
+void p2p_tunnel_send(unsigned long address, unsigned short port, const void *data, int size)
+{
+	struct sockaddr_in to;
+
+	if (p2p.tunnel_socket < 0)
+		return;
+	make_address(&to, address, port);
+	posix_socket_sendto(p2p.tunnel_socket, data, size, 0, &to, sizeof(to));
+}
+
 static void tunnel_readable(void)
 {
 	unsigned char packet[2048];
@@ -2238,7 +2398,9 @@ static void tunnel_readable(void)
 
 		if (size < 0)
 			break;
-		tunnel_received(packet, size, &from);
+		/* (a browser's ICE checks and DTLS, which carries its tunnel) */
+		if (!p2p_webrtc_received(packet, size, from.sin_addr.s_addr, from.sin_port))
+			tunnel_received(packet, size, &from);
 	}
 }
 
@@ -2257,14 +2419,20 @@ static int parse_invite(const char *text, unsigned char *host_hash, unsigned cha
 
 	for (search = text; *search && !start; search++)
 	{
-		static const char prefix[] = "halo://join/";
-		int length;
+		/* (a link, or the web page's address with one: ?join=) */
+		static const char *const prefixes[] = { "halo://join/", "?join=", "&join=" };
+		int prefix;
 
-		for (length = 0; prefix[length] && search[length] &&
-			(search[length] | 0x20) == prefix[length]; length++)
-			;
-		if (!prefix[length])
-			start = search + length;
+		for (prefix = 0; prefix < (int)(sizeof(prefixes) / sizeof(*prefixes)) && !start; prefix++)
+		{
+			int length;
+
+			for (length = 0; prefixes[prefix][length] && search[length] &&
+				(search[length] | 0x20) == prefixes[prefix][length]; length++)
+				;
+			if (!prefixes[prefix][length])
+				start = search + length;
+		}
 	}
 	if (!start)
 	{
@@ -2351,13 +2519,16 @@ static void update_joining(void)
 
 	if (p2p.join_requested)
 	{
-		/* the offer carries the public address, if there is one */
+		/* the offer carries the public address, if there is one, and a
+		browser's WebRTC */
 		p2p.stun_started = 1;
-		if (!stun_settled())
+		if (!stun_settled() || !p2p_webrtc_ready())
 			return;
 		p2p.join_requested = 0;
 		p2p.joining = 1;
 		p2p.join_time = p2p_now();
+		/* (the last game's players are not this one's) */
+		memset(p2p.reaching, 0, sizeof(p2p.reaching));
 		p2p_hex(p2p.join_host, P2P_IDENTIFIER_SIZE, name);
 		platform_log("Internet play: joining %s's game", name);
 		p2p_signal_start();
@@ -2368,6 +2539,70 @@ static void update_joining(void)
 		p2p.joining = 0;
 		p2p_signal_stop_joining();
 		platform_log("Internet play: no answer from the invite's host; it may have stopped hosting or quit");
+	}
+}
+
+/* the host of the game this machine joined, if the tunnel reaches it */
+static struct peer *joined_host(void)
+{
+	struct peer *peer = find_peer(p2p.join_host);
+
+	return peer && peer->connected && peer->is_host && !peer->is_player ? peer : NULL;
+}
+
+/* answering the other players of the game joined (with the token joined
+with), as its host does, while asked and not hosting */
+static void update_answering(void)
+{
+	int want = p2p.answer_players && !p2p.hosting && joined_host() != NULL;
+
+	if (want && !p2p.answering_players)
+	{
+		p2p.answering_players = 1;
+		p2p_signal_start();
+		p2p_signal_host(p2p.join_token);
+		platform_log("Internet play: the game's other players may reach this machine (map sharing)");
+	}
+	else if (!want && p2p.answering_players)
+	{
+		p2p.answering_players = 0;
+		/* (hosting took the topic over) */
+		if (!p2p.hosting)
+			p2p_signal_stop_hosting();
+	}
+}
+
+/* the other players of the game joined that are asked for: until reached,
+or PLAYER_REACH_TIMEOUT */
+static void update_reaching(void)
+{
+	int index;
+
+	for (index = 0; index < P2P_MAXIMUM_PLAYER_JOINS; index++)
+	{
+		struct peer *peer;
+
+		if (!p2p.reaching[index].used)
+			continue;
+		peer = find_peer(p2p.reaching[index].identifier);
+		if ((peer && peer->connected) || elapsed(p2p.reaching[index].time, PLAYER_REACH_TIMEOUT) || !joined_host())
+		{
+			if (p2p.reaching[index].asked)
+				p2p_signal_stop_joining_player(p2p.reaching[index].identifier);
+			p2p.reaching[index].used = 0;
+			continue;
+		}
+		/* (the offer carries the public address, if there is one) */
+		if (!p2p.reaching[index].asked && stun_settled())
+		{
+			p2p_signal_start();
+			if (!p2p_signal_join_player(p2p.reaching[index].hash, p2p.join_token))
+			{
+				p2p.reaching[index].used = 0;
+				continue;
+			}
+			p2p.reaching[index].asked = 1;
+		}
 	}
 }
 
@@ -2401,7 +2636,8 @@ void p2p_new_invite_if_listed(void)
 	if (!p2p.has_token || !p2p.token_listed)
 		return;
 	make_invite();
-	platform_log("Internet play: the game is private now, with a new invite: %s", p2p.invite);
+	platform_log("Internet play: a new invite, so that the one listed lets no one in (private, or a new password): %s",
+		p2p.invite);
 	if (p2p.hosting)
 	{
 		p2p_signal_host(p2p.token);
@@ -2462,6 +2698,95 @@ static void update_hosting(void)
 			p2p_discord_set_hosting(p2p.invite + strlen("halo://join/"), count, maximum);
 		}
 	}
+}
+
+/* ---------- map sharing between the players of a game joined */
+
+int p2p_peer_key_hash(unsigned long virtual_address, unsigned char *peer_identifier, unsigned char *key_hash)
+{
+	struct peer *peer;
+	int result = 0;
+
+	if (!p2p.running)
+		return 0;
+	pthread_mutex_lock(&p2p_lock);
+	peer = find_peer_by_address(virtual_address);
+	if (peer)
+	{
+		memcpy(peer_identifier, peer->identifier, P2P_IDENTIFIER_SIZE);
+		memcpy(key_hash, peer->key_hash, P2P_KEY_HASH_SIZE);
+		result = 1;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+void p2p_set_answering_players(int on)
+{
+	/* (only the game's thread writes it: unchanged, it need not wait for the
+	lock) */
+	if (!p2p.running || !on == !p2p.answer_players)
+		return;
+	pthread_mutex_lock(&p2p_lock);
+	p2p.answer_players = on != 0;
+	pthread_mutex_unlock(&p2p_lock);
+}
+
+int p2p_reach_player(const unsigned char *key_hash)
+{
+	unsigned char peer_identifier[P2P_IDENTIFIER_SIZE];
+	int free_index = -1;
+	int result = 0;
+	int index;
+
+	if (!p2p.running)
+		return 0;
+	p2p_identifier_from_hash(key_hash, peer_identifier);
+	pthread_mutex_lock(&p2p_lock);
+	if (!memcmp(peer_identifier, identifier, P2P_IDENTIFIER_SIZE) || !joined_host())
+	{
+		pthread_mutex_unlock(&p2p_lock);
+		return 0;
+	}
+	/* (reached, or being reached: by its offer, or by the request below) */
+	if (find_peer(peer_identifier))
+		result = 1;
+	for (index = 0; index < P2P_MAXIMUM_PLAYER_JOINS && !result; index++)
+	{
+		if (p2p.reaching[index].used && !memcmp(p2p.reaching[index].hash, key_hash, P2P_KEY_HASH_SIZE))
+			result = 1;
+		else if (!p2p.reaching[index].used && free_index < 0)
+			free_index = index;
+	}
+	if (!result && free_index >= 0)
+	{
+		memset(&p2p.reaching[free_index], 0, sizeof(p2p.reaching[free_index]));
+		p2p.reaching[free_index].used = 1;
+		memcpy(p2p.reaching[free_index].hash, key_hash, P2P_KEY_HASH_SIZE);
+		memcpy(p2p.reaching[free_index].identifier, peer_identifier, P2P_IDENTIFIER_SIZE);
+		p2p.reaching[free_index].time = p2p_now();
+		result = 1;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
+}
+
+int p2p_peer_reached(const unsigned char *peer_identifier, unsigned long *address)
+{
+	struct peer *peer;
+	int result = 0;
+
+	if (!p2p.running)
+		return 0;
+	pthread_mutex_lock(&p2p_lock);
+	peer = find_peer(peer_identifier);
+	if (peer && peer->connected)
+	{
+		*address = peer->virtual_address;
+		result = 1;
+	}
+	pthread_mutex_unlock(&p2p_lock);
+	return result;
 }
 
 void p2p_set_hosting_allowed(int allowed)
@@ -2613,6 +2938,10 @@ static void update_upnp(void)
 
 	if (allowed < 0)
 		allowed = config_boolean("network.allow_upnp") ? 1 : 0;
+#ifdef HALO_WEB
+	/* (a page cannot reach the router) */
+	allowed = 0;
+#endif
 	if (!allowed || p2p.upnp_working || p2p.upnp_released)
 		return;
 	if (p2p.upnp_forwarded)
@@ -2814,8 +3143,17 @@ static void *p2p_thread(void *unused)
 	static int read[MAXIMUM_SOCKETS], write[MAXIMUM_SOCKETS];
 	static int asked_read[MAXIMUM_SOCKETS], asked_write[MAXIMUM_SOCKETS];
 	static int read_owners[MAXIMUM_SOCKETS], write_owners[MAXIMUM_SOCKETS];
+	/* WebRTC's connections opening or open (their timers) */
+	int webrtc_busy = 0;
 
 	(void)unused;
+#ifdef HALO_PROFILE
+	profile_trace_thread_register(_profile_track_p2p);
+	p2p_profile_names.pass = profile_trace_name("p2p.pass");
+	p2p_profile_names.tunnel_receive = profile_trace_name("p2p.tunnel_receive");
+	p2p_profile_names.kcp_update = profile_trace_name("p2p.kcp_update");
+	p2p_profile_names.streams = profile_trace_name("p2p.streams");
+#endif
 	pthread_mutex_lock(&p2p_lock);
 #ifndef HALO_ANDROID
 	/* (here: it may wait for a program) */
@@ -2827,8 +3165,9 @@ static void *p2p_thread(void *unused)
 		int asked_read_count, asked_write_count;
 		/* KCP's clock needs a pass every LOOP_INTERVAL while it carries
 		streams; otherwise the thread can sleep longer */
-		int wait = LOOP_INTERVAL * 5;
+		int wait = webrtc_busy ? LOOP_INTERVAL : LOOP_INTERVAL * 5;
 		int index, asked;
+		unsigned long waited;
 
 		/* what to wait for */
 		read_owners[read_count] = _owner_tunnel;
@@ -2889,12 +3228,23 @@ static void *p2p_thread(void *unused)
 		memcpy(asked_write, write, sizeof(*write) * (size_t)write_count);
 
 		pthread_mutex_unlock(&p2p_lock);
+		waited = p2p_now();
 		if (posix_socket_select(read, &read_count, write, &write_count, NULL, &error_count, 0,
 			wait * 1000, 0) < 0)
 		{
 			read_count = write_count = 0;
 		}
 		pthread_mutex_lock(&p2p_lock);
+#ifdef HALO_PROFILE
+		profile_trace_begin(p2p_profile_names.pass);
+#endif
+		/* the wait lasted far longer than asked (the process was suspended
+		or the machine slept): what the sockets report is stale */
+		if (elapsed(waited, (unsigned long)wait + PEER_TIMEOUT))
+		{
+			network_resumed(p2p_now() - waited);
+			read_count = write_count = 0;
+		}
 
 		/* what is ready (the lists now hold only ready sockets, in the order
 		asked, so each one's owner is found going along both); a socket
@@ -2913,7 +3263,13 @@ static void *p2p_thread(void *unused)
 			switch (owner & 255)
 			{
 			case _owner_tunnel:
+#ifdef HALO_PROFILE
+				profile_trace_begin(p2p_profile_names.tunnel_receive);
+#endif
 				tunnel_readable();
+#ifdef HALO_PROFILE
+				profile_trace_end(p2p_profile_names.tunnel_receive);
+#endif
 				break;
 			case _owner_handoff:
 				if (socket == p2p.handoff_socket)
@@ -2933,6 +3289,9 @@ static void *p2p_thread(void *unused)
 				break;
 			}
 		}
+#ifdef HALO_PROFILE
+		profile_trace_begin(p2p_profile_names.streams);
+#endif
 		for (index = 0, asked = 0; index < write_count; index++)
 		{
 			int socket = write[index];
@@ -2957,14 +3316,24 @@ static void *p2p_thread(void *unused)
 			if (stream->used && stream->state == _stream_connecting && elapsed(stream->created_time, 5000))
 				stream_local_closed(stream);
 		}
+#ifdef HALO_PROFILE
+		profile_trace_end(p2p_profile_names.streams);
+#endif
 		p2p_signal_update(read, read_count, write, write_count);
 
+#ifdef HALO_PROFILE
+		profile_trace_begin(p2p_profile_names.kcp_update);
+#endif
 		for (index = 0; index < MAXIMUM_STREAMS; index++)
 		{
 			if (p2p.streams[index].used)
 				stream_update(&p2p.streams[index]);
 		}
+#ifdef HALO_PROFILE
+		profile_trace_end(p2p_profile_names.kcp_update);
+#endif
 		update_peers();
+		webrtc_busy = p2p_webrtc_update();
 		expire_proxies();
 		stun_update();
 		update_hosting();
@@ -2987,10 +3356,15 @@ static void *p2p_thread(void *unused)
 			}
 		}
 		update_joining();
+		update_answering();
+		update_reaching();
 		update_upnp();
 		p2p_discord_update();
 #ifdef HALO_ANDROID
 		poll_invite_file();
+#endif
+#ifdef HALO_PROFILE
+		profile_trace_end(p2p_profile_names.pass);
 #endif
 	}
 	return NULL;
