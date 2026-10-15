@@ -834,6 +834,18 @@ static IDirectSoundStreamVtbl stream_vtable =
 	stream_flush,
 };
 
+/* (sound_dsound_xbox.c) a stereo stream placed in the world: not yet, so it plays as it is (dsound_sdl.c pans it) */
+void dsound_sdl_stream_set_stereo_position(IDirectSoundStream *object, BOOL positioned, float pan,
+	float distance, float minimum_distance, float distance_fade)
+{
+	(void)object;
+	(void)positioned;
+	(void)pan;
+	(void)distance;
+	(void)minimum_distance;
+	(void)distance_fade;
+}
+
 /* ---------- the DirectSound object */
 
 static ULONG direct_sound_references;

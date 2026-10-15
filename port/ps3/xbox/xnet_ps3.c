@@ -624,6 +624,12 @@ INT WSAAPI XNetRandom(BYTE *buffer, UINT size)
 	return 0;
 }
 
+/* (posix_net.c's, for network_voice.c's keys) */
+void posix_random_bytes(void *buffer, unsigned int size)
+{
+	ps3_net_random(buffer, size);
+}
+
 INT WSAAPI XNetCreateKey(XNKID *key_identifier, XNKEY *key)
 {
 	ps3_net_random(key_identifier, sizeof(*key_identifier));

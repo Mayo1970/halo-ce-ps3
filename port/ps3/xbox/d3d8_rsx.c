@@ -189,6 +189,40 @@ int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 	return 0;
 }
 
+/* no pointer, so the scoreboard offers no menu (as on Android) */
+int halo_scoreboard_pointer_update(int offered, struct halo_ui_pointer *pointer)
+{
+	(void)offered;
+	(void)pointer;
+	return -1;
+}
+
+float halo_screen_scale(void)
+{
+	return 1.0f;
+}
+
+/* the shadow maps at the Xbox's 128x128 */
+long halo_shadow_map_scale(void)
+{
+	return 1;
+}
+
+/* no display.anti_aliasing pass */
+void halo_screen_anti_alias(short x0, short y0, short x1, short y1)
+{
+	(void)x0;
+	(void)y0;
+	(void)x1;
+	(void)y1;
+}
+
+/* models stay lit for each vertex (no display.per_pixel_lighting) */
+void halo_vertex_shader_lighting(unsigned long handle)
+{
+	(void)handle;
+}
+
 /* ---------- vertical blank emulation */
 
 static struct ps3_host_lock *vertical_blank_lock;
