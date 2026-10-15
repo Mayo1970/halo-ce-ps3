@@ -24,6 +24,12 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   copy is LF):
   `diff -rq --strip-trailing-cr -x .git -x build -x __pycache__ ../halo-ce-universal .`
   (Git Bash, approximately 25 s).
+- Upstream merges (2026-10-16): `port/ps3/xbox/` is tracked now (`git add -f`,
+  `ec01a30`). The remote `upstream` is OpenCE's GitHub repository; the local
+  graft `git replace --graft 4b4874c e3389991` joins the two histories.
+  OpenCE `main` at `8102e711` is merged (`63949dd`). The next merge: in a
+  worktree, `git -c core.autocrlf=false merge upstream/main` (the system
+  `autocrlf=true` would write CRLF), then a PS3 build and test.
 - The other documents:
   - `GOALS.md`: the goal stack, the G1 step details, the blocker analysis.
   - `port/ps3/README.md`: build, install, game data, log, bring-up test.
@@ -45,6 +51,11 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-06)
 
+- 2026-10-16: OpenCE upstream merged (620 commits, to `8102e711`): hardware
+  SUCCESS (Matt: "We're in again! Perfect."). Menu, a level, saves written
+  and loaded. New upstream features that report "none" on the PS3: voice
+  chat, touch, Custom Edition maps, p2p passwords, per-pixel lighting,
+  anti-aliasing. See the Log.
 - G0 to G3 are done: hardware SUCCESS. G2 ran the game headless to the open
   of `d:\maps\ui.map`; the Xbox window is at 0x80000000, so the map pointers
   stay valid. G3 (run 9) ran the main menu headless at 30 frames per second
@@ -1176,3 +1187,18 @@ then `./build.sh pkg LOG_IP=<address>`.
   (`./build.sh BUILD=build/ps3_audit`, a build folder of its own). No PKG:
   the tree also holds other sessions' uncommitted work. Waiting for Matt's
   word.
+- 2026-10-16: The OpenCE upstream merge (Matt: "Can you do these steps for
+  me?"), in the worktree `../PS3-merge`, branch `upstream-merge`, then
+  fast-forwarded into `main`. 47 conflicting files: upstream's code with the
+  PS3's byte swaps, `HALO_PTR32`, `HS_LOW_*`, steps and timers kept; the
+  frame wait keeps `SwitchToThread`. Build: `-iquote port/linux/game`, folder
+  excludes in `tools/ps3_game_mk.py`, the port's zlib (`zlib_prefixed.h`
+  keeps the host's `long`), Monocypher and stb_vorbis as host code, 32-bit
+  reads in `tag_validate.c`, the new platform hooks as "none"
+  (`port_stubs.c`, `d3d8_rsx.c`, `xinput_ps3.c`, `dsound_ps3.c`,
+  `xnet_ps3.c`). Run 1 halted at boot: upstream's 256 MB texture cache;
+  `halo_port_capacity.h` gives the PS3 the Xbox's 22 MB and 4 MB (`28070c4`).
+  Run 2: hardware SUCCESS. Open: the new network messages (co-op BSP,
+  votekick, voice, map share) have no byte swap, so PS3 to PC play of them
+  does not work; the game state is 4 MB larger, so saves of older builds do
+  not load; lowest free main memory 36 MB (t=52 s).
