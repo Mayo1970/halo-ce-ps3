@@ -1,57 +1,5 @@
-/*
-P2P.C
-
-Internet play: machines that shared an invite reach each other's system
-link games as if they were on one LAN, without a server of this project's.
-
-- An invite is a link, halo://join/<host><token>: the hash of the X25519
-  public key the hosting machine makes each run (16 bytes of it, which no
-  other key can be found to have; the first 6 are the machine's identifier,
-  which its XNADDR also carries) and a random 16-byte token. A machine
-  makes one when its game starts hosting (the game listens for
-  connections), logs it, puts it on the clipboard, and offers it through
-  Discord (p2p_discord.c). Nothing about a game is published anywhere else:
-  without an invite there is no way to find or join it.
-- Signalling (p2p_signal.c) goes through public MQTT brokers, on topics
-  that are hashes of the token, with messages sealed with a key derived
-  from it (p2p_crypto.c). A joiner offers its public key and the addresses
-  it can be reached at; the host answers with its own, and makes the
-  session once the joiner, answered, proves that it holds its key. The
-  secret of their session comes from the two keys (X25519) and a nonce of
-  each, and never travels.
-- The tunnel is one UDP socket. Each machine learns its public address from
-  public STUN servers, and both then send to each other's addresses until
-  packets get through (hole punching). There is no relay: two machines whose
-  NATs both map every destination to a new port cannot connect, unless a
-  router forwards one of them a port. So a host asks its router to forward
-  the tunnel's port (UPnP, posix_upnp.c) as soon as a player reaches out
-  with its invite, and a joiner asks its own when it has not reached the
-  host in a few seconds (network.allow_upnp); the forwarded port is one more
-  of the addresses a machine offers (the joiner asks the host again every
-  few seconds until they meet, and the host answers with them all). Every
-  tunnel packet is sealed with a key of the session's for its direction,
-  its header (the sender and the packet's number, the nonce) authenticated
-  too, and a packet already received, or from further back than the last
-  64, is dropped.
-- Each peer gets a virtual address in 100.64.0.0/10, which the game sees
-  (XNetXnAddrToInAddr maps the peer's XNADDR to it). The game's datagrams
-  to a peer go onto the tunnel from xnet.c at once (p2p_send_datagram);
-  otherwise xnet.c rewrites the game's destinations there to local
-  stand-ins: a UDP socket here per peer and port forwards datagrams (the
-  peer's to the game, and the game's from a socket connected to the
-  peer), and a TCP listener per peer and port takes the game's connections,
-  carried reliably over the tunnel by KCP (port/third_party/kcp). Traffic
-  arriving from a peer leaves these stand-ins, and xnet.c reports it as
-  coming from the peer's address. The
-  game's broadcasts also go to every peer, so a host's game shows up in its
-  joiners' system link lists, and joining works as on a LAN. A peer reaches
-  only the game's own ports (xnet.c says which it has), and has a few
-  stand-ins and connections at a time.
-
-The work happens on a thread of its own, under p2p_lock (let go of for
-whatever may wait: DNS, the desktop's link handlers); the game's threads
-only look up and create stand-ins.
-*/
+/* P2P.C: internet play, the machines of an invite in one system link over a UDP tunnel (port/linux/README.md: Security,
+Connection); one thread works under p2p_lock, let go for waits (DNS), and the game's threads only make stand-ins */
 
 #include "platform.h"
 #include "posix.h"
@@ -63,6 +11,7 @@ only look up and create stand-ins.
 #endif
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,9 +29,8 @@ enum
 	/* the packets received out of order that are still taken */
 	REPLAY_WINDOW = 64,
 
-	/* a host needs a UDP stand-in for two or three ports of every other
-	machine, and a stream for each one's connection; one peer can have no
-	more than these */
+	/* a host needs a UDP stand-in for two or three ports of every other machine, and a stream for each one's
+	connection; one peer can have no more than these */
 	MAXIMUM_PROXIES = 512,
 	MAXIMUM_PEER_PROXIES = 4,
 	MAXIMUM_LISTENERS = 64,
@@ -95,9 +43,8 @@ enum
 	MAXIMUM_SENT_PORTS = 16,
 	/* sessions that ended, which do not come back */
 	MAXIMUM_RETIRED_SESSIONS = 16,
-	/* the players a host is reaching at once (anyone with the invite can
-	ask in any number of made-up names: each would have the host send to the
-	addresses it gives) */
+	/* the players a host is reaching at once (anyone with the invite can ask in any number of made-up names: each would
+	have the host send to the addresses it gives) */
 	MAXIMUM_OPENING_PEERS = 8,
 	/* stand-ins closed lately, whose traffic the game may not have read yet
 	(p2p_incoming) */
@@ -128,9 +75,8 @@ enum
 	STUN_RETRY_INTERVAL = 500,
 	STUN_REFRESH_INTERVAL = 25000,
 	STUN_ATTEMPTS = 6,
-	/* a joiner asks its router to forward the tunnel's port when it has not
-	reached a peer in this long; a forwarding is renewed this often (its
-	lease is an hour), and one refused asked for again this long after */
+	/* a joiner asks its router to forward the tunnel's port when it has not reached a peer in this long; a forwarding
+	is renewed this often (its lease is an hour), and one refused asked for again this long after */
 	UPNP_JOIN_DELAY = 5000,
 	UPNP_RENEW_INTERVAL = 30 * 60 * 1000,
 	UPNP_RETRY_INTERVAL = 5 * 60 * 1000,
@@ -179,9 +125,9 @@ struct peer
 	unsigned char receive_key[P2P_SHA256_SIZE];
 	/* the last packet number sent; the highest received, and which of the
 	REPLAY_WINDOW before it were (bit n: highest - n) */
-	unsigned long long send_counter;
-	unsigned long long receive_highest;
-	unsigned long long receive_window;
+	uint64_t send_counter;
+	uint64_t receive_highest;
+	uint64_t receive_window;
 	unsigned long virtual_address;
 	int is_host;
 	/* (a host's: another player of its game, reached for map sharing:
@@ -302,10 +248,8 @@ static struct
 	int streams;
 } p2p_profile_names;
 
-/* the recording's track lock: the game thread flips the recording and its
-arenas under it, and this thread records under it, so each record lands in
-one arena; a pass that drops the lock (DNS, key exchange) can straddle a
-cut, and profile_trace_end drops that scope */
+/* the recording's track lock: the game thread flips the recording and its arenas under it, this thread records under
+it (each record in one arena); a pass dropping the lock (DNS, keys) may straddle a cut: profile_trace_end drops it */
 void p2p_profile_lock(void)
 {
 	pthread_mutex_lock(&p2p_lock);
@@ -364,17 +308,15 @@ static struct
 	int token_listed;
 	char invite[P2P_LINK_SIZE];
 	int invite_copied;
-	/* the game's players and its most (p2p_set_game_player_counts; 0: not
-	said, and the machines the tunnel reaches are shown), and what Discord
-	was told */
+	/* the game's players and its most (p2p_set_game_player_counts; 0: not said, and the machines the tunnel reaches are
+	shown), and what Discord was told */
 	int game_player_count;
 	int game_player_maximum;
 	int reported_player_count;
 	int reported_player_maximum;
 
-	/* answering the other players of the game joined (map sharing:
-	p2p_set_answering_players): wanted, and doing (p2p_signal_host with the
-	token joined with) */
+	/* answering the other players of the game joined (map sharing: p2p_set_answering_players): wanted, and doing
+	(p2p_signal_host with the token joined with) */
 	int answer_players;
 	int answering_players;
 	/* the other players of the game joined being reached (p2p_reach_player):
@@ -415,9 +357,8 @@ p2p.local_address) */
 static unsigned short proxy_by_port[65536];
 
 static unsigned char identifier[P2P_IDENTIFIER_SIZE];
-/* this run's X25519 keys, which the identifier comes from: from an Ed25519
-seed, whose key signs the listing of a public game (p2p_lobby.c), so that a
-listing's key is also the invite's */
+/* this run's X25519 keys, which the identifier comes from: from an Ed25519 seed, whose key signs the listing of a
+public game (p2p_lobby.c), so that a listing's key is also the invite's */
 static unsigned char seed[P2P_SEED_SIZE];
 static unsigned char signing_key[P2P_KEY_SIZE];
 static unsigned char secret_key[P2P_KEY_SIZE];
@@ -433,9 +374,8 @@ unsigned long p2p_now(void)
 
 static int elapsed(unsigned long since, unsigned long time)
 {
-	/* (unsigned, as the clock wraps: a signed difference is negative for
-	half of it, which had nothing lapse from a time of 0 from 24.8 days of
-	uptime on) */
+	/* (unsigned, as the clock wraps: a signed difference is negative for half of it, which had nothing lapse from a
+	time of 0 from 24.8 days of uptime on) */
 	return (unsigned int)(p2p_now() - since) >= (unsigned int)time;
 }
 
@@ -485,14 +425,23 @@ static int hex_value(char digit)
 	return -1;
 }
 
+/* (port: network order is a big-endian CPU's own, the PS3's) */
 static unsigned long network_long(unsigned long value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return __builtin_bswap32(value);
+#endif
 }
 
 static unsigned short network_short(unsigned short value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return (unsigned short)(value << 8 | value >> 8);
+#endif
 }
 
 static void put_short(unsigned char *bytes, unsigned short value)
@@ -666,10 +615,8 @@ static struct peer *find_peer_by_address(unsigned long address)
 int posix_hardware_id_source(char *text, int size);
 #endif
 
-/* what this machine is known by, as text (none: 0): Windows' SMBIOS UUID or
-MachineGuid (win32_p2p.c); Linux's /etc/machine-id; Android's ANDROID_ID,
-which only the app's Java can read and puts in hardware_id.txt
-(LauncherActivity.java) */
+/* what this machine is known by, as text (none: 0): Windows' SMBIOS UUID or MachineGuid (win32_p2p.c); Linux's
+/etc/machine-id; Android's ANDROID_ID, which only Java reads, in hardware_id.txt (LauncherActivity.java) */
 static int hardware_id_source(char *text, int size)
 {
 #ifdef _WIN32
@@ -708,11 +655,8 @@ static int hardware_id_source(char *text, int size)
 #endif
 }
 
-/* this machine's hardware id, as hex (empty if it has none to tell): a hash
-of what it is known by (hardware_id_source) keyed for this game, so that
-what is told is no raw serial and is this game's alone; a host it joins
-logs it, and refuses one it banned. Anyone with administrator or root can
-change what it is known by: a stable id, not a proof */
+/* this machine's hardware id as hex (empty: none): a keyed hash of what it is known by (hardware_id_source), no raw
+serial and this game's alone; hosts log it and refuse a banned one. An admin can change it: a stable id, not a proof */
 void p2p_hardware_id(char *hex, int size)
 {
 	static const char key[] = "halo-ce-universal hardware id v1";
@@ -785,9 +729,8 @@ static int is_virtual_address(unsigned long address)
 	return (network_long(address) & 0xFFC00000) == 0x64400000;
 }
 
-/* whether address was another machine's than the identifier's, recently: the
-game may still have traffic for that machine, which a new peer at the
-address would take (and whose traffic would seem to come from it) */
+/* whether address was another machine's than the identifier's, recently: the game may still have traffic for that
+machine, which a new peer at the address would take (and whose traffic would seem to come from it) */
 static int address_retired_by_another(unsigned long address, const unsigned char *peer_identifier)
 {
 	int index;
@@ -823,9 +766,9 @@ static unsigned long virtual_address_for(const unsigned char *peer_identifier)
 }
 
 /* a tunnel packet's number, from its header */
-static unsigned long long packet_counter(const unsigned char *packet)
+static uint64_t packet_counter(const unsigned char *packet)
 {
-	unsigned long long counter = 0;
+	uint64_t counter = 0;
 	int index;
 
 	for (index = 7; index >= 0; index--)
@@ -845,7 +788,7 @@ static void peer_send_to(struct peer *peer, const struct p2p_candidate *to, cons
 	unsigned char packet[MAXIMUM_PACKET_SIZE];
 	unsigned char nonce[P2P_NONCE_SIZE];
 	struct sockaddr_in address;
-	unsigned long long counter;
+	uint64_t counter;
 	int sealed;
 	int index;
 
@@ -962,9 +905,8 @@ static void drop_peer(struct peer *peer, const char *reason)
 	retired->virtual_address = peer->virtual_address;
 	memcpy(retired->identifier, peer->identifier, P2P_IDENTIFIER_SIZE);
 	memset(peer, 0, sizeof(*peer));
-	/* still joining: a new request, with a nonce of its own (the host
-	makes no second session from one request, which anyone who saw it could
-	send again) */
+	/* still joining: a new request, with a nonce of its own (the host makes no second session from one request, which
+	anyone who saw it could send again) */
 	if (ask_again)
 		p2p_signal_join(p2p.join_host_hash, p2p.join_token);
 }
@@ -1119,9 +1061,9 @@ unsigned short p2p_tunnel_local_port(void)
 
 /* whether a packet of this number from the peer is new: not received yet,
 nor from before the window */
-static int packet_fresh(const struct peer *peer, unsigned long long counter)
+static int packet_fresh(const struct peer *peer, uint64_t counter)
 {
-	unsigned long long behind;
+	uint64_t behind;
 
 	if (counter > peer->receive_highest)
 		return 1;
@@ -1129,11 +1071,11 @@ static int packet_fresh(const struct peer *peer, unsigned long long counter)
 	return behind < REPLAY_WINDOW && !((peer->receive_window >> behind) & 1);
 }
 
-static void packet_received(struct peer *peer, unsigned long long counter)
+static void packet_received(struct peer *peer, uint64_t counter)
 {
 	if (counter > peer->receive_highest)
 	{
-		unsigned long long ahead = counter - peer->receive_highest;
+		uint64_t ahead = counter - peer->receive_highest;
 
 		peer->receive_window = ahead >= REPLAY_WINDOW ? 0 : peer->receive_window << ahead;
 		peer->receive_highest = counter;
@@ -1212,10 +1154,8 @@ static void update_peers(void)
 		{
 			int candidate;
 
-			/* (every address it gave, until a packet sealed by it arrives
-			from one: then only that one, above. The addresses are anyone's
-			who has the invite to give, so they are sent to no longer than
-			this. A browser's go over its WebRTC connection, once it is open) */
+			/* (every address it gave until a packet it sealed comes from one, then that one, above; anyone
+			with the invite can give them, so they are tried no longer than this. A browser's go over WebRTC) */
 			if (peer->connection >= 0)
 				peer_ping(peer, &peer->endpoint);
 			for (candidate = 0; candidate < peer->candidate_count && peer->connection < 0; candidate++)
@@ -1413,10 +1353,8 @@ int p2p_local_candidates(struct p2p_candidate *candidates, int maximum_count)
 		candidates[count].address = lan;
 		candidates[count++].port = p2p.tunnel_port;
 	}
-	/* (the port the router forwards here, UPnP; STUN's addresses are offered
-	too, even where the router names another: then either may be the one
-	that works, and a machine on the LAN that answers as the router cannot
-	take the real address's place) */
+	/* (the port the router forwards here, UPnP; STUN's addresses too, even where the router names another: either may
+	be the one that works, and a LAN machine answering as the router cannot take the real address's place) */
 	if (p2p.upnp_forwarded && count < maximum_count)
 		candidates[count++] = p2p.upnp_candidate;
 	for (index = 0; index < p2p.stun_count && count < maximum_count; index++)
@@ -1455,12 +1393,8 @@ static int stun_settled(void)
 	return 1;
 }
 
-/* the p2p thread was stopped for longer than a peer lasts: the process was
-suspended (a phone app in the background) or the machine slept (a laptop).
-The NAT's mapping of the tunnel may have lapsed, so this machine's public
-address is asked again before an offer names it, and the brokers'
-connections, which the network may have dropped, are made anew rather than
-at their silence timeout */
+/* the p2p thread stopped longer than a peer lasts (an app in the background, a laptop asleep): the NAT's mapping may
+have lapsed, so the public address is asked again before an offer, and the brokers reconnected now, not at a timeout */
 static void network_resumed(unsigned long stopped)
 {
 	int index;
@@ -1667,9 +1601,8 @@ int p2p_outgoing(int stream, int socket, unsigned long *address, unsigned short 
 		return 0;
 	pthread_mutex_lock(&p2p_lock);
 	peer = find_peer_by_address(*address);
-	/* a peer's, or one that was: never to the address itself (100.64.0.0/10
-	is also a carrier's NAT's and some VPNs', which the game's traffic is not
-	for) */
+	/* a peer's, or one that was: never to the address itself (100.64.0.0/10 is also a carrier's NAT's and some VPNs',
+	which the game's traffic is not for) */
 	if (!peer)
 		result = address_retired(*address) ? -1 : 0;
 	else if (!peer->connected)
@@ -1745,9 +1678,8 @@ int p2p_incoming(int stream, unsigned long *address, unsigned short *port)
 		*port = proxy->remote_port;
 		result = 1;
 	}
-	/* one that closed since (a peer's stand-ins past its few, a stream
-	ended before the game took its connection) is still the peer's: as
-	127.0.0.1 it would be this machine's own */
+	/* one that closed since (a peer's stand-ins past its few, a stream ended before the game took its connection) is
+	still the peer's: as 127.0.0.1 it would be this machine's own */
 	if (!result)
 		result = find_closed(stream, address, port);
 	pthread_mutex_unlock(&p2p_lock);
@@ -1919,9 +1851,8 @@ void p2p_socket_closed(int socket, unsigned short datagram_port)
 	pthread_mutex_unlock(&p2p_lock);
 }
 
-/* whether a peer may reach this port of the game's: one a socket of the
-game's listens on (stream), or a datagram socket's, bound or sent from to a
-peer */
+/* whether a peer may reach this port of the game's: one a socket of the game's listens on (stream), or a datagram
+socket's, bound or sent from to a peer */
 static int game_port_open(int stream, unsigned short port)
 {
 	int index;
@@ -2072,9 +2003,8 @@ static void stream_message(struct stream *stream, unsigned char type, const void
 static void stream_local_closed(struct stream *stream)
 {
 	close_socket(&stream->socket);
-	/* (its port the system gives again now, not when the stream is let go
-	once the peer has all it sent: remembered from now, and no longer the
-	peer's while the stream lingers) */
+	/* (its port the system gives again now, not when the stream is let go once the peer has all it sent: remembered
+	from now, and no longer the peer's while the stream lingers) */
 	if (stream->local_port)
 	{
 		remember_closed(1, stream->local_port, stream->peer, stream->remote_port);
@@ -2301,7 +2231,7 @@ static void tunnel_received(const unsigned char *packet, int size, const struct 
 {
 	unsigned char inner[MAXIMUM_INNER_SIZE];
 	unsigned char nonce[P2P_NONCE_SIZE];
-	unsigned long long counter;
+	uint64_t counter;
 	struct peer *peer;
 	int inner_size;
 	int newest;
@@ -2406,9 +2336,8 @@ static void tunnel_readable(void)
 
 /* ---------- invites */
 
-/* the host's key hash and the token in an invite link or code within text:
-1 if it holds one, -1 if it holds an older version's (with the host's
-identifier alone, which a key made to have it could pass for), else 0 */
+/* the host's key hash and the token in an invite link or code within text: 1 if it holds one, -1 if it holds an older
+version's (with the host's identifier alone, which a key made to have it could pass for), else 0 */
 static int parse_invite(const char *text, unsigned char *host_hash, unsigned char *token)
 {
 	unsigned char bytes[P2P_KEY_HASH_SIZE + P2P_TOKEN_SIZE];
@@ -2904,10 +2833,8 @@ static void upnp_release(void)
 		posix_upnp_stop_forwarding_udp(external_port);
 }
 
-/* whether a forwarded port would help: a player reaching this host (at
-once: they may need it), or a peer not reached in a while (every copy of
-the game listens, and so has an invite, from its start: a host asks only
-when its invite is used) */
+/* whether a forwarded port would help: a player reaching this host (at once: they may need it), or a peer not reached
+in a while (every copy listens, so has an invite, from its start: a host asks only when its invite is used) */
 static int upnp_needed(void)
 {
 	int index;
@@ -3002,9 +2929,8 @@ static int command_line_invite(char *text, int size)
 	return 0;
 }
 
-/* the key of this user's copies of the game, from a secret only they can
-read: another user's program may have the port, and must neither read the
-invites nor pass its own */
+/* the key of this user's copies of the game, from a secret only they can read: another user's program may have the
+port, and must neither read the invites nor pass its own */
 static int handoff_key(unsigned char *key)
 {
 	unsigned char secret[P2P_SHA256_SIZE];
@@ -3137,9 +3063,8 @@ static void *p2p_thread(void *unused)
 		_owner_stream,
 		_owner_signal,
 	};
-	/* the sockets waited for, and those that are ready (the same order,
-	which posix_socket_select keeps), and whose each is: its kind in the low
-	byte, its index above */
+	/* the sockets waited for, and those that are ready (the same order, which posix_socket_select keeps), and whose
+	each is: its kind in the low byte, its index above */
 	static int read[MAXIMUM_SOCKETS], write[MAXIMUM_SOCKETS];
 	static int asked_read[MAXIMUM_SOCKETS], asked_write[MAXIMUM_SOCKETS];
 	static int read_owners[MAXIMUM_SOCKETS], write_owners[MAXIMUM_SOCKETS];
@@ -3246,9 +3171,8 @@ static void *p2p_thread(void *unused)
 			read_count = write_count = 0;
 		}
 
-		/* what is ready (the lists now hold only ready sockets, in the order
-		asked, so each one's owner is found going along both); a socket
-		closed meanwhile is not its owner's any more */
+		/* what is ready (the lists now hold only ready sockets, in the order asked, so each one's owner is found going
+		along both); a socket closed meanwhile is not its owner's any more */
 		for (index = 0, asked = 0; index < read_count; index++)
 		{
 			int socket = read[index];
@@ -3401,9 +3325,8 @@ void p2p_initialize(unsigned long local_address)
 		return;
 	}
 	{
-		/* all of a host's traffic, up to a 128-machine game's, goes through
-		this one socket: buffers as large as the game's own sockets' (at
-		least 1 MB, transport_endpoint_winsock.c) */
+		/* all of a host's traffic, up to a 128-machine game's, goes through this one socket: buffers as large as the
+		game's own sockets' (at least 1 MB, transport_endpoint_winsock.c) */
 		int size = 1 << 20;
 
 		posix_socket_setsockopt(p2p.tunnel_socket, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));

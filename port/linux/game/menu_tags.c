@@ -39,6 +39,9 @@ char const *pc_menus_root_name(void);
 char const *pc_menu_function_name(long function_index);
 char const *pc_menu_game_data_input_name(long function_index);
 boolean pc_menu_tag(long tag_index);
+#ifdef HALO_PS3
+boolean pc_menu_xbox_patch_tag(long tag_index);
+#endif
 boolean pc_menu_frame_placement(struct bitmap_data const *bitmap, short *x, short *y, short *width, short *height);
 
 /* ---------- constants */
@@ -352,6 +355,11 @@ static char const *const port_function_names[] =
 	/* (a new profile's screens: Settings' is then being edited, which the
 	Xbox's leaves to its own screens) */
 	"new campaign decision",
+#ifdef HALO_PS3
+	/* (the Xbox menus' LAN PLAY and INTERNET PLAY: xbox_multiplayer_patch) */
+	"xbox internet begin", "xbox internet end", "xbox internet select",
+	"xbox lan begin", "xbox lan end", "xbox lan select", "xbox lan create", "xbox lan create if none",
+#endif
 };
 
 /* the PC version's game data functions that the Xbox's have not, from
@@ -373,6 +381,9 @@ static char const *const port_game_data_input_names[] =
 	/* (the profile settings' picture: the Xbox's of the button settings,
 	on Gamepad Setup's row) */
 	"port gamepad layout preview",
+#ifdef HALO_PS3
+	"xbox internet update", "xbox mp type desc", "xbox lan update",
+#endif
 };
 
 static struct
@@ -389,6 +400,10 @@ static struct
 	struct pc_menu_setting *settings;
 	long setting_count;
 	boolean loaded;
+#ifdef HALO_PS3
+	/* the Xbox's menus have LAN PLAY and INTERNET PLAY (xbox_multiplayer_patch) */
+	boolean xbox_patched;
+#endif
 	char root[300];
 } menu_tags;
 
@@ -717,12 +732,8 @@ static long split(char const *text, char const **pieces)
 	return count;
 }
 
-/* a spinner's strings, or its values, split: its own, but Video Setup's
-sizes are the display's (sdl_platform.c), shown "1920 x 1080" and set
-"1920x1080": its resolutions after Resolution's own (NATIVE), and the
-window sizes that fit it in place of Window Size's own; and Audio Setup's
-devices SDL finds, after their SYSTEM DEFAULT, each set by its name and
-shown by it (in capitals, as the menus' words are, and cut short) */
+/* a spinner's strings or values, split; Video Setup's add the display's resolutions after NATIVE (shown "1920 x 1080",
+set "1920x1080"), Window Size's those that fit; Audio Setup's add SDL's devices after SYSTEM DEFAULT (in capitals) */
 static long spinner_split(struct halo_menu_widget const *widget, boolean values, char const **pieces)
 {
 	long count = split(values ? widget->values : widget->strings, pieces);
@@ -1331,9 +1342,8 @@ static struct cache_file_tag_instance *instances_grow(long count, long *first_in
 
 	if (!instances)
 		return NULL;
-	/* (every tag's absolute index fits a tag index's 16 bits, short of
-	NONE's, and the table's size cannot wrap: the map's count was checked
-	as it loaded, cache_files.c, and is again) */
+	/* (every tag's absolute index fits a tag index's 16 bits, short of NONE's, and the table's size cannot wrap: the
+	map's count was checked as it loaded, cache_files.c, and is again) */
 	if (existing < 0 || count < 0 || existing > UNSIGNED_SHORT_MAX - count)
 	{
 		platform_log("menus: %ld tags and the map's %ld are too many for a tag table", count, existing);
@@ -1520,9 +1530,8 @@ static void *pause_button(struct cache_file_tag_instance *instances, struct ui_w
 	return button;
 }
 
-/* the list's buttons: SETTINGS (and the host's END GAME) put before LEAVE
-GAME (quit); returns how many were added, and how much taller the list
-grew for them (growth) */
+/* the list's buttons: SETTINGS (and the host's END GAME) put before LEAVE GAME (quit); returns how many were added, and
+how much taller the list grew for them (growth) */
 static long pause_list_patch(struct cache_file_tag_instance *instances, struct ui_widget_definition *list, long quit,
 	boolean host, short *growth)
 {
@@ -1566,9 +1575,8 @@ static long pause_list_patch(struct cache_file_tag_instance *instances, struct u
 	}
 	list->child_widgets.address = grown;
 	list->child_widgets.count = count + added;
-	/* (a list with room for them, Halo PC's of five rows that Custom Edition
-	maps keep two of: the buttons centred in it; else it grows, as the
-	Xbox's of two rows does, and draws within its bounds) */
+	/* (a list with room for them, Halo PC's of five rows that Custom Edition maps keep two of: the buttons centred in
+	it; else it grows, as the Xbox's of two rows does, and draws within its bounds) */
 	{
 		short room = (short)(list->bounds.y1 - list->bounds.y0);
 		short column = (short)((count + added - 1) * spacing + model->bounds.y1 - model->bounds.y0);
@@ -1686,9 +1694,8 @@ static void pause_patch(struct cache_file_tag_instance *instances)
 				box_child = child;
 			}
 		}
-		/* the stock box: taller, centred where it was, the list with it, and
-		what is below it moved down; else only what is below the list (as far
-		as the list grew) */
+		/* the stock box: taller, centred where it was, the list with it, and what is below it moved down; else only
+		what is below the list (as far as the list grew) */
 		list_top = children[list_child].vertical_offset;
 		for (child = 0; child < definition->child_widgets.count; child++)
 		{
@@ -1707,15 +1714,8 @@ static void pause_patch(struct cache_file_tag_instance *instances)
 		platform_log("menus: the pause menu has SETTINGS%s", host ? " and END GAME" : "");
 }
 
-/* ---------- the single-player campaign's pause menu
-
-Its list gets the same SETTINGS (pause_list_patch) before REVERT TO SAVED, a
-copy of it. The rows use the PC version's pause menu's pitch, so a
-highlight sits clear of the next label. The prompts (B and A) stay that same
-gap under the last row, and the box beside the mission objectives grows with
-them. Settings there has only the items
-that work in a game (pause_settings_patch), and Gamepads' OK saves the
-profile itself. */
+/* ---------- the campaign's pause menu: SETTINGS before REVERT TO SAVED, rows at the PC's pitch (a highlight clears the
+next label), prompts and box moved down with them; Settings has in-game items, Gamepads' OK saves the profile */
 
 #define PAUSE_SETTINGS_LIST "main_menu/settings_select/player_setup/player_profile_edit/profile_edit_select_list"
 #define PAUSE_SETTINGS_GAMEPADS_OK "main_menu/settings_select/player_setup/player_profile_edit/gamepad_setup/button_ok"
@@ -1730,9 +1730,8 @@ static char const *const pause_settings_hidden_items[] =
 	"main_menu/settings_select/player_setup/player_profile_edit/about_item",
 };
 
-/* the PC version's pause menu's row pitch (30 apart). The third pause box
-frame is the stock 159 grown by the 36 that five rows at this pitch add
-(tools/port_settings.py) */
+/* the PC version's pause menu's row pitch (30 apart). The third pause box frame is the stock 159 grown by the 36 that
+five rows at this pitch add (tools/port_settings.py) */
 #define PAUSE_CAMPAIGN_ROW_PITCH 30
 #define PAUSE_CAMPAIGN_BOX_FRAME 2
 #define PAUSE_CAMPAIGN_BOX_HEIGHT 195
@@ -1859,9 +1858,8 @@ static boolean pause_settings_item_hidden(long tag_index)
 	return FALSE;
 }
 
-/* the hidden items stay in the list, empty and taking no events (which it
-passes over), as an item's description is the one at its place in the list;
-the others move up into the first places */
+/* the hidden items stay in the list, empty and taking no events (which it passes over), as an item's description is the
+one at its place in the list; the others move up into the first places */
 static void pause_settings_patch(void)
 {
 	long list_widget = widget_named(PAUSE_SETTINGS_LIST);
@@ -2015,6 +2013,329 @@ static boolean menus_pc_chosen(void)
 	return FALSE;
 }
 
+#ifdef HALO_PS3
+/* ---------- the Xbox menus' LAN PLAY and INTERNET PLAY (the PS3 has no PC menus): in SYSTEM LINK PLAY's place and
+after it, copies of System Link's game list for this network's games and for the server browser's (menu_functions.c) */
+
+#define XBOX_MULTIPLAYER "ui\\shell\\main_menu\\multiplayer_type_select\\"
+#define XBOX_SERVER_LIST XBOX_MULTIPLAYER "connected\\server_list\\"
+/* (under connected\, so that they open only on maps that play multiplayer: ui_widget_launch_widget) */
+#define XBOX_LAN XBOX_MULTIPLAYER "connected\\lan\\"
+#define XBOX_INTERNET XBOX_MULTIPLAYER "connected\\internet\\"
+#define XBOX_SYSTEM_LINK_ITEM 2
+#define XBOX_ITEM_SPACING 33
+/* the server list's description's child that says it is looking for games */
+#define XBOX_LOOKING_CHILD 3
+
+enum
+{
+	_xbox_lan_text,
+	_xbox_internet_text,
+	_xbox_descriptions,
+	_xbox_lan_item,
+	_xbox_lan_screen,
+	_xbox_lan_list,
+	_xbox_internet_item,
+	_xbox_internet_screen,
+	_xbox_internet_list,
+	_xbox_internet_description,
+	_xbox_internet_status,
+	NUMBER_OF_XBOX_TAGS,
+	/* (the string lists come first) */
+	FIRST_XBOX_WIDGET = _xbox_lan_item,
+};
+
+/* named as the map's tags are (the instances keep the pointers) */
+static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
+{
+	XBOX_MULTIPLAYER "multiplayer_lan_option",
+	XBOX_MULTIPLAYER "multiplayer_internet_option",
+	XBOX_MULTIPLAYER "multiplayer_option_descriptions_port",
+	XBOX_MULTIPLAYER "multiplayer_type_lan_item",
+	XBOX_LAN "lan_screen",
+	XBOX_LAN "lan_list",
+	XBOX_MULTIPLAYER "multiplayer_type_internet_item",
+	XBOX_INTERNET "internet_screen",
+	XBOX_INTERNET "internet_list",
+	XBOX_INTERNET "internet_extended_desc",
+	XBOX_INTERNET "internet_status_text",
+};
+
+/* a list's handler: its event, the function it runs, and whether it then opens the map select (hosting) */
+struct xbox_list_event
+{
+	char const *event;
+	char const *function;
+	boolean hosts;
+};
+
+/* (as System Link's list: A or START joins the focused game, or hosts when there is none; Y hosts) */
+static struct xbox_list_event const xbox_lan_events[] =
+{
+	{ "created", "xbox lan begin", FALSE },
+	{ "deleted", "xbox lan end", FALSE },
+	{ "a", "xbox lan select", FALSE },
+	{ "start", "xbox lan select", FALSE },
+	{ "a", "xbox lan create if none", TRUE },
+	{ "start", "xbox lan create if none", TRUE },
+	{ "y", "xbox lan create", TRUE },
+};
+
+static struct xbox_list_event const xbox_internet_events[] =
+{
+	{ "created", "xbox internet begin", FALSE },
+	{ "deleted", "xbox internet end", FALSE },
+	{ "a", "xbox internet select", FALSE },
+	{ "start", "xbox internet select", FALSE },
+};
+
+/* a copy of the map's widget, under its own name (an instance's, which menu_functions.c finds) */
+static struct ui_widget_definition *xbox_widget_copy(long tag_index, char const *name)
+{
+	struct ui_widget_definition *copy = allocate(sizeof(*copy));
+
+	if (copy)
+	{
+		memcpy(copy, tag_get(UI_WIDGET_DEFINITION_TAG, tag_index), sizeof(*copy));
+		memset(copy->name, 0, sizeof(copy->name));
+		strncpy(copy->name, name, sizeof(copy->name) - 1);
+	}
+	return copy;
+}
+
+/* a copy of SYSTEM LINK PLAY's item: its own text, and its own screen opened */
+static void xbox_item_set(struct ui_widget_definition *item, long text_tag, long screen_tag)
+{
+	struct ui_widget_event_handler_reference *handlers = allocate(item->event_handlers.count * sizeof(*handlers));
+	long index;
+
+	if (!handlers)
+		return;
+	/* (the game's memcpy asserts on a NULL source, even for nothing) */
+	if (item->event_handlers.count)
+		memcpy(handlers, item->event_handlers.address, item->event_handlers.count * sizeof(*handlers));
+	for (index = 0; index < item->event_handlers.count; index++)
+	{
+		if (TEST_FLAG(handlers[index].flags, _event_handler_open_widget_bit))
+			reference_set(&handlers[index].widget_tag, UI_WIDGET_DEFINITION_TAG, screen_tag);
+	}
+	item->event_handlers.address = handlers;
+	reference_set(&item->text_label_string_list, UNICODE_STRING_LIST_TAG, text_tag);
+	item->string_list_index = 0;
+}
+
+/* a copy of System Link's screen: its list the copy's, and CREATE GAME only on one that hosts */
+static void xbox_screen_set(struct ui_widget_definition *screen, long server_list, long list_tag, boolean hosts)
+{
+	struct ui_widget_child_reference *children = allocate(screen->child_widgets.count * sizeof(*children));
+	long index, count = 0;
+
+	if (!children)
+		return;
+	for (index = 0; index < screen->child_widgets.count; index++)
+	{
+		struct ui_widget_child_reference const *child =
+			(struct ui_widget_child_reference const *)screen->child_widgets.address + index;
+
+		if (!hosts && tag_name_ends(child->widget_tag.index, "\\create_game_key"))
+			continue;
+		children[count] = *child;
+		if (child->widget_tag.index == server_list)
+			reference_set(&children[count].widget_tag, UI_WIDGET_DEFINITION_TAG, list_tag);
+		count++;
+	}
+	screen->child_widgets.count = count;
+	screen->child_widgets.address = children;
+}
+
+/* a copy of System Link's list: its rows, with the port's update and handlers (map_select: hosting's screen) */
+static void xbox_list_set(struct ui_widget_definition *list, char const *update, struct xbox_list_event const *events,
+	long count, long map_select)
+{
+	struct ui_widget_game_data_input_reference *inputs = allocate(sizeof(*inputs));
+	struct ui_widget_event_handler_reference *handlers = allocate(count * sizeof(*handlers));
+	long index;
+
+	if (!inputs || !handlers)
+		return;
+	inputs->function = (short)game_data_input_index(update, "xbox", 0);
+	list->game_data_inputs.count = 1;
+	list->game_data_inputs.address = inputs;
+	for (index = 0; index < count; index++)
+	{
+		handlers[index].flags = FLAG(_event_handler_run_function_bit);
+		handlers[index].event_type = (short)name_index(events[index].event, event_names, NUMBEROF(event_names));
+		handlers[index].function = (short)function_index(events[index].function, "xbox", 0);
+		reference_clear(&handlers[index].widget_tag, UI_WIDGET_DEFINITION_TAG);
+		reference_clear(&handlers[index].sound_effect, SOUND_TAG);
+		if (events[index].hosts)
+		{
+			handlers[index].flags |= FLAG(_event_handler_open_widget_bit);
+			reference_set(&handlers[index].widget_tag, UI_WIDGET_DEFINITION_TAG, map_select);
+		}
+	}
+	list->event_handlers.count = count;
+	list->event_handlers.address = handlers;
+}
+
+static void xbox_child_set(struct ui_widget_child_reference *child, long tag_index, char const *name)
+{
+	reference_set(&child->widget_tag, UI_WIDGET_DEFINITION_TAG, tag_index);
+	memset(child->name, 0, sizeof(child->name));
+	strncpy(child->name, name, sizeof(child->name) - 1);
+}
+
+static void xbox_multiplayer_patch(void)
+{
+	/* (ASCII: port_stubs.c's halo_menus_utf16) */
+	char const *lan_text = "LAN PLAY";
+	char const *internet_text = "INTERNET PLAY";
+	char const *descriptions_text[] =
+	{
+		"Host or join a game on the\r\nlocal network, with players\r\non PC, Android and PS3.",
+		"Join a public game over the\r\ninternet, with players on PC,\r\nAndroid and the web.",
+	};
+	long type_screen = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_select_screen");
+	long type_list = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_select_list");
+	long system_link = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_conn_item");
+	long options_text = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_options_txt");
+	long descriptions = tag_loaded(UNICODE_STRING_LIST_TAG, XBOX_MULTIPLAYER "multiplayer_option_descriptions");
+	long map_select = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "connected\\connected_map_select_wrapper");
+	long server_screen = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_SERVER_LIST "server_list_screen");
+	long server_list = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_SERVER_LIST "server_list");
+	long server_description = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_SERVER_LIST "server_list_extended_desc");
+	long looking = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_SERVER_LIST "looking_for_servers_text");
+	struct ui_widget_definition *list, *screen, *options, *description, *status;
+	struct ui_widget_definition *lan_item, *lan_screen, *lan_list, *internet_item, *internet_screen, *internet_list;
+	struct ui_widget_child_reference *list_children, *description_children;
+	struct string_list const *stock_descriptions;
+	struct string_list *description_strings;
+	struct string_list_entry *entries;
+	struct cache_file_tag_instance *instances;
+	void *definitions[NUMBER_OF_XBOX_TAGS];
+	long tags[NUMBER_OF_XBOX_TAGS];
+	long index, type_description, blue_line = NONE;
+
+	if (type_screen == NONE || type_list == NONE || system_link == NONE || options_text == NONE ||
+		descriptions == NONE || map_select == NONE || server_screen == NONE || server_list == NONE ||
+		server_description == NONE || looking == NONE)
+	{
+		platform_log("menus: ui.map has not the System Link screens: no LAN PLAY or INTERNET PLAY");
+		return;
+	}
+	list = tag_get(UI_WIDGET_DEFINITION_TAG, type_list);
+	screen = tag_get(UI_WIDGET_DEFINITION_TAG, type_screen);
+	options = tag_get(UI_WIDGET_DEFINITION_TAG, options_text);
+	stock_descriptions = tag_get(UNICODE_STRING_LIST_TAG, descriptions);
+	description = tag_get(UI_WIDGET_DEFINITION_TAG, server_description);
+	for (index = 0; index < screen->child_widgets.count; index++)
+	{
+		if (tag_name_ends(((struct ui_widget_child_reference *)screen->child_widgets.address)[index].widget_tag.index,
+			"\\blueline"))
+		{
+			blue_line = index;
+		}
+	}
+	if (list->child_widgets.count != 4 || list->game_data_inputs.count != 1 || blue_line == NONE ||
+		((struct ui_widget_child_reference *)list->child_widgets.address)[XBOX_SYSTEM_LINK_ITEM].widget_tag.index !=
+			system_link ||
+		options->text_label_string_list.index != descriptions || stock_descriptions->strings.count != 4 ||
+		description->child_widgets.count != 5 ||
+		((struct ui_widget_child_reference *)description->child_widgets.address)[XBOX_LOOKING_CHILD].widget_tag.index !=
+			looking)
+	{
+		platform_log("menus: ui.map's System Link screens are not the Xbox's: no LAN PLAY or INTERNET PLAY");
+		return;
+	}
+	memset(&build, 0, sizeof(build));
+	instances = instances_grow(NUMBER_OF_XBOX_TAGS, &build.first_index, &build.first_salt);
+	if (!instances)
+		goto failed;
+	for (index = 0; index < NUMBER_OF_XBOX_TAGS; index++)
+		tags[index] = next_tag();
+	/* the items, the game lists, INTERNET PLAY's description and message: copies of System Link's */
+	definitions[_xbox_lan_text] = string_list_build(&lan_text, 1);
+	definitions[_xbox_internet_text] = string_list_build(&internet_text, 1);
+	definitions[_xbox_descriptions] = description_strings = string_list_build(descriptions_text, 2);
+	definitions[_xbox_lan_item] = lan_item = xbox_widget_copy(system_link, "multiplayer_type_lan_item");
+	definitions[_xbox_lan_screen] = lan_screen = xbox_widget_copy(server_screen, "lan_screen");
+	definitions[_xbox_lan_list] = lan_list = xbox_widget_copy(server_list, "lan_list");
+	definitions[_xbox_internet_item] = internet_item = xbox_widget_copy(system_link, "multiplayer_type_internet_item");
+	definitions[_xbox_internet_screen] = internet_screen = xbox_widget_copy(server_screen, "internet_screen");
+	definitions[_xbox_internet_list] = internet_list = xbox_widget_copy(server_list, "internet_list");
+	definitions[_xbox_internet_description] = description =
+		xbox_widget_copy(server_description, "internet_extended_desc");
+	definitions[_xbox_internet_status] = status = xbox_widget_copy(looking, "internet_status_text");
+	entries = allocate((stock_descriptions->strings.count + 1) * sizeof(*entries));
+	list_children = allocate((list->child_widgets.count + 1) * sizeof(*list_children));
+	if (build.failed)
+		goto failed;
+	for (index = 0; index < NUMBER_OF_XBOX_TAGS; index++)
+	{
+		struct cache_file_tag_instance *instance = &instances[DATUM_INDEX_TO_ABSOLUTE_INDEX(tags[index])];
+
+		instance->group_tag = index < FIRST_XBOX_WIDGET ? UNICODE_STRING_LIST_TAG : UI_WIDGET_DEFINITION_TAG;
+		instance->parent_group_tags[0] = NONE;
+		instance->parent_group_tags[1] = NONE;
+		instance->tag_index = tags[index];
+		instance->name = (char *)xbox_tag_names[index];
+		instance->base_address = definitions[index];
+	}
+	cache_files_set_tag_instances(instances, build.first_index + build.next);
+	/* the descriptions: the map's, LAN PLAY's in SYSTEM LINK PLAY's place, INTERNET PLAY's last */
+	memcpy(entries, stock_descriptions->strings.address, stock_descriptions->strings.count * sizeof(*entries));
+	entries[XBOX_SYSTEM_LINK_ITEM] = ((struct string_list_entry *)description_strings->strings.address)[0];
+	entries[stock_descriptions->strings.count] = ((struct string_list_entry *)description_strings->strings.address)[1];
+	description_strings->strings.count = stock_descriptions->strings.count + 1;
+	description_strings->strings.address = entries;
+	xbox_item_set(lan_item, tags[_xbox_lan_text], tags[_xbox_lan_screen]);
+	xbox_item_set(internet_item, tags[_xbox_internet_text], tags[_xbox_internet_screen]);
+	xbox_screen_set(lan_screen, server_list, tags[_xbox_lan_list], TRUE);
+	xbox_screen_set(internet_screen, server_list, tags[_xbox_internet_list], FALSE);
+	xbox_list_set(lan_list, "xbox lan update", xbox_lan_events, NUMBEROF(xbox_lan_events), map_select);
+	xbox_list_set(internet_list, "xbox internet update", xbox_internet_events, NUMBEROF(xbox_internet_events),
+		map_select);
+	reference_set(&internet_list->extended_description_widget, UI_WIDGET_DEFINITION_TAG,
+		tags[_xbox_internet_description]);
+	/* INTERNET PLAY's description: System Link's, its message a text box the list's update writes */
+	description_children = allocate(description->child_widgets.count * sizeof(*description_children));
+	if (description_children)
+	{
+		memcpy(description_children, description->child_widgets.address,
+			description->child_widgets.count * sizeof(*description_children));
+		reference_set(&description_children[XBOX_LOOKING_CHILD].widget_tag, UI_WIDGET_DEFINITION_TAG,
+			tags[_xbox_internet_status]);
+		description->child_widgets.address = description_children;
+	}
+	reference_clear(&status->text_label_string_list, UNICODE_STRING_LIST_TAG);
+	type_description = game_data_input_index("xbox mp type desc", "xbox", 0);
+	if (build.failed)
+		goto failed;
+	/* the map's own last, as they cannot be undone: LAN PLAY for SYSTEM LINK PLAY, INTERNET PLAY after it */
+	memcpy(list_children, list->child_widgets.address, list->child_widgets.count * sizeof(*list_children));
+	list_children[XBOX_SYSTEM_LINK_ITEM + 2] = list_children[XBOX_SYSTEM_LINK_ITEM + 1];
+	list_children[XBOX_SYSTEM_LINK_ITEM + 2].vertical_offset += XBOX_ITEM_SPACING;
+	list_children[XBOX_SYSTEM_LINK_ITEM + 1] = list_children[XBOX_SYSTEM_LINK_ITEM];
+	list_children[XBOX_SYSTEM_LINK_ITEM + 1].vertical_offset += XBOX_ITEM_SPACING;
+	xbox_child_set(&list_children[XBOX_SYSTEM_LINK_ITEM], tags[_xbox_lan_item], lan_item->name);
+	xbox_child_set(&list_children[XBOX_SYSTEM_LINK_ITEM + 1], tags[_xbox_internet_item], internet_item->name);
+	list->child_widgets.count = list->child_widgets.count + 1;
+	list->child_widgets.address = list_children;
+	((struct ui_widget_game_data_input_reference *)list->game_data_inputs.address)->function = (short)type_description;
+	((struct ui_widget_child_reference *)screen->child_widgets.address)[blue_line].vertical_offset += XBOX_ITEM_SPACING;
+	reference_set(&options->text_label_string_list, UNICODE_STRING_LIST_TAG, tags[_xbox_descriptions]);
+	menu_tags.xbox_patched = TRUE;
+	platform_log("menus: the multiplayer menu has LAN PLAY and INTERNET PLAY");
+	memset(&build, 0, sizeof(build));
+	return;
+
+failed:
+	platform_log("menus: LAN PLAY and INTERNET PLAY not added");
+	menu_tags_release();
+	memset(&build, 0, sizeof(build));
+}
+#endif
+
 void menu_tags_loaded(
 	char const *map_name)
 {
@@ -2025,6 +2346,14 @@ void menu_tags_loaded(
 	boolean game_map = strcmp(map_name, "ui") != 0;
 	boolean campaign = game_map && single_player_campaign_map();
 
+#ifdef HALO_PS3
+	/* (the Xbox's menus, which the PS3 keeps: port_stubs.c) */
+	if (!game_map && (!menus_pc_chosen() || !halo_menus_load()))
+	{
+		xbox_multiplayer_patch();
+		return;
+	}
+#endif
 	/* (ui.map, and a multiplayer map: its pause menu's SETTINGS; a
 	single-player campaign's too) */
 	if ((game_map && tag_loaded('Soul', MULTIPLAYER_COLLECTION) == NONE && !campaign) ||
@@ -2203,9 +2532,18 @@ boolean pc_menu_tag(
 		DATUM_INDEX_TO_ABSOLUTE_INDEX(tag_index) >= menu_tags.original_count;
 }
 
-/* where in its widget, and how large, a frame of ui.map's that a menu file
-scales is drawn (<frame map=... width= height= x= y=>); FALSE for any other
-bitmap, drawn as it is (ui_widget.c) */
+#ifdef HALO_PS3
+/* a tag of the Xbox menus' LAN PLAY or INTERNET PLAY, whose functions are the port's (ui_widget_function_denied) */
+boolean pc_menu_xbox_patch_tag(
+	long tag_index)
+{
+	return menu_tags.xbox_patched && tag_index != NONE &&
+		DATUM_INDEX_TO_ABSOLUTE_INDEX(tag_index) >= menu_tags.original_count;
+}
+#endif
+
+/* where in its widget, and how large, a frame of ui.map's that a menu file scales is drawn (<frame map=... width=
+height= x= y=>); FALSE for any other bitmap, drawn as it is (ui_widget.c) */
 boolean pc_menu_frame_placement(
 	struct bitmap_data const *bitmap,
 	short *x,

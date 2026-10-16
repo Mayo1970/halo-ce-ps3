@@ -59,10 +59,8 @@ enum
 	/* every player's ping as the host measures it, every two seconds, for
 	the scoreboard (unreliable) */
 	_distributed_message_pings,
-	/* the host's actors' units: their control and state (network_actors.c).
-	A number of its own, clear of the kinds upstream adds: a build without
-	it drops the message as a kind it does not know, so the network version
-	stays upstream's and its players join as before */
+	/* the host's actors' units: their control and state (network_actors.c). A number clear of upstream's kinds: a
+	build without it drops it as unknown, so the network version stays upstream's and its players join as before */
 	_distributed_message_actor_states = 64,
 	/* co-op (a campaign map, no game engine): the host's structure BSP,
 	twice a second, for a client to switch to; numbered as actor_states */
@@ -106,15 +104,13 @@ enum
 	/* the vote running as the host counts it, to each client, every second
 	and when it changes (unreliable: network_votekick.c) */
 	_distributed_message_votekick_status = 79,
-	/* voice chat (network_voice.c), in the lobby too: a client's frame to
-	the host, unreliably, with its key; a frame the host relays to a
-	client; the host's settings and the client's key, reliably */
+	/* voice chat (network_voice.c), in the lobby too: a client's frame to the host, unreliably, with its key; a frame
+	the host relays to a client; the host's settings and the client's key, reliably */
 	_distributed_message_voice_up = 80,
 	_distributed_message_voice_down = 81,
 	_distributed_message_voice_config = 82,
-	/* map sharing (map_share.c), in the lobby too, reliably: a client's
-	request for the game's map, the host's offer (the files, their sizes and
-	hashes) and the machines that may have them, and the client's progress */
+	/* map sharing (map_share.c), in the lobby too, reliably: a client's request for the game's map, the host's offer
+	(the files, their sizes and hashes), the machines that may have them, and the client's progress */
 	_distributed_message_map_share_request = 83,
 	_distributed_message_map_share_offer = 84,
 	_distributed_message_map_share_sources = 85,
@@ -391,6 +387,11 @@ void distributed_entries_byte_swap_each(byte *entries, byte const *end, short co
 	void (*swap)(void *entry));
 void network_objects_byte_swap(byte type, byte *entries, short count, byte const *end);
 void network_damage_byte_swap(byte type, byte *entries, short count, byte const *end);
+void network_actors_byte_swap(byte type, byte *entries, short count, byte const *end);
+void network_coop_byte_swap(byte type, byte *entries, short count, byte const *end);
+/* (voice chat's and map sharing's: each message's one entry, and what follows it) */
+void network_voice_byte_swap(byte type, byte *entries, byte const *end);
+void map_share_byte_swap(byte type, byte *entries, byte const *end);
 #endif
 
 #endif // __NETWORK_DISTRIBUTED_H

@@ -110,9 +110,8 @@ enum
 	/* ticks a client's own player may ride where the host says it does not (or the other way round) before it is
 	put where the host has it: its own prediction reaches the host and comes back in about a round trip */
 	SEAT_DISAGREEMENT_TICKS = 15,
-	/* how long a client waits for a player's killing blow once the host's
-	states say the player died, before the unit dies without it (an
-	actor's waits as long: network_objects.c) */
+	/* how long a client waits for a player's killing blow once the host's states say the player died, before the
+	unit dies without it (an actor's waits as long: network_objects.c) */
 	DEATH_BLOW_WAIT_TICKS = TICKS_PER_SECOND / 2,
 	/* the machines, and the host: a client's messages' sender */
 	MAXIMUM_SENDERS = HALO_PORT_MAXIMUM_NETWORK_MACHINES + 1,
@@ -416,9 +415,8 @@ static struct distributed_death
 	short killing_player_index;
 	boolean friendly_fire;
 	boolean killed_by_vehicle;
-	/* a client: when the host's states first said the player's living unit
-	here was dead (NONE: not), to wait for the killing blow
-	(DEATH_BLOW_WAIT_TICKS) */
+	/* a client: when the host's states first said the player's living unit here was dead (NONE: not), to wait for
+	the killing blow (DEATH_BLOW_WAIT_TICKS) */
 	long dead_since;
 } distributed_deaths[MAXIMUM_TRACKED_PLAYERS];
 /* the host: a kill this tick, whose statistics the clients should have
@@ -1558,9 +1556,8 @@ static void distributed_correct_own_unit(
 	short local_player_index = player->local_player_index;
 	real_point3d position = state->position;
 
-	/* (co-op: the host has its player in a BSP this machine hasn't loaded
-	yet, the switch still on its way. Moved there, it would fall with no
-	floor under it, so it stays on the floor it has until the BSP loads.) */
+	/* (co-op: the host has its player in a BSP this machine hasn't loaded yet, the switch on its way. Moved there,
+	it would fall with no floor under it, so it stays on the floor it has until the BSP loads.) */
 	if (network_coop_active() && scenario_leaf_index_from_point(&state->position) == NONE &&
 		scenario_leaf_index_from_point(&object_get(unit_index)->object.position) != NONE)
 	{
@@ -1914,15 +1911,8 @@ static boolean distributed_riding_moving_elevator(
 	return elevator && elevator->device.position_velocity != 0.0f;
 }
 
-/* (the host) a client's player's prediction of its unit on foot, taken
-where it says within a tolerance (distributed_apply_predictions). Riding a
-moving elevator, only across: a client's elevator follows the host's
-(network_coop.c), behind it by the time the host's word takes to come, and
-the client's prediction a round trip behind the host's elevator when it
-comes. Taken up and down too, it would put the host's unit under its own
-elevator's floor going up, to fall through it, and the client's after it
-(distributed_correct_own_unit); each machine's elevator carries its own
-unit up and down as it moves, and they meet where it stops. */
+/* (the host) a client's player's prediction of its unit on foot, taken within a tolerance. On a moving elevator only
+across: the client's lags the host's (network_coop.c), so its height would sink the host's unit through the floor. */
 static void distributed_take_prediction(
 	short player_index,
 	long unit_index,
@@ -2023,9 +2013,8 @@ static void distributed_apply_predictions(
 		{
 			distributed_predictions[player_index].valid = FALSE;
 			distributed_predictions[player_index].taken_host_time = NONE;
-			/* (of the unit it has now: not one of a life before; and not
-			from a co-op client still loading the host's BSP, whose player
-			falls there with no floor under it) */
+			/* (of the unit it has now: not one of a life before; and not from a co-op client still loading the
+			host's BSP, whose player falls there with no floor under it) */
 			if (unit_index != NONE && unit_index == state->unit_index &&
 				unit_get(unit_index)->unit.player_index != NONE &&
 				network_coop_player_has_structure_bsp(unit_get(unit_index)->unit.player_index))
@@ -2074,9 +2063,8 @@ static void distributed_handle_unit_state(
 	unit_index = distributed_living_unit(player);
 	if (!alive)
 	{
-		/* died on the host, who counts it. Its killing blow (network_damage.c)
-		kills it here with the death the host's had, so it is given a while
-		to come before the unit dies without one, as it falls. */
+		/* died on the host, who counts it. Its killing blow (network_damage.c) kills it here with the host's
+		death, so it is given a while to come before the unit dies without one. */
 		if (unit_index != NONE && state->player_index < MAXIMUM_TRACKED_PLAYERS)
 		{
 			long *dead_since = &distributed_deaths[state->player_index].dead_since;
@@ -2166,11 +2154,8 @@ static void distributed_handle_unit_state(
 			distributed_apply_state(unit_index, state, &state->position, REMOTE_CORRECTION_TOLERANCE,
 				REMOTE_BLEND_DISTANCE, 0.0f, 0.0f);
 		}
-		/* moved further than a step at once (the host's teleporter sent
-		it): on the teleporter it lands on, as a teleporter leaves the
-		player it sends, so that this machine's does not send it back each
-		time the host's word puts it there until it steps off
-		(game_engine_update_teleporter) */
+		/* moved further than a step at once (the host's teleporter sent it): on the teleporter it lands on, so
+		that this machine's does not send it back until it steps off (game_engine_update_teleporter) */
 		if (distance_squared3d(&before, &object_get(unit_index)->object.position) > 1.0f)
 		{
 			player->teleporter_index = find_netgame_flag(&object_get(unit_index)->object.position, 1.0f, 0.0f,
@@ -3428,21 +3413,24 @@ void distributed_client_send_identity(
 		_distributed_to_host_reliably);
 }
 
-/* (the host) a client machine's address (host byte order) as it really is:
-an internet play peer's endpoint for its stand-in in 100.64.0.0/10 (p2p.c,
-which numbers the stand-in from the peer's identifier: a peer makes a new
-one at will), 0 if that is not known */
+/* (the host) a client machine's real address (host byte order): an internet play peer's endpoint for its stand-in in
+100.64.0.0/10 (p2p.c numbers it from the peer's identifier, which a peer makes at will), 0 if not known */
 unsigned long distributed_real_address(
 	unsigned long address)
 {
 	if ((address & 0xFFC00000) == 0x64400000)
 	{
+#ifdef __BIG_ENDIAN__
+		/* (port: network byte order is a big-endian CPU's own) */
+		return p2p_peer_endpoint_address(address);
+#else
 		/* (p2p.c's in network byte order: the first number the lowest byte) */
 		unsigned long network = (address >> 24) | ((address >> 8) & 0xFF00) | ((address << 8) & 0xFF0000) |
 			(address << 24);
 		unsigned long real = p2p_peer_endpoint_address(network);
 
 		return (real >> 24) | ((real >> 8) & 0xFF00) | ((real << 8) & 0xFF0000) | (real << 24);
+#endif
 	}
 	return address;
 }
@@ -3737,11 +3725,8 @@ static void distributed_note_client_clock(
 			clock->fast_windows = 0;
 			clock->ahead_on_stream = FALSE;
 		}
-		/* dropped, banned and kept out only when its stream said so too; on
-		its datagrams' word alone (which another machine could have sent as
-		from its address, to have it dropped and logged as a cheater) it
-		stays, its players' predictions refused while they say so, and is
-		logged once, unverified (dropped as above if its stream says so later) */
+		/* dropped, banned and kept out only when its stream said so too; on its datagrams alone (another machine can
+		send as from its address) it stays, its predictions refused, and is logged once as unverified */
 		else if (clock->fast_windows >= CLIENT_CLOCK_FAST_WINDOWS)
 		{
 			clock->fast_windows = CLIENT_CLOCK_FAST_WINDOWS;
@@ -3959,6 +3944,14 @@ static void distributed_player_ping_byte_swap(
 	BYTE_SWAP_FIELD(ping->milliseconds);
 }
 
+static void distributed_structure_bsp_byte_swap(
+	void *entry)
+{
+	struct distributed_structure_bsp *structure_bsp = entry;
+
+	BYTE_SWAP_FIELD(structure_bsp->structure_bsp_index);
+}
+
 /* a message's entries (past its header) that fit before end */
 static void distributed_message_entries_byte_swap(
 	byte type,
@@ -4019,15 +4012,45 @@ static void distributed_message_entries_byte_swap(
 	case _distributed_message_object_changes:
 	case _distributed_message_object_states:
 	case _distributed_message_vehicle_prediction:
+	case _distributed_message_damage_animations:
 		network_objects_byte_swap(type, entries, count, end);
 		break;
 	case _distributed_message_damage_events:
 	case _distributed_message_hit_reports:
 		network_damage_byte_swap(type, entries, count, end);
 		break;
+	case _distributed_message_structure_bsp:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_structure_bsp),
+			distributed_structure_bsp_byte_swap);
+		break;
+	case _distributed_message_actor_states:
+	case _distributed_message_actor_damage:
+		network_actors_byte_swap(type, entries, count, end);
+		break;
+	case _distributed_message_coop_presentation:
+	case _distributed_message_coop_device_groups:
+	case _distributed_message_coop_object_names:
+	case _distributed_message_coop_events:
+	case _distributed_message_coop_object_transforms:
+	case _distributed_message_coop_object_looks:
+	case _distributed_message_coop_screen_effect:
+	case _distributed_message_coop_device_states:
+		network_coop_byte_swap(type, entries, count, end);
+		break;
+	case _distributed_message_voice_up:
+	case _distributed_message_voice_down:
+	case _distributed_message_voice_config:
+		network_voice_byte_swap(type, entries, end);
+		break;
+	case _distributed_message_map_share_request:
+	case _distributed_message_map_share_offer:
+	case _distributed_message_map_share_sources:
+	case _distributed_message_map_share_progress:
+		map_share_byte_swap(type, entries, end);
+		break;
 	}
-	/* (none have the others: objects synchronized and client ready no entries, a notice and an identity
-	text) */
+	/* (the others have none: no entries, a text (notice, identity), or bytes (skip vote, votekick and its
+	status)) */
 }
 
 void network_distributed_byte_swap(

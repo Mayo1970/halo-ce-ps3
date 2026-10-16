@@ -469,13 +469,8 @@ static boolean game_function(char const *name, struct widget_instance *widget, s
 	return FALSE;
 }
 
-/* "profile set edit begin": Settings, the main menu's and a game's pause
-menu's. With no profile, the main menu's asks for a new one's name, as the
-menu's other items do ("new game if no plyr profiles"), and fails: the
-screens its handler then opens make the profile and edit it
-(new_profile_decision). Without the name asked, they made none, and showed
-"new campaign decision" as failed. The pause menu's has no such screens,
-and only fails. */
+/* "profile set edit begin" (Settings, of the main menu or a pause menu): with no profile, the main menu's asks a new
+one's name and fails, so its handler's screens make it (new_profile_decision); the pause menu's only fails */
 static boolean profile_edit_begin(struct widget_instance *widget, struct event_record *event,
 	boolean *widget_deleted)
 {
@@ -487,11 +482,8 @@ static boolean profile_edit_begin(struct widget_instance *widget, struct event_r
 	return FALSE;
 }
 
-/* "new campaign decision" (the screen after a new profile's name, each of
-the main menu's items having its own): the game's makes the profile, if the
-name was entered. Settings' then begins editing it: the PC version's screens
-open Settings with nothing more run, and its screen closes at once with no
-profile being edited ("close if not editing profile"). */
+/* "new campaign decision" (each main menu item's, after a new profile's name): the game's makes it if named; then
+Settings' begins editing it, as its PC screens close at once with none edited ("close if not editing profile") */
 static boolean new_profile_decision(struct widget_instance *widget, struct event_record *event,
 	boolean *widget_deleted)
 {
@@ -847,14 +839,8 @@ static boolean campaign_continue(short controller)
 	return TRUE;
 }
 
-/* ---- the map lists (New Game's and the Map screen's): their first row's
-chooser of SINGLEPLAYER (the campaign's levels), MULTIPLAYER maps (the
-Xbox's), CUSTOM SINGLEPLAYER or CUSTOM MULTIPLAYER maps (the Custom Edition
-maps of the custom_maps folder, by the scenario type their files give:
-custom_edition_maps.c) (port_settings.MAP_KIND_CHOOSER), then the kind's
-rows, scrolling as list_scroll scrolls. A singleplayer kind's map is played
-as the campaign is (alone, or hosted as network co-op), a multiplayer kind's
-as multiplayer maps are. */
+/* ---- the map lists (New Game's, the Map screen's): a chooser of SINGLEPLAYER, MULTIPLAYER or CUSTOM ones (by scenario
+type: custom_edition_maps.c), then its rows; singleplayer maps play as the campaign, multiplayer ones as such */
 
 enum
 {
@@ -876,9 +862,8 @@ static boolean map_kind_singleplayer(short kind)
 	return kind == MAP_KIND_SINGLEPLAYER || kind == MAP_KIND_CUSTOM_SINGLEPLAYER;
 }
 
-/* The kind the chooser shows, kept to the multiplayer kinds unless
-`singleplayer`: a singleplayer kind it was turned to becomes the next
-multiplayer one the way it turned from `previous`. */
+/* The kind the chooser shows, kept to the multiplayer kinds unless `singleplayer`: a singleplayer kind it was turned to
+becomes the next multiplayer one the way it turned from `previous`. */
 static short map_kind_shown(struct widget_instance *list, boolean singleplayer, short previous)
 {
 	struct widget_instance *spinner = named(list, "list_item_0_map_kind_spinner", 0);
@@ -918,9 +903,8 @@ static void map_kind_focus(struct widget_instance *list, short first, short chos
 	focus_row(list, (short)(1 + chosen - first));
 }
 
-/* the rows after the chooser: count entries from *first's, scrolled on at
-their ends; the entry focused, NONE when the chooser or the buttons have the
-focus */
+/* the rows after the chooser: count entries from *first's, scrolled on at their ends; the entry focused, NONE when the
+chooser or the buttons have the focus */
 static short map_kind_rows_update(struct widget_instance *list, short *first, short count,
 	void (*entry_text)(short entry, wchar_t *text))
 {
@@ -991,10 +975,8 @@ static void custom_multiplayer_map_text(short map, wchar_t *text)
 	custom_map_text(FALSE, map, text);
 }
 
-/* the description's map (each list's has both kinds' widgets): a campaign
-level's picture, name and words (level_description sets them), or a map's
-by its display index (a multiplayer map's, or a Custom Edition map's), or
-(both NONE) neither */
+/* the description's map (each list's has both kinds' widgets): a campaign level's picture, name and words (by
+level_description), or a map's by its display index (a multiplayer or Custom Edition map), or neither (both NONE) */
 static void map_description_show(struct widget_instance *description, short level, short map)
 {
 	struct widget_instance *widget;
@@ -1021,11 +1003,8 @@ static void map_description_show(struct widget_instance *description, short leve
 		widget->parameters.text_box.string_list_index = map;
 }
 
-/* New Game's list: SINGLEPLAYER's levels, the profile's reached, or
-MULTIPLAYER's maps, played alone to walk around (no game engine: a campaign
-game on the map); CUSTOM SINGLEPLAYER's maps played as the campaign's levels
-are, at the difficulty chosen next, and CUSTOM MULTIPLAYER's walked around
-as MULTIPLAYER's are */
+/* New Game's list: SINGLEPLAYER's levels (the profile's reached), MULTIPLAYER's maps walked around alone (a campaign
+game, no engine); CUSTOM SINGLEPLAYER's as levels, at a difficulty chosen next; CUSTOM MULTIPLAYER's as MULTIPLAYER's */
 static struct
 {
 	short kind;
@@ -1136,9 +1115,8 @@ static void level_list_update(struct widget_instance *list)
 	profile_name_show(description);
 }
 
-/* "solo level set map": the level shown, if reached, or the Custom Edition
-campaign map, for the difficulty menu; or the multiplayer map, played at
-once (FALSE: no difficulty menu) */
+/* "solo level set map": the level shown, if reached, or the Custom Edition campaign map, for the difficulty menu; or
+the multiplayer map, played at once (FALSE: no difficulty menu) */
 static boolean level_choose(short controller)
 {
 	short level = campaign.shown_level;
@@ -2126,7 +2104,7 @@ struct advertised_game
 	word machine_count;
 	word player_count;
 	short maximum_player_count;
-	short unknown100;
+	short score_limit;
 	short platform;
 	boolean open;
 	boolean valid;
@@ -2201,9 +2179,8 @@ static struct
 	starts with COOPERATIVE_DEFAULT_PLAYERS players at most) */
 	short cooperative_maximum_players_index;
 	boolean cooperative_maximum_players_set;
-	/* the co-op game's FRIENDLY FIRE, and its PLAYER COLLISIONS OFF, as it
-	starts (CO-OP OPTIONS': network.coop_friendly_fire's and
-	network.coop_player_collisions': server_start) */
+	/* the co-op game's FRIENDLY FIRE, and its PLAYER COLLISIONS OFF, as it starts (CO-OP OPTIONS':
+	network.coop_friendly_fire's and network.coop_player_collisions': server_start) */
 	short cooperative_friendly_fire;
 	boolean cooperative_no_player_collisions;
 	/* the browser's games */
@@ -2389,13 +2366,8 @@ static boolean multiplayer_host(struct widget_instance *widget, struct event_rec
 	return ui_widget_port_host(widget, event, widget_deleted);
 }
 
-/* ---- the map list (the Map screen's): its chooser's SINGLEPLAYER levels,
-MULTIPLAYER maps, CUSTOM SINGLEPLAYER or CUSTOM MULTIPLAYER maps (the map
-lists', above). A level or Custom Edition campaign map chosen lists the
-difficulties (B goes back to the map) and is hosted as a network co-op game,
-which goes to Server Setup; a multiplayer map goes on to the gametypes.
-Split screen hosts only multiplayer maps, its chooser kept to the
-multiplayer kinds. */
+/* ---- the Map screen's list (the map lists' above): a campaign map lists the difficulties (B: back) and is hosted as
+co-op, on to Server Setup; a multiplayer map goes on to the gametypes; split screen hosts only multiplayer kinds */
 
 enum
 {
@@ -2508,9 +2480,8 @@ static void map_list_update(struct widget_instance *list)
 	profile_name_show(description);
 }
 
-/* "mp level select" (the list's OK): the map chosen, or a level's
-difficulties, or the level at the difficulty chosen. FALSE stays on the Map
-screen (the gametypes open on TRUE). */
+/* "mp level select" (the list's OK): the map chosen, or a level's difficulties, or the level at the difficulty chosen.
+FALSE stays on the Map screen (the gametypes open on TRUE). */
 static boolean map_list_choose(struct widget_instance *list, boolean *widget_deleted)
 {
 	short chosen = map_list.chosen;
@@ -2980,8 +2951,7 @@ static boolean server_start(void)
 	and its FRIENDLY FIRE) */
 	if (hosting_cooperative())
 	{
-		/* (as CO-OP OPTIONS left them: network.coop_friendly_fire, in
-		cooperative_friendly_fire_modes' order, and
+		/* (as CO-OP OPTIONS left them: network.coop_friendly_fire, in cooperative_friendly_fire_modes' order, and
 		network.coop_player_collisions) */
 		static char const *const friendly_fire_names[] = { "off", "on", "shields_only", "explosives_only" };
 		char const *friendly_fire = config_string("network.coop_friendly_fire");
@@ -3192,9 +3162,8 @@ static wchar_t const *game_type_name(long engine_type)
 	return engine_type == 0 ? L"CO-OP" : engine_names[PIN(engine_type, 0, 5)];
 }
 
-/* a map's name as the menus show it (a campaign level's too, hosted as
-network co-op; its scenario's name, if not one of theirs), from its
-scenario's path or name */
+/* a map's name as the menus show it (a campaign level's too, hosted as network co-op; its scenario's name, if not one
+of theirs), from its scenario's path or name */
 static void map_display_name(char const *map_name, wchar_t *text)
 {
 	char const *const *names;
@@ -3271,9 +3240,8 @@ static struct
 	/* the last that failed, and when */
 	char failed_name[P2P_LISTING_NAME_SIZE + 1];
 	unsigned long failed_time;
-	/* a game with a password chosen: the password screen's (its own copy:
-	the rows' are read again each frame), and a join it began, which the
-	browser takes up again as it comes back */
+	/* a game with a password chosen: the password screen's (its own copy: the rows' are read again each frame), and a
+	join it began, which the browser takes up again as it comes back */
 	struct p2p_listing password_game;
 	boolean password_joined;
 } lobby_browser;
@@ -3435,9 +3403,8 @@ static void lobby_browser_update(struct widget_instance *list)
 		/* (no ping yet: its host is reached only on joining) */
 		text_set(named(row, "server_item_ping", 0), game->failed ? L"FAILED" : !game->open ? L"CLOSED" :
 			game->in_progress ? L"LIVE" : L"-");
-		/* (the lock: a game with a password. Its bitmap's first frame is
-		empty, the PC version's for no lock; the next is the lock, in the
-		menus' blue) */
+		/* (the lock: a game with a password. Its bitmap's first frame is empty, the PC version's for no lock; the next
+		is the lock, in the menus' blue) */
 		{
 			struct widget_instance *lock = named(row, "server_item_locked", 0);
 
@@ -3626,11 +3593,406 @@ static boolean lobby_browser_select(struct widget_instance *widget, short contro
 	return lobby_browser_join(game, controller) || campaign_fail();
 }
 
-/* ---- the server browser's password screen (a game with a password
-chosen: lobby_browser_select, tools/port_settings.py): its password typed at
-once, shown as stars; JOIN GAME, or Enter, joins the game with it if it is
-the game's (the browser, back again, goes on with the join), else its help
-says it is not and the typing begins again */
+#ifdef HALO_PS3
+/* ---- the Xbox menus' LAN PLAY and INTERNET PLAY (menu_tags.c's xbox_multiplayer_patch): System Link's game list for
+this network's games and for the server browser's; player 1 joins or hosts, and the Xbox's pregame screen opens */
+
+#define XBOX_PREGAME_NAME "ui\\shell\\main_menu\\multiplayer_type_select\\connected\\pregame\\connected_pregame_screen"
+#define XBOX_INTERNET_ROWS 9
+
+/* what a game's description shows, from an advertisement or a listing */
+struct xbox_game_facts
+{
+	char const *map_name;
+	short engine_type, player_count, maximum_player_count;
+	/* NONE: not known (a listing's) */
+	short score_limit;
+	boolean open, in_progress, has_teams, oddball_variant;
+};
+
+static struct
+{
+	/* last frame's focused row and number of rows shown (a press past an end wraps the focus) */
+	short selected, shown;
+} xbox_internet;
+
+static struct
+{
+	/* the rows' games, the open ones first, as System Link's */
+	struct advertised_game *games[MAXIMUM_ADVERTISED_GAMES];
+	short count;
+} xbox_lan;
+
+/* (deleted) the rows' games let go of, as System Link's are */
+static void xbox_list_end(struct widget_instance *list)
+{
+	list->parameters.list.list_items = NULL;
+	list->parameters.list.number_of_items = 0;
+}
+
+static void xbox_string_index_set(struct widget_instance *text_box, short index)
+{
+	if (text_box)
+		text_box->parameters.text_box.string_list_index = index;
+}
+
+/* the game's description (none's, if NULL) as System Link's (server_list_menu_update): the strings are
+ui\multiplayer_game_text's and the map list's */
+static void xbox_describe(struct widget_instance *description, struct xbox_game_facts const *game)
+{
+	static char const *const maps[] =
+	{
+		"beavercreek", "sidewinder", "damnation", "ratrace", "prisoner", "hangemhigh", "chillout", "carousel",
+		"boardingaction", "bloodgulch", "wizard", "putput", "longest",
+	};
+	/* by engine type (none, CTF, slayer, oddball, king of the hill, race): the picture's frame, the rules' and the
+	score's strings (oddball's are frags in its variant that counts them) */
+	static short const pictures[] = { 5, 0, 2, 3, 1, 4 };
+	static short const rules[] = { 8, 3, 4, 5, 6, 7 };
+	static short const scores[] = { 1, 22, 24, 23, 23, 25 };
+	struct widget_instance *type_picture = named(description, "game_type_graphic", 0);
+	struct widget_instance *map_picture = named(description, "mp_map_graphic", 0);
+	short engine = game && game->engine_type >= 0 && game->engine_type < (short)NUMBEROF(pictures) ?
+		game->engine_type : 0;
+	short map = 0;
+	wchar_t text[8];
+
+	while (game && map < (short)NUMBEROF(maps) && !strstr(game->map_name, maps[map]))
+		map++;
+	if (type_picture)
+		type_picture->animation.current_frame_index = pictures[engine];
+	if (map_picture)
+		map_picture->animation.current_frame_index = game ? map : (short)NUMBEROF(maps);
+	xbox_string_index_set(named(description, "game_status", 0), !game ? 1 : game->open && !game->in_progress ? 20 : 21);
+	/* (13 is Unknown Level, 14 blank) */
+	xbox_string_index_set(named(description, "map_name", 0), game ? map : 14);
+	xbox_string_index_set(named(description, "game_rules", 0), game ? rules[engine] : 1);
+	xbox_string_index_set(named(description, "teams", 0), !game ? 1 : game->has_teams ? 12 : 13);
+	xbox_string_index_set(named(description, "score_limit_type", 0), !game || game->score_limit == NONE ? 1 :
+		engine == 3 && game->oddball_variant ? 24 : scores[engine]);
+	text[0] = 0;
+	if (game)
+		usnprintf(text, NUMBEROF(text) - 1, L"%d/%d", game->player_count, game->maximum_player_count);
+	text[NUMBEROF(text) - 1] = 0;
+	text_set(named(description, "number_of_players", 0), text);
+	text[0] = 0;
+	if (game && game->score_limit != NONE)
+		usnprintf(text, NUMBEROF(text) - 1, L"%d", game->score_limit);
+	text[NUMBEROF(text) - 1] = 0;
+	text_set(named(description, "score_limit", 0), text);
+}
+
+/* ---- INTERNET PLAY: the server browser's games; A joins one as the server browser does */
+
+/* "xbox internet begin" (the list's created): only the controller that joins plays; the found games' client */
+static boolean xbox_internet_begin(struct widget_instance *list, struct event_record *event, boolean *widget_deleted)
+{
+	player_ui_clear_multiplayer_joins();
+	lobby_browser_begin();
+	xbox_internet.selected = xbox_internet.shown = 0;
+	return ui_widget_port_browse(list, event, widget_deleted);
+}
+
+/* "xbox internet end" (deleted) */
+static void xbox_internet_end(struct widget_instance *list)
+{
+	lobby_browser_end();
+	xbox_list_end(list);
+}
+
+/* the server browser's join (lobby_browser_update's): its host reached, an A press posted joins its game */
+static void xbox_internet_join_update(unsigned long now)
+{
+	if (lobby_browser.ready && now - lobby_browser.ready_time > 3000 &&
+		now - lobby_browser.join_time <= LOBBY_BROWSER_JOIN_TIMEOUT)
+	{
+		lobby_browser.ready_time = now;
+		ui_widget_port_post_button(lobby_browser.controller, BUTTON_A);
+	}
+	if (!lobby_browser.joining)
+		return;
+	if (lobby_browser.ready)
+	{
+		if (now - lobby_browser.join_time > LOBBY_BROWSER_JOIN_TIMEOUT)
+			lobby_browser.joining = lobby_browser.ready = FALSE;
+	}
+	else if (lobby_browser_joined_game())
+	{
+		lobby_browser.ready = TRUE;
+		lobby_browser.ready_time = now;
+		ui_widget_port_post_button(lobby_browser.controller, BUTTON_A);
+	}
+	else if (now - lobby_browser.join_time > LOBBY_BROWSER_JOIN_TIMEOUT)
+	{
+		p2p_lobby_mark_failed(lobby_browser.identifier);
+		lobby_browser.joining = FALSE;
+		platform_log("menus: could not reach the server browser's game %s", lobby_browser.name);
+		ui_play_audio_feedback_sound(SOUND_ERROR);
+	}
+}
+
+/* "xbox internet update": the rows (scrolled on past their ends), the focused game's description, and in place of
+the rows a status (looking, none found, joining) */
+static void xbox_internet_update(struct widget_instance *list)
+{
+	struct widget_instance *description = list->parameters.list.extended_description;
+	struct widget_instance *status = named(description, "internet_status_text", 0);
+	struct widget_instance *row;
+	unsigned long now = system_milliseconds();
+	boolean online = config_boolean("network.online") && config_boolean("network.public_lobby");
+	short selected = list->parameters.list.selected_index;
+	short shown, index;
+	wchar_t text[ROW_TEXT_LENGTH * 2], name[P2P_LISTING_NAME_SIZE + 1];
+
+	lobby_browser.count = lobby_browser_valid_games(lobby_browser.games,
+		(short)p2p_lobby_games(lobby_browser.games, LOBBY_BROWSER_GAMES));
+	xbox_internet_join_update(now);
+	/* (the engine wraps a press past the last row to the first, and before the first to the last: with more games
+	than rows, the rows scroll instead) */
+	if (xbox_internet.shown == XBOX_INTERNET_ROWS && lobby_browser.count > XBOX_INTERNET_ROWS)
+	{
+		if (xbox_internet.selected == XBOX_INTERNET_ROWS - 1 && selected == 0)
+		{
+			if (lobby_browser.first + XBOX_INTERNET_ROWS < lobby_browser.count)
+			{
+				lobby_browser.first++;
+				selected = XBOX_INTERNET_ROWS - 1;
+			}
+			else
+				lobby_browser.first = 0;
+		}
+		else if (xbox_internet.selected == 0 && selected == XBOX_INTERNET_ROWS - 1)
+		{
+			if (lobby_browser.first > 0)
+			{
+				lobby_browser.first--;
+				selected = 0;
+			}
+			else
+				lobby_browser.first = (short)(lobby_browser.count - XBOX_INTERNET_ROWS);
+		}
+	}
+	lobby_browser.first = (short)PIN(lobby_browser.first, 0, MAX(0, lobby_browser.count - XBOX_INTERNET_ROWS));
+	shown = online && !lobby_browser.joining ?
+		(short)MIN(lobby_browser.count - lobby_browser.first, XBOX_INTERNET_ROWS) : 0;
+	selected = shown ? (short)PIN(selected, 0, shown - 1) : 0;
+	list->parameters.list.list_items = lobby_browser.games;
+	list->parameters.list.number_of_items = shown;
+	list->parameters.list.selected_index = selected;
+	for (row = list->child, index = 0; row; row = row->next, index++)
+	{
+		struct p2p_listing const *game;
+
+		if (index == selected)
+			list->focused_child = row;
+		if (index >= shown)
+			continue;
+		game = &lobby_browser.games[lobby_browser.first + index];
+		text_to_wide(game->name, name, NUMBEROF(name));
+		usnprintf(text, ROW_TEXT_LENGTH - 1, L"%s%s", game->failed ? L"(failed) " : game->locked ? L"(password) " :
+			!game->open ? L"(closed) " : L"", name);
+		text[ROW_TEXT_LENGTH - 1] = 0;
+		text_set(row, text);
+	}
+	lobby_browser.chosen = (short)(lobby_browser.first + selected);
+	xbox_internet.selected = selected;
+	xbox_internet.shown = shown;
+	{
+		struct p2p_listing const *game = &lobby_browser.games[lobby_browser.chosen];
+		struct xbox_game_facts facts;
+
+		facts.map_name = game->map;
+		facts.engine_type = game->engine_type;
+		facts.player_count = game->player_count;
+		facts.maximum_player_count = game->maximum_player_count;
+		facts.score_limit = NONE;
+		facts.open = game->open;
+		facts.in_progress = game->in_progress;
+		facts.has_teams = game->has_teams;
+		facts.oddball_variant = FALSE;
+		xbox_describe(description, shown ? &facts : NULL);
+	}
+	if (!status)
+		return;
+	status->visible = !shown;
+	if (!config_boolean("network.online"))
+		usnprintf(text, NUMBEROF(text) - 1, L"Internet play is off.");
+	else if (!config_boolean("network.public_lobby"))
+		usnprintf(text, NUMBEROF(text) - 1, L"The server browser is off.");
+	else if (lobby_browser.joining)
+	{
+		text_to_wide(lobby_browser.name, name, NUMBEROF(name));
+		usnprintf(text, NUMBEROF(text) - 1, L"Connecting to\r\n%s...", name);
+	}
+	else
+	{
+		usnprintf(text, NUMBEROF(text) - 1, L"%s", now - lobby_browser.begin_time < LOBBY_BROWSER_LOOK_TIME ?
+			L"Looking for public games..." : L"No public games found.");
+	}
+	text[NUMBEROF(text) - 1] = 0;
+	text_set_length(status, text, NUMBEROF(text));
+}
+
+/* "xbox internet select" (A, START): the focused row's game joined (not one with a password, which nothing types
+here); the A press posted once its host is reached joins its game, on the Xbox's pregame screen */
+static boolean xbox_internet_select(struct widget_instance *list, short controller, boolean *widget_deleted)
+{
+	struct p2p_listing const *game;
+
+	if (lobby_browser.ready)
+	{
+		struct advertised_game *found = lobby_browser_joined_game();
+
+		lobby_browser.joining = lobby_browser.ready = FALSE;
+		if (!found || !found->open)
+			return campaign_fail();
+		if (!multiplayer_player(controller))
+			return FALSE;
+		return ui_widget_port_join(list, found, XBOX_PREGAME_NAME, widget_deleted);
+	}
+	if (lobby_browser.joining)
+		return TRUE;
+	if (!xbox_internet.shown || lobby_browser.chosen >= lobby_browser.count)
+		return campaign_fail();
+	game = &lobby_browser.games[lobby_browser.chosen];
+	if (!game->open || game->locked)
+		return campaign_fail();
+	return lobby_browser_join(game, controller) || campaign_fail();
+}
+
+/* ---- LAN PLAY, in SYSTEM LINK PLAY's place: its list without the START-to-join screens (others join in the
+pregame), with this network's games only (internet play's hosts are INTERNET PLAY's) */
+
+/* "xbox lan begin" (the list's created): only the controller that joins or hosts plays; the found games' client */
+static boolean xbox_lan_begin(struct widget_instance *list, struct event_record *event, boolean *widget_deleted)
+{
+	player_ui_clear_multiplayer_joins();
+	xbox_lan.count = 0;
+	return ui_widget_port_browse(list, event, widget_deleted);
+}
+
+/* "xbox lan update": the rows, the focused game's description, and with none System Link's message (looking, then
+"Press A or Y to start your own game") */
+static void xbox_lan_update(struct widget_instance *list)
+{
+	void *client = global_network_game_client_get();
+	struct advertised_game *games = client ? network_game_client_get_available_games(client) : NULL;
+	struct widget_instance *description = list->parameters.list.extended_description;
+	struct widget_instance *message = named(description, "looking_for_servers_text", 0);
+	struct widget_instance *row;
+	short pass, index, selected;
+
+	xbox_lan.count = 0;
+	for (pass = 0; games && pass < 2; pass++)
+	{
+		for (index = 0; index < MAXIMUM_ADVERTISED_GAMES; index++)
+		{
+			struct advertised_game *game = &games[index];
+
+			if (network_game_client_advertised_game_is_valid(game) && !game->platform && (!game->open) == pass &&
+				!game_from_peer(game))
+			{
+				xbox_lan.games[xbox_lan.count++] = game;
+			}
+		}
+	}
+	selected = xbox_lan.count ? (short)PIN(list->parameters.list.selected_index, 0, xbox_lan.count - 1) : 0;
+	list->parameters.list.list_items = xbox_lan.games;
+	list->parameters.list.number_of_items = xbox_lan.count;
+	list->parameters.list.selected_index = selected;
+	for (row = list->child, index = 0; row; row = row->next, index++)
+	{
+		wchar_t name[NUMBEROF(xbox_lan.games[0]->game_name) + 1], text[ROW_TEXT_LENGTH];
+
+		if (index == selected)
+			list->focused_child = row;
+		if (index >= xbox_lan.count)
+			continue;
+		/* (a name of all 16 characters has no end) */
+		ustrncpy(name, xbox_lan.games[index]->game_name, NUMBEROF(name) - 1);
+		name[NUMBEROF(name) - 1] = 0;
+		usnprintf(text, ROW_TEXT_LENGTH - 1, L"%s%s", xbox_lan.games[index]->open ? L"" : L"(closed) ", name);
+		text[ROW_TEXT_LENGTH - 1] = 0;
+		text_set(row, text);
+	}
+	if (xbox_lan.count)
+	{
+		struct advertised_game *game = xbox_lan.games[selected];
+		struct xbox_game_facts facts;
+
+		facts.map_name = game->map_name;
+		facts.engine_type = game->engine_type;
+		facts.player_count = (short)game->player_count;
+		facts.maximum_player_count = game->maximum_player_count;
+		facts.score_limit = game->score_limit;
+		facts.open = game->open;
+		facts.in_progress = advertised_in_progress(game);
+		facts.has_teams = game->has_teams;
+		facts.oddball_variant = game->oddball_variant;
+		xbox_describe(description, &facts);
+	}
+	else
+		xbox_describe(description, NULL);
+	if (message)
+	{
+		message->visible = !xbox_lan.count;
+		message->parameters.text_box.string_list_index = xbox_lan.count ? 2 :
+			system_milliseconds() - list->creation_time >= 1000 ? 1 : 0;
+	}
+}
+
+/* "xbox lan select" (A, START): the focused game joined, as System Link's; FALSE with none, for the next handler */
+static boolean xbox_lan_select(struct widget_instance *list, short controller, boolean *widget_deleted)
+{
+	short index = list->parameters.list.selected_index;
+
+	if (index < 0 || index >= xbox_lan.count)
+		return FALSE;
+	if (!xbox_lan.games[index]->open)
+		return campaign_fail();
+	if (!multiplayer_player(controller))
+		return FALSE;
+	return ui_widget_port_join(list, xbox_lan.games[index], XBOX_PREGAME_NAME, widget_deleted);
+}
+
+/* "xbox lan create" (Y) and "xbox lan create if none" (A, START, while it finds none, as System Link's): player 1
+hosts a new game, and the handler opens the map select */
+static boolean xbox_lan_create(struct widget_instance *list, struct event_record *event, short controller,
+	boolean if_none, boolean *widget_deleted)
+{
+	void *client = global_network_game_client_get();
+	short state;
+
+	if (if_none &&
+		(xbox_lan.count || !client || network_game_client_get_state(client, &state) != _client_state_searching))
+	{
+		return FALSE;
+	}
+	if (!multiplayer_player(controller))
+		return FALSE;
+	return ui_widget_port_host(list, event, widget_deleted);
+}
+
+/* "xbox mp type desc" (the multiplayer menu's list, for "multiplayer type menu update desc"): LAN PLAY has SYSTEM LINK
+PLAY's picture and a description in its place; INTERNET PLAY, after it, that picture and the description added last */
+static void xbox_multiplayer_type_description(struct widget_instance *list)
+{
+	static short const frames[] = { 0, 1, 2, 2, 3 };
+	static short const strings[] = { 0, 1, 2, 4, 3 };
+	struct widget_instance *description = list->parameters.list.extended_description;
+	short index = ui_widget_port_list_index(list);
+
+	if (description && description->child && description->child->next && index >= 0 &&
+		index < (short)NUMBEROF(frames))
+	{
+		description->child->animation.current_frame_index = frames[index];
+		description->child->next->parameters.text_box.string_list_index = strings[index];
+	}
+}
+#endif
+
+/* ---- the server browser's password screen (lobby_browser_select, tools/port_settings.py): typed at once, as stars;
+JOIN GAME or Enter joins if it is right (the browser, back, goes on joining); else the help says so, the typing anew */
 
 /* its help's lines (tools/port_settings.py's) */
 enum
@@ -4186,10 +4548,8 @@ static struct
 	unsigned long updated_at;
 } lobby_icons;
 
-/* ui_widget.c's: a text box drawn, at the bounds its text was drawn in
-(its font and justification still set): a lobby row's player talking in
-voice chat (or muted) has a speaker just left of their name
-(port/linux/game/network_voice.c) */
+/* ui_widget.c's: a text box drawn, at the bounds its text was drawn in (its font and justification still set): a lobby
+row's player talking in voice chat (or muted) has a speaker just left of their name (port/linux/game/network_voice.c) */
 void menu_functions_text_box_drawn(struct widget_instance *widget, rectangle2d const *bounds)
 {
 	short row;
@@ -4386,9 +4746,8 @@ static void preview_update(struct widget_instance *list)
 	profile_name_show(description);
 }
 
-/* "port lobby preview add" (START): as the lobby's ("port lobby join"), a
-controller not joining chooses its profile, to join with the others; a
-joining player's START is the focused button's */
+/* "port lobby preview add" (START): as the lobby's ("port lobby join"), a controller not joining chooses its profile,
+to join with the others; a joining player's START is the focused button's */
 static boolean preview_add(struct widget_instance *widget, short controller, boolean *widget_deleted)
 {
 	struct advertised_game *game = preview_game();
@@ -4410,9 +4769,8 @@ static boolean preview_add(struct widget_instance *widget, short controller, boo
 	return TRUE;
 }
 
-/* "port lobby preview leave" (B): a joining player stays out, the last of
-them backing out (TRUE); a controller not joining cancels ADD PLAYER, else
-backs out for them all (the game is not joined yet: none is kept here) */
+/* "port lobby preview leave" (B): a joining player stays out, the last of them backing out (TRUE); a controller not
+joining cancels ADD PLAYER, else backs out for them all (the game is not joined yet: none is kept here) */
 static boolean preview_leave(short controller)
 {
 	short index;
@@ -4432,10 +4790,8 @@ static boolean preview_leave(short controller)
 	return lobby_local_player_count() == 0;
 }
 
-/* "port lobby preview join": with the players joining from here (player 1,
-as the preview opened, and those added), whom the lobby asks the host for
-all at once ("net splitscreen prejoin players"): it starts the machine in
-the game once it has them all */
+/* "port lobby preview join": with the players joining from here (player 1, as the preview opened, and those added),
+whom the lobby asks the host for all at once ("net splitscreen prejoin players"): the machine starts with them all */
 static boolean preview_join(struct widget_instance *widget, short controller, boolean *widget_deleted)
 {
 	struct advertised_game *game = preview_game();
@@ -4752,9 +5108,8 @@ static void gametype_options_each(struct widget_instance *list, boolean save)
 
 			if (!option)
 				continue;
-			/* (the host's own settings: Server Setup's alone, their rows
-			hidden in Edit Gametypes', which edits a gametype for any game;
-			written on OK, as the gametype's are kept) */
+			/* (the host's own settings: Server Setup's alone, their rows hidden in Edit Gametypes', which edits a
+			gametype for any game; written on OK, as the gametype's are kept) */
 			if (option->kind == _option_setting)
 			{
 				short index = (short)PIN(spinner->parameters.list.selected_index, 0, option->count - 1);
@@ -4784,9 +5139,8 @@ static void gametype_options_each(struct widget_instance *list, boolean save)
 	}
 }
 
-/* each of a screen's rows of the host's own settings (_option_setting:
-co-op's options' screens, tools/port_settings.py's _setup_option_screen),
-shown, or (save) set */
+/* each of a screen's rows of the host's own settings (_option_setting: co-op's options' screens,
+tools/port_settings.py's _setup_option_screen), shown, or (save) set */
 static void setting_options_each(struct widget_instance *list, boolean save)
 {
 	struct widget_instance *row;
@@ -5593,6 +5947,36 @@ boolean pc_menu_event_function_invoke(
 		{
 			return saved_game_delete(controller);
 		}
+#ifdef HALO_PS3
+		else if (!strcmp(name, "xbox internet begin"))
+		{
+			return xbox_internet_begin(widget, event, widget_deleted);
+		}
+		else if (!strcmp(name, "xbox internet end"))
+		{
+			xbox_internet_end(widget);
+		}
+		else if (!strcmp(name, "xbox internet select"))
+		{
+			return xbox_internet_select(widget, controller, widget_deleted);
+		}
+		else if (!strcmp(name, "xbox lan begin"))
+		{
+			return xbox_lan_begin(widget, event, widget_deleted);
+		}
+		else if (!strcmp(name, "xbox lan end"))
+		{
+			xbox_list_end(widget);
+		}
+		else if (!strcmp(name, "xbox lan select"))
+		{
+			return xbox_lan_select(widget, controller, widget_deleted);
+		}
+		else if (!strcmp(name, "xbox lan create") || !strcmp(name, "xbox lan create if none"))
+		{
+			return xbox_lan_create(widget, event, controller, !strcmp(name, "xbox lan create if none"), widget_deleted);
+		}
+#endif
 		else if (!strcmp(name, "controls back handler") || !strcmp(name, "gamespy back handler") ||
 			!strcmp(name, "gamespy dismiss error") || !strcmp(name, "gamespy dismiss filters"))
 		{
@@ -5655,4 +6039,12 @@ void pc_menu_game_data_function_invoke(
 		saved_game_list_update(widget);
 	else if (!strcmp(name, "port gamepad layout preview"))
 		profile_gamepad_layout(widget);
+#ifdef HALO_PS3
+	else if (!strcmp(name, "xbox internet update"))
+		xbox_internet_update(widget);
+	else if (!strcmp(name, "xbox mp type desc"))
+		xbox_multiplayer_type_description(widget);
+	else if (!strcmp(name, "xbox lan update"))
+		xbox_lan_update(widget);
+#endif
 }

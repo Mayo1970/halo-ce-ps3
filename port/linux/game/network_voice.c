@@ -1,37 +1,5 @@
-/*
-NETWORK_VOICE.C
-
-Voice chat (port/linux/NETCODE.md): each machine's microphone, encoded with
-Opus (port/linux/src/voice_audio.c), goes to the host, which sends it on to
-the machines that may hear it. The host decides everything, from its own
-config.toml:
-
-- In the lobby, before and after a game (and in a game's postgame), every
-  player hears every other (network.voice_lobby).
-- In a game, network.voice_mode: off; teammates near; anyone near; all
-  teammates; or all teammates and enemies near ("near": within
-  network.voice_proximity world units of each other, both alive). A game
-  without teams has only enemies, and co-op only teammates. A voice heard
-  for being near is quieter further away, and comes from the speaker's side
-  (each listener's own reckoning of where everyone is).
-- The quality: network.voice_kbps (8 to 64), in the lobby and in a game,
-  which the host tells each machine to encode at, and holds it to.
-
-What the host takes is held to that too: a machine's frames only with the
-key the host gave it over its stream (a datagram's source address is all
-that names its machine, and anyone can send one as from another's), no
-larger than the quality allows, no more than VOICE_FRAMES_PER_SECOND (with
-a little burst), only while voice is on, and no more than
-VOICE_MAXIMUM_TALKERS machines at once. A machine is sent voices once it
-has said it hears them (a frame, or an empty one every two seconds), so a
-build without voice chat is never sent any. The host relays only: it never
-decodes, and a machine's own voice never comes back to it.
-
-Each machine decides only for itself: whether it talks (audio.voice_chat:
-push to talk, open mic, or not), how loud the others are
-(audio.voice_volume), and whom it mutes (the scoreboard's menu,
-game_engine.c), which it does not tell anyone.
-*/
+/* NETWORK_VOICE.C: voice chat (port/linux/NETCODE.md). Opus frames go to the host, which checks each machine's key,
+size and rate and relays them by its settings (network.voice_*); each machine sets only its talk, volume and mutes. */
 
 #include "cseries.h"
 #include "cseries/errors.h"
@@ -175,9 +143,8 @@ struct voice_settings
 
 /* ---------- globals */
 
-/* the host: each machine slot's key, whether it was told it, and when it
-was told the settings last; when it was heard from; its frames' allowance
-and when it was topped up; when its last frame was relayed */
+/* the host: each machine slot's key, whether and when it was told the settings last; when it was heard from; its
+frames' allowance and when it was topped up; when its last frame was relayed */
 static struct
 {
 	unsigned long key;
@@ -195,9 +162,8 @@ static unsigned long voice_host_settings_read_at = (unsigned long)-1;
 /* (the settings told, to tell again when they change) */
 static struct voice_settings voice_host_settings_told;
 
-/* this machine: the host's settings and its key (heard: a client), when
-they came; the sequence of its frames; whether it talked lately, and the
-microphone was asked for */
+/* this machine: the host's settings and its key (heard: a client), when they came; the sequence of its frames;
+whether it talked lately, and the microphone was asked for */
 static struct voice_settings voice_settings;
 static unsigned long voice_key;
 static boolean voice_settings_heard;
@@ -210,9 +176,8 @@ static unsigned long voice_open_mic_until;
 static boolean voice_microphone_wanted;
 static boolean voice_session;
 
-/* every machine slot's last frame heard (for its icon), and whether this
-machine mutes it, with the names it had then (a new machine at the slot is
-not muted) */
+/* every machine slot's last frame heard (for its icon), and whether this machine mutes it, with the names it had
+then (a new machine at the slot is not muted) */
 static unsigned long voice_heard_at[VOICE_MACHINES];
 static boolean voice_heard[VOICE_MACHINES];
 static boolean voice_muted[VOICE_MACHINES];
@@ -220,9 +185,8 @@ static wchar_t voice_muted_names[VOICE_MACHINES][12];
 
 /* ---------- the route (pure: tools/harness/tests/voice_route.c) */
 
-/* how a listener hears a speaker: in the lobby (and the postgame), anyone
-if the lobby has voice; in a game, by the mode, teammates anywhere or near,
-enemies near ("near": within the range, both alive) */
+/* how a listener hears a speaker: in the lobby (and the postgame), anyone if the lobby has voice; in a game, by the
+mode, teammates anywhere or near, enemies near ("near": within the range, both alive) */
 static short voice_route(
 	short mode,
 	boolean lobby,
@@ -302,9 +266,8 @@ static boolean voice_host(
 	return global_network_game_server_get() != NULL;
 }
 
-/* in the lobby, as voice has it: this machine's network game not in game
-(the menus' own game, the main menu's, runs meanwhile), or in a multiplayer
-game's postgame (co-op, with no game engine, has none) */
+/* in the lobby, as voice has it: this machine's network game not in game (the menus' own game runs meanwhile), or
+in a multiplayer game's postgame (co-op, with no game engine, has none) */
 static boolean voice_in_lobby(
 	void)
 {
@@ -993,11 +956,8 @@ boolean network_voice_available(
 	return voice_session && voice_settings_heard;
 }
 
-/* a speaker drawn in the rectangle (a square of its height, at its left;
-muted: struck through, in red), fading with alpha: Lucide's icons
-(port/assets/icons/lucide), drawn white as the menus' bitmap voice/speaker,
-a frame each (tools/ce_menus.py), and tinted; none without the menus'
-bitmaps */
+/* a speaker in a square at the rectangle's left (muted: struck through, red), fading with alpha: the menus' bitmap
+voice/speaker (Lucide's icons, tools/ce_menus.py), tinted; none without the menus' bitmaps */
 void network_voice_draw_icon(
 	rectangle2d const *bounds,
 	boolean muted,
@@ -1014,3 +974,45 @@ void network_voice_draw_icon(
 	square.x1 = (short)(square.x0 + (square.y1 - square.y0));
 	draw_bitmap_in_rect(bitmap, &square, NULL, NULL, a | (muted ? 0x00E05A5A : 0x0050E050), NULL, TRUE);
 }
+
+#ifdef __BIG_ENDIAN__
+/* ---------- byte order: the PC builds send the messages as their memory has them (network_distributed.h) */
+
+/* (each message's one entry; the packet's bytes after it stay as they are) */
+void network_voice_byte_swap(
+	byte type,
+	byte *entries,
+	byte const *end)
+{
+	switch (type)
+	{
+	case _distributed_message_voice_up:
+		if (end - entries >= (long)sizeof(struct distributed_voice_up))
+		{
+			struct distributed_voice_up *up = (struct distributed_voice_up *)entries;
+
+			BYTE_SWAP_FIELD(up->key);
+			BYTE_SWAP_FIELD(up->sequence);
+		}
+		break;
+	case _distributed_message_voice_down:
+		if (end - entries >= (long)sizeof(struct distributed_voice_down))
+		{
+			struct distributed_voice_down *down = (struct distributed_voice_down *)entries;
+
+			BYTE_SWAP_FIELD(down->key);
+			BYTE_SWAP_FIELD(down->sequence);
+		}
+		break;
+	case _distributed_message_voice_config:
+		if (end - entries >= (long)sizeof(struct distributed_voice_config))
+		{
+			struct distributed_voice_config *config = (struct distributed_voice_config *)entries;
+
+			BYTE_SWAP_FIELD(config->key);
+			BYTE_SWAP_FIELD(config->proximity_tenths);
+		}
+		break;
+	}
+}
+#endif

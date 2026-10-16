@@ -1,72 +1,5 @@
-/*
-P2P_SIGNAL.C
-
-Internet play's signalling (p2p.c): how a joiner and the host of an invite
-tell each other where they can be reached, through public MQTT brokers
-(those in brokers.txt, network.brokers_file; MQTT 5 over TCP, or 3.1.1 with
-a broker that refuses 5). Every broker is used at once, so any one of them
-working is enough (an answer goes back through each broker a request came
-through).
-They also carry the server browser's listings of public games (p2p_lobby.c):
-retained in each host's slot, published at least once (QoS 1, sent again
-until the broker acknowledges them), expiring at the broker after
-LISTING_EXPIRY seconds (MQTT 5), and cleared by the broker if the host's
-connection dies (the will every connection sets: harmless when not hosting).
-
-A broker may drop a connection's publishes past about 10 a second without a
-word (EMQX), and a host's answers to a flood of JOINs would reach that: each
-broker's publishes spend from a bucket (PUBLISH_BURST at once, one more each
-PUBLISH_INTERVAL). Answers to proven joiners come first, then the listing
-(kept to publish later), then a joiner's requests and the browser's queries;
-answers to requests not proven yet only while some are left over (the
-joiner asks again).
-
-Everything that passes through them is sealed with a key derived from the
-invite's token, and goes to topics that are hashes of it, so the brokers
-(and anyone watching them) learn nothing and can join nothing:
-
-- the host listens on hceu/3/<HMAC(token, "host" | host)>, where a joiner
-  sends JOIN: its public key (its identifier is the key's hash), a nonce,
-  and its addresses;
-- the joiner listens on hceu/3/<HMAC(token, "joiner" | joiner)>, where the
-  host answers ACCEPT: its public key, the joiner's nonce, one of its own,
-  its addresses, and a tag that only the two of them can make (from their
-  keys);
-- the joiner then repeats its JOIN with the host's nonce and a tag of its
-  own, made the same way, which shows that it holds the key it gave. Only
-  then does the host make a session.
-
-Their tunnel's keys come from their X25519 shared secret and the two
-nonces, and never travel: another holder of the invite reads the messages
-but cannot work them out, and cannot answer as the host (whose key must
-have the hash in the invite: 16 bytes, not only the identifier's 6, which
-a key could be made to have). It can send a JOIN in another
-machine's name, but cannot prove it: the host answers it (to that machine)
-and makes no session of it. A session no one could complete would keep that
-machine out while it lived (a session with a machine is not replaced while
-it lives, p2p.c), and a JOIN every so often would keep it out for good.
-
-The host's nonce is a hash of the request with a key of the host's and the
-time (it changes every HOST_NONCE_PERIOD), so the host need not remember
-what it answered: anyone with the invite can ask in a machine's name as
-often as it likes, pushing out whatever the host remembered. What it does
-keep of requests not proven yet (the work of their keys) only saves work.
-It answers them sparingly, as anyone with the invite can send them from as
-many keys as it likes: a request once each ANSWER_INTERVAL through each
-broker, and 20 a second in all (MAXIMUM_UNPROVEN_ANSWERS), each through the
-broker the request came through only (the joiner asks through them all,
-again every JOIN_INTERVAL, so a broker that loses the answers keeps no
-other's out).
-
-A joiner repeats its JOIN until the tunnel reaches the host. The host makes
-one session of a request (a public key and nonce) at most: anyone watching
-the brokers could send the proven JOIN again after the session ended, and
-have the host reach for the joiner's old addresses in its name, keeping it
-out (with the same keys again). It remembers the request at least while its
-host nonce lasts. So a joiner asks with a new nonce when its session with
-the host ends before the tunnel reached it, or when the host has not
-answered it in a while.
-*/
+/* P2P_SIGNAL.C: internet play's signalling (p2p.c) and listings over public MQTT brokers (brokers.txt), all at once:
+sealed with the invite's token, rate-limited per broker, joiners proving their keys (port/linux/README.md "Security") */
 
 #include "platform.h"
 #include "posix.h"
@@ -88,15 +21,11 @@ enum
 	MAXIMUM_JOINS = 1 + P2P_MAXIMUM_PLAYER_JOINS,
 	/* the nonces of an asker's key it keeps the answer times of */
 	ASKER_NONCES = 4,
-	/* the requests not proven yet whose keys' work a host keeps, one a key;
-	only to save work, but as many as a flood of new keys takes seconds to
-	push out (one each UNPROVEN_ANSWER_INTERVAL at most, after the first
-	few: about 11 seconds), so a joiner's proof, which follows its answer at
-	once, finds its own */
+	/* the unproven requests whose key work a host keeps, one a key, to save work: as many as a flood of new keys takes
+	seconds to push out (about 11: one each UNPROVEN_ANSWER_INTERVAL), so a joiner's proof, at once, finds its own */
 	MAXIMUM_ASKERS = 256,
-	/* the requests a session was made from, which make none again (a
-	host takes at most a few new players a minute: this is hours of them;
-	one is not forgotten while its host nonce lasts: USED_REQUEST_TIME) */
+	/* the requests a session was made from, which make none again (a host takes at most a few new players a minute:
+	this is hours of them; one is not forgotten while its host nonce lasts: USED_REQUEST_TIME) */
 	MAXIMUM_USED_REQUESTS = 1024,
 	/* (a slot's: hceu/3/lobby/s/ and a key hash in hex) */
 	TOPIC_SIZE = 64,
@@ -114,17 +43,15 @@ enum
 	MAXIMUM_IN_FLIGHT = 4,
 	/* the topics a broker is subscribed to (_topic_*) */
 	NUMBER_OF_TOPICS = 5,
-	/* a broker's publishes: at most PUBLISH_BURST at once, one more each
-	PUBLISH_INTERVAL milliseconds (EMQX drops a connection's publishes past
-	about 10 a second, without a word) */
+	/* a broker's publishes: at most PUBLISH_BURST at once, one more each PUBLISH_INTERVAL milliseconds (EMQX drops a
+	connection's publishes past about 10 a second, without a word) */
 	PUBLISH_BURST = 8,
 	PUBLISH_INTERVAL = 125,
 	/* what is kept back of the bucket for answers to proven joiners and the
 	listing: a request's answer, and a query, need this many left */
 	UNPROVEN_RESERVE = 3,
-	/* seconds a listing lasts at the broker (MQTT 5's Message Expiry
-	Interval): a dead host's goes even from a broker that kept it through a
-	restart */
+	/* seconds a listing lasts at the broker (MQTT 5's Message Expiry Interval): a dead host's goes even from a broker
+	that kept it through a restart */
 	LISTING_EXPIRY = 90,
 
 	/* milliseconds */
@@ -140,21 +67,18 @@ enum
 	SILENCE_TIMEOUT = 90000,
 	JOIN_INTERVAL = 2000,
 	ANSWER_INTERVAL = 1000,
-	/* a joiner the host has not answered in this long asks anew, with a
-	new nonce (a fresh start: the host makes nothing of a request it did
-	not answer, as it makes a session only of a proven one) */
+	/* a joiner the host has not answered in this long asks anew, with a new nonce (a fresh start: the host makes
+	nothing of a request it did not answer, as it makes a session only of a proven one) */
 	UNANSWERED_TIME = 20000,
 	/* a host nonce is taken in the period it is made in and the next */
 	HOST_NONCE_PERIOD = 30000,
 	USED_REQUEST_TIME = 2 * HOST_NONCE_PERIOD,
-	/* a host's work of the keys of requests from keys it has not met (a
-	millisecond or more each, on the thread the tunnels run on): this many
-	at once, and one more each this often */
+	/* a host's work of the keys of requests from keys it has not met (a millisecond or more each, on the thread the
+	tunnels run on): this many at once, and one more each this often */
 	MAXIMUM_KEY_WORK = 32,
 	KEY_WORK_INTERVAL = 50,
-	/* a host's answers to requests not proven yet, which anyone with the
-	invite can send from any number of keys: this many at once, and one more
-	each this often */
+	/* a host's answers to requests not proven yet, which anyone with the invite can send from any number of keys: this
+	many at once, and one more each this often */
 	MAXIMUM_UNPROVEN_ANSWERS = 32,
 	UNPROVEN_ANSWER_INTERVAL = 50,
 	/* the reads of a broker's messages in one pass of the thread, whose
@@ -253,9 +177,8 @@ struct broker
 	int output_size;
 };
 
-/* a request: of a session made (joiners), or not proven yet (askers: one a
-key, with its latest nonce, and no host nonce or secret; and its latest
-nonces answered, and when) */
+/* a request: of a session made (joiners), or not proven yet (askers: one a key, with its latest nonce, and no host
+nonce or secret; and its latest nonces answered, and when) */
 struct joiner
 {
 	unsigned char identifier[P2P_IDENTIFIER_SIZE];
@@ -321,10 +244,8 @@ static struct
 	int broker_count;
 	char client_identifier[24];
 
-	/* the server browser (p2p_lobby.c): this machine's slot (its will
-	clears it), whether its game is listed and whether it browses; the
-	listing to publish (none: size 0), its version, and whether it is a
-	tombstone (the slot is cleared after it) */
+	/* the server browser (p2p_lobby.c): this machine's slot (its will clears it), whether its game is listed and it
+	browses; the listing to publish (none: size 0), its version, and whether a tombstone (the slot cleared after it) */
 	char own_slot[TOPIC_SIZE];
 	int lobby_listed;
 	int lobby_browsing;
@@ -355,9 +276,8 @@ static struct
 	struct budget key_work;
 	struct budget unproven_answers;
 
-	/* joining: the invite's host (joins[0]), and the other players of its
-	game this machine asks for as their host does for it (p2p_signal_join_player);
-	all of one token, whose answers come to one topic */
+	/* joining: the invite's host (joins[0]), and the other players of its game this machine asks for as their host does
+	for it (p2p_signal_join_player); all of one token, whose answers come to one topic */
 	struct join joins[MAXIMUM_JOINS];
 	unsigned char join_token[P2P_TOKEN_SIZE];
 	unsigned char join_key[P2P_SHA256_SIZE];
@@ -370,9 +290,14 @@ static int elapsed(unsigned long since, unsigned long time)
 	return (unsigned int)(p2p_now() - since) >= (unsigned int)time;
 }
 
+/* (port: network order is a big-endian CPU's own, the PS3's) */
 static unsigned short network_short(unsigned short value)
 {
+#ifdef __BIG_ENDIAN__
+	return value;
+#else
 	return (unsigned short)(value << 8 | value >> 8);
+#endif
 }
 
 /* whether some of a budget is left now (maximum at once, one more each
@@ -595,9 +520,8 @@ static void broker_publish(struct broker *broker, const char *topic, const unsig
 	broker_send(broker, 0x30, body, size + payload_size);
 }
 
-/* a publish at least once to the own slot, retained: a listing (expiring
-at the broker), or an empty one, which clears it; again (duplicate) if the
-first was not acknowledged */
+/* a publish at least once to the own slot, retained: a listing (expiring at the broker), or an empty one, which clears
+it; again (duplicate) if the first was not acknowledged */
 static void broker_publish_slot(struct broker *broker, unsigned short identifier, const unsigned char *payload,
 	int payload_size, int duplicate)
 {
@@ -832,12 +756,8 @@ static void broker_connect(struct broker *broker)
 
 /* ---------- addresses */
 
-/* this machine's addresses and its WebRTC (p2p_webrtc_describe), for a
-message to the machine with that identifier: the count of addresses, each
-address and port, then the WebRTC's kind and, unless none, the certificate's
-hash, the ICE username fragment and password, each after its length, and
-the count of mDNS names, each after its length and before its port; returns
-the bytes written */
+/* this machine's addresses and WebRTC (p2p_webrtc_describe), to that identifier: their count, each address and port;
+WebRTC's kind, unless none its hash, ufrag and password (sized), mDNS names (counted; sized, then a port); its size */
 static int put_addresses(unsigned char *message, const unsigned char *identifier, int proven)
 {
 	struct p2p_candidate candidates[P2P_MAXIMUM_CANDIDATES];
@@ -886,9 +806,8 @@ static int webrtc_name_valid(const char *text)
 		"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") == length - 6;
 }
 
-/* ICE's text (RFC 8839's ice-char: letters, digits, "+" and "/"), of a
-length from minimum to maximum, or none; a browser puts it in its session
-description */
+/* ICE's text (RFC 8839's ice-char: letters, digits, "+" and "/"), of a length from minimum to maximum, or none; a
+browser puts it in its session description */
 static int get_ice_text(const unsigned char *message, int size, int *offset, int minimum, int maximum,
 	char *text)
 {
@@ -1235,10 +1154,8 @@ static void join_received(struct broker *broker, const unsigned char *message, i
 	joiner = find_joiner(signalling.joiners, MAXIMUM_JOINERS, public_key, nonce);
 	if (joiner)
 	{
-		/* a request a session was made from, again (through another broker,
-		or repeated until the tunnel reaches the host): that session's
-		answer, while it lasts; never another. The addresses only from a
-		proof (anyone can send the rest) */
+		/* a request a session came from, again (another broker, or repeated until the tunnel reaches the host): that
+		session's answer while it lasts, never another; addresses only from a proof (anyone can send the rest) */
 		if (proven && (memcmp(message + size - PROOF_SIZE, joiner->host_nonce, NONCE_SIZE) ||
 			!tag_right(joiner->base, "join", message, size)))
 		{
@@ -1263,11 +1180,8 @@ static void join_received(struct broker *broker, const unsigned char *message, i
 		return;
 	if (!proven)
 	{
-		/* an answer (to the machine whose key it is, which alone can prove
-		the request), and nothing else: the host keeps nothing of it that it
-		needs. A request's once each ANSWER_INTERVAL (a key's with another
-		nonce too: anyone may send its key with theirs, which must not keep
-		its own out), and few in all */
+		/* only an answer (to the key's machine, which alone can prove the request): the host keeps nothing it needs. A
+		request's once each ANSWER_INTERVAL (another nonce's too, which must not keep the key's own out), few in all */
 		struct joiner *asker = find_joiner(signalling.askers, MAXIMUM_ASKERS, public_key, NULL);
 		int slot = 0;
 
@@ -1318,9 +1232,8 @@ static void join_received(struct broker *broker, const unsigned char *message, i
 		send_accept(broker, identifier, nonce, host_nonce, asker->base, 0);
 		return;
 	}
-	/* proven: with a nonce the host answered the request with lately, and a
-	tag only the key's holder can make. A new session (p2p.c turns it away
-	while another with that machine lives) */
+	/* proven: with a nonce the host answered the request with lately, and a tag only the key's holder can make. A new
+	session (p2p.c turns it away while another with that machine lives) */
 	memcpy(host_nonce, message + size - PROOF_SIZE, NONCE_SIZE);
 	if (!host_nonce_current(public_key, nonce, host_nonce) || p2p_peer_turned_away(identifier, 0) ||
 		!joiner_base(public_key, base) || !tag_right(base, "join", message, size))
@@ -1699,10 +1612,8 @@ static void broker_readable(struct broker *broker)
 
 /* ---------- p2p.c's side */
 
-/* the brokers in network.brokers_file (beside config.toml, unless a full
-path: port/assets/network/brokers.txt, which the builds put there), one on
-each line, "#" starting a comment, into text: host:port entries separated by
-commas; empty if the file cannot be read */
+/* the brokers of network.brokers_file (beside config.toml, unless a full path: the builds put brokers.txt there), one a
+line, "#" starting a comment, into text as host:port entries with commas between; empty if the file cannot be read */
 static void brokers_list(char *text, size_t size)
 {
 	const char *name = config_string("network.brokers_file");
@@ -1714,9 +1625,8 @@ static void brokers_list(char *text, size_t size)
 	text[0] = 0;
 #ifdef HALO_WEB
 	{
-		/* a page reaches brokers over WebSockets alone (web_net.c): the
-		WebSocket URLs of brokers.txt's that have them, or those the page
-		names (?brokers=, for tests) */
+		/* a page reaches brokers over WebSockets alone (web_net.c): the WebSocket URLs of brokers.txt's that have them,
+		or those the page names (?brokers=, for tests) */
 		const char *page = getenv("HALO_WEB_BROKERS");
 
 		(void)name, (void)path, (void)file, (void)file_size, (void)index, (void)length, (void)comment;

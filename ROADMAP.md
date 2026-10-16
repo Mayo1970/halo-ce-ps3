@@ -56,6 +56,28 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   and loaded. New upstream features that report "none" on the PS3: voice
   chat, touch, Custom Edition maps, p2p passwords, per-pixel lighting,
   anti-aliasing. See the Log.
+- 2026-10-16: The new network messages' byte swap (Matt: "Let's work on the
+  connectivity now! Byte-swap them."): built, not tested. The merge brought
+  23 distributed message kinds (network version 11 to 29). Their 19 kinds
+  with multi-byte fields are swapped as the others are (trap 38): the AI's
+  actor states and damage, co-op's structure BSP, presentation, events,
+  device groups and states, object names, transforms, looks and screen
+  effect, the damage animations, voice chat's 3 and map sharing's 4. The
+  skip vote and the votekick messages are bytes. The older messages' structs
+  changed only in byte fields. PKG of 01:04 in `build/ps3_swap/`. See "Log".
+- 2026-10-16: Internet play (Matt: "Add 1, you can look at my Quake 3 port
+  for reference to that. 2. For the screen, use the small screen in the Xbox
+  menus that list the browser's games and joins one. 3. Sure, implement that
+  one too."): `port/linux/src/p2p*.c`, KCP and Mbed TLS (WebRTC's DTLS, for
+  browsers) compile for the PS3. The Xbox menus' multiplayer list has
+  INTERNET PLAY: a copy of the System Link game list with the server
+  browser's games. Discord: none (the PS3 has no Discord client). The log of
+  Matt's run of 03:08 (PKG of 03:03): 4 public games joined. See "Log".
+- 2026-10-16: LAN PLAY (Matt: "Can you replace the menu voice of "SYSTEM
+  LINK PLAY" with a "LAN PLAY" browser? So we get both of the worlds.";
+  CREATE GAME kept, his answer): built, not tested. In SYSTEM LINK PLAY's
+  place, a copy of the System Link game list without the START-to-join
+  screens, with the LAN's games only. PKG of 03:41 in `build/ps3_p2p/`.
 - G0 to G3 are done: hardware SUCCESS. G2 ran the game headless to the open
   of `d:\maps\ui.map`; the Xbox window is at 0x80000000, so the map pointers
   stay valid. G3 (run 9) ran the main menu headless at 30 frames per second
@@ -215,7 +237,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
-| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested |
+| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX | Not started (Matt, 2026-10-06: the last goal) |
 
 ## G7 analysis (2026-10-06)
@@ -359,8 +381,9 @@ Three read-only audits of the code. No code change.
     (the variable entries) against their writers, 200000 random states, 0
     failures (a planted fault fails). A review of every swap list against
     its struct and of the packet field tables: no defect.
-  - The test: a PC build of the same source (network version 11) on the
-    LAN, and its firewall open for UDP 5150 and 5151 and TCP 5150. The PC
+  - The test: a PC build of the same source (network version 11; 29 since
+    the merge of 2026-10-16) on the LAN, and its firewall open for UDP 5150
+    and 5151 and TCP 5150. The PC
     hosts a system link game and the PS3 joins; then the PS3 hosts and the
     PC joins; a few minutes each (moves, shots, kills, scores on both).
     Games that do not show: `network.broadcast` in both `config.toml`.
@@ -889,10 +912,28 @@ the whole tree. No code change.
     as they are, the PC swaps them. Raw packet fields, the settings record
     and the distributed messages are the PC's little-endian memory: a new
     or changed multi-byte field in them needs its `BYTE_SWAP_*` line in the
-    matching `*_byte_swap` function (see "G7 analysis", "System link").
+    matching `*_byte_swap` function (see "G7 analysis", "System link"), and
+    a new message kind its case in `distributed_message_entries_byte_swap`
+    (`network_distributed.c`). The host takes voice chat's and map sharing's
+    messages before `network_distributed_handle_message` (which swaps the
+    others): `network_server_message_handler.c` swaps them there. In a swap,
+    write `sizeof(*pointer)` for a struct that `port/linux/network_format.txt`
+    does not list: `tools/network_format.py` takes any struct named in a
+    `sizeof(struct distributed_...)` for one sent whole, and then fails.
 39. PSL1GHT's libnet wrappers (`socket`, `bind`, `poll`, ...) put their
     error in newlib's one `errno`, which all threads share. `ps3_net.c`
     calls `netSocket` and co. and reads `net_errno`, each thread's own.
+40. In the Xbox layer `long` is `int` (`#define long int`), so `long long`
+    is `int int`: an error. Write `int64_t` and `uint64_t` there (KCP's own:
+    `include/halo_ps3_kcp.h`, force-included in `p2p.o` and `ikcp.o`).
+41. newlib's `pthread.h` is empty (no `_POSIX_THREADS`). The Xbox layer's
+    `xbox/include/pthread.h` gives `p2p*.c` mutexes and threads on the host
+    layer (`xbox/ps3_pthread.c`).
+42. The portlibs' Mbed TLS 2.28 headers are on `CFLAGS`' include path. A unit
+    of the vendored Mbed TLS 3.6 needs `MBEDTLS_FLAGS` before `CFLAGS`, else
+    it gets the 2.28 headers (`mbedtls_ms_time_t` unknown).
+43. New files in `port/ps3/xbox/` are ignored (`.gitignore` rule `xbox/`):
+    add each one with `git add -f`.
 
 ## Commands
 
@@ -1202,3 +1243,75 @@ then `./build.sh pkg LOG_IP=<address>`.
   votekick, voice, map share) have no byte swap, so PS3 to PC play of them
   does not work; the game state is 4 MB larger, so saves of older builds do
   not load; lowest free main memory 36 MB (t=52 s).
+- 2026-10-16: The new messages' byte swap (Matt: "Let's work on the
+  connectivity now! Byte-swap them."): `*_byte_swap` functions in
+  `network_actors.c`, `network_coop.c`, `network_voice.c`, `map_share.c`
+  and `network_objects.c` (the damage animations); `network_distributed.c`
+  and `.h` (the structure BSP, the new kinds' cases);
+  `network_server_message_handler.c` (the host's voice chat and map sharing
+  paths, trap 38); `port/ps3/README.md` (network version 29). The other swap
+  lists stay: the merge changed only byte fields of their structs
+  (`structure_bsp_index`, `forced_shader_permutation_index`,
+  `cooperative_flags`), and not the game's packet definitions. Checks: a PC
+  script (the session's scratchpad) computes each struct's layout from the
+  sources: in all 30 swap lists every multi-byte field is swapped once at
+  its size and no byte field is swapped (the message header is the
+  connection's); `tools/network_format.py`: the recorded format; the code of
+  the 8 changed sources without comments differs from HEAD only by the
+  additions (their comments over 2 lines are shortened). The changed units
+  compile with GCC's warnings: none in them. `check` passes (0 `r2off`,
+  `.got` 0x3498). PKG of 01:04 in `build/ps3_swap/`, which holds only this
+  session's edits. Waiting for the test with a PC build of network version
+  29: the tests of "G7 analysis" ("System link"), and a co-op level.
+- 2026-10-16: Internet play (Matt: "Add 1, you can look at my Quake 3 port
+  for reference to that. 2. For the screen, use the small screen in the Xbox
+  menus that list the browser's games and joins one. 3. Sure, implement that
+  one too."). The Xbox layer compiles `port/linux/src/p2p.c`, `p2p_crypto.c`,
+  `p2p_discord.c`, `p2p_lobby.c`, `p2p_signal.c`, `p2p_webrtc.c` and KCP
+  (traps 40, 41; in `p2p.c` and `p2p_signal.c` the network order is the
+  PS3's own). The host layer compiles `port/linux/src/posix_dtls.c` with
+  the vendored Mbed TLS 3.6 (`include/ps3_mbedtls_config.h`,
+  `src/ps3_mbedtls.c`: lv2's random numbers and time; trap 42). New:
+  `src/ps3_upnp.c` (a UPnP client for the tunnel's port), `ps3_net_resolve`
+  (DNS with `netGetHostByName`, as the Quake 3 port's `code/sys/ps3_net.h`
+  does with `gethostbyname`) and `ps3_net_secure_random` in `src/ps3_net.c`,
+  `xbox/posix_ps3.c` (`posix.h` on `src/ps3_net.c`; Discord: -1),
+  `xbox/ps3_pthread.c`. `xbox/xnet_ps3.c` has `xnet.c`'s internet play
+  hooks, and writes `brokers.txt` beside `config.toml` at each start
+  (`port/assets/network/brokers.txt`, as `$(BUILD)/brokers_txt.h`). The
+  Xbox menus (`HALO_PS3`): `menu_tags.c` (`xbox_internet_patch`) puts
+  INTERNET PLAY after SYSTEM LINK PLAY (its description is the fifth) and
+  makes copies of the System Link game list, its description and message,
+  named under `connected\internet\`, so that the stock region check
+  applies; `menu_functions.c` ("xbox internet ...") fills them from the
+  server browser's listings (9 rows that scroll at their ends), joins as
+  the server browser does (`lobby_browser_join`) and opens the Xbox's
+  pregame screen; `ui_widget_event_handler_functions.c` lets those tags run
+  the port's functions. Refused: games with a password, closed games.
+  Not done: Discord (no client on the PS3); a game the PS3 hosts is not
+  listed (its invite is in the log). Checks: the changed game units compile
+  with GCC's warnings (none new); `tools/network_format.py`: the recorded
+  format; the comments longer than 2 lines in the changed files are
+  shortened (the code without comments is the same). `check` passes (0
+  `r2off`, `.got` 0x7ee8). PKG of 03:03 in `build/ps3_p2p/`. The new files
+  in `port/ps3/xbox/` need `git add -f` (trap 43). Matt's run of 03:08 (the
+  log, before his report): STUN gave the public address; 4 public games
+  joined from INTERNET PLAY (ratrace; hangemhigh, 44 players, in progress;
+  wizard; damnation, in progress, 30 fps). In the 44-player game the PS3 ran
+  at 10.8 fps (0.82 game ticks a frame) and its client ended after 10 s.
+- 2026-10-16: LAN PLAY (Matt: "Can you replace the menu voice of "SYSTEM
+  LINK PLAY" with a "LAN PLAY" browser? So we get both of the worlds.").
+  Asked whether LAN PLAY keeps CREATE GAME; Matt: "Keep CREATE GAME". The
+  patch (now `xbox_multiplayer_patch`) puts LAN PLAY in SYSTEM LINK PLAY's
+  place (its description in the same place) and INTERNET PLAY after it. LAN
+  PLAY's screen is a copy of the System Link game list (`connected\lan\`,
+  with CREATE GAME and the stock description and message). Its functions
+  ("xbox lan ...", `menu_functions.c`): the client's games, the open ones
+  first, without internet play's hosts (`game_from_peer`); A or START joins
+  the focused game as player 1 (`multiplayer_player`, `ui_widget_port_join`,
+  the pregame screen); Y, or A or START while it finds none, hosts
+  (`ui_widget_port_host`, then the map select), as System Link's list does.
+  The description panel's update is shared with INTERNET PLAY
+  (`xbox_describe`, with the score limit for LAN games). The changed units
+  compile with GCC's warnings (none); `check` passes (0 `r2off`, `.got`
+  0x7ee8). PKG of 03:41 in `build/ps3_p2p/`. Not tested on hardware.

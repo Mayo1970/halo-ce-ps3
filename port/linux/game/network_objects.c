@@ -203,10 +203,8 @@ struct distributed_object_change
 	byte change;
 	byte flags;
 	byte owner_player_index;
-	/* which bitmap of its shaders it draws with, when not its tag's (0). An
-	AI unit's actor variant sets it after the unit is made
-	(actor_customize_unit): the Elite major's and commander's armor are 1
-	and 2. Builds before it sent 0 here. */
+	/* which bitmap of its shaders it draws with, when not its tag's (0): an actor variant sets it after the unit
+	is made (actor_customize_unit; the Elite major's and commander's armor 1 and 2). Older builds sent 0. */
 	byte forced_shader_permutation_index;
 	long object_index;
 	long definition_index;
@@ -279,9 +277,8 @@ static long objects_host_told[MAXIMUM_TRACKED_OBJECTS];
 static long objects_host_resting_cursor;
 /* ... past the highest of them */
 static long objects_host_told_count;
-/* ... whether each was moving at the last tick, and when each last came to
-rest (NONE: not since it was told of), to send it to every client
-(REST_STATE_REPEATS) */
+/* ... whether each was moving at the last tick, and when each last came to rest (NONE: not since it was told of),
+to send it to every client (REST_STATE_REPEATS) */
 static boolean objects_host_state_moving[MAXIMUM_TRACKED_OBJECTS];
 static long objects_host_rest_times[MAXIMUM_TRACKED_OBJECTS];
 /* ... what each unit's inventory was last sent as (in all, and its weapons and grenades), when to every client,
@@ -592,11 +589,8 @@ static void distributed_vector_clamp(
 	}
 }
 
-/* Whether the object is a vehicle no player drives in co-op (a Pelican on
-its flight path): nothing on a client steers it, so its copy is kept at rest
-there (no physics of its own) and moved only to where the host has it. In
-multiplayer an empty vehicle (one bailed out of, or tumbling) keeps its own
-physics between updates. */
+/* Whether the object is a vehicle no player drives in co-op (a Pelican on its path): kept at rest on a client and
+moved only where the host has it. In multiplayer an empty vehicle keeps its own physics between updates. */
 static boolean distributed_vehicle_unsteered(
 	long object_index)
 {
@@ -619,12 +613,8 @@ static struct biped_datum *distributed_body_get(
 	return biped && TEST_FLAG(biped->object.damage_flags, _object_dead_bit) ? biped : NULL;
 }
 
-/* A body lying limp here, which the host moves: its pose, fixed in the world
-where it came to rest (bipeds.c), would stay there as the body goes, drawn
-hanging in the air or in a wall. Unfixed, as the push of the explosion that
-moved the host's body would have unfixed it here (that push reaches only the
-machines that see the body's player, network_damage.c); it lies limp again
-where it comes to rest (units.c). */
+/* A limp body the host moves: its pose, fixed where it came to rest (bipeds.c), would hang in the air. Unfixed, as the
+host's blast would have done here (it reaches only some machines, network_damage.c); limp again at rest (units.c). */
 static void distributed_body_unfix_pose(
 	long object_index)
 {
@@ -632,11 +622,8 @@ static void distributed_body_unfix_pose(
 		biped_stop_limp_body_physics(object_index);
 }
 
-/* A body at rest or moving as the host has it. Moving, its pose goes with
-it, however close it is. At rest, it is on the ground, as the host's is:
-not airborne, which only its physics clears, and rest stops its physics
-(bipeds.c); left airborne, it would keep the pose of its fall, in the air,
-and never lie limp. */
+/* A body at rest or moving as the host has it; moving, its pose goes with it. At rest it is on the ground: rest stops
+its physics, which alone clears airborne (bipeds.c), and an airborne body keeps its fall's pose, never limp. */
 static void distributed_body_set_at_rest(
 	long object_index,
 	boolean at_rest)
@@ -663,9 +650,8 @@ static boolean distributed_unit_driven_here(
 	return unit->unit.player_index != NONE && distributed_player_is_local(unit->unit.player_index);
 }
 
-/* Whether a client puts its copy exactly where the host has it, rather than
-closing on it: an unsteered vehicle, and anything in a co-op cutscene
-(where it keeps up with the host's camera). */
+/* Whether a client puts its copy exactly where the host has it, rather than closing on it: an unsteered vehicle, and
+anything in a co-op cutscene (where it keeps up with the host's camera). */
 static boolean distributed_object_follows_host(
 	long object_index)
 {
@@ -742,9 +728,8 @@ boolean network_objects_reconcile(
 		distributed_object_move(object_index, position, &valid_forward, &valid_up, velocity, angular_velocity);
 		return TRUE;
 	}
-	/* Move halfway, and draw the move as a glide over the next few frames,
-	as larger corrections are. Drawn as one step, a unit corrected every tick
-	or two (a distant enemy) visibly hitched each time. */
+	/* Move halfway, drawn as a glide over the next few frames as larger corrections are: as one step, a unit
+	corrected every tick or two (a distant enemy) visibly hitched each time. */
 	if (distributed_object_follows_host(object_index))
 		blended = *position;
 	else
@@ -830,14 +815,8 @@ static long distributed_driven_vehicle(
 		object_get(unit_index)->object.parent_object_index : NONE;
 }
 
-/* ---------- damage animations
-
-A unit's flinches and deaths are animations picked by where the damage came
-from and at random among their permutations, so a client replaying the
-host's damage could pick others. The host sends its picks (each in three
-ticks' messages, in case one is lost). A client plays the host's pick when
-it gets there first, or switches to it if its own has only just begun
-(unit_port_correct_damage_animation). */
+/* ---------- damage animations: a client replaying the host's damage could pick other flinches and deaths (random
+permutations), so the host sends its picks, which a client plays or switches to (unit_port_correct_damage_animation) */
 
 enum
 {
@@ -1296,9 +1275,8 @@ static short distributed_host_object_period(
 		count = objects_host_viewers.player_unit_count;
 		origins = objects_host_viewers.player_unit_origins;
 	}
-	/* in a co-op cutscene every client looks through the host's camera, so
-	what it films is sent as often as what's next to the client's players
-	(b30's sword Elite walking out of the door) */
+	/* in a co-op cutscene every client looks through the host's camera, so what it films is sent as often as
+	what's next to the client's players (b30's sword Elite walking out of the door) */
 	if (network_coop_active() && cinematic_in_progress())
 	{
 		real_point3d const *camera = &observer_get_camera(0)->position;
@@ -2277,10 +2255,8 @@ static void distributed_client_create(
 		return;
 	}
 	objects_client_has[absolute_index] = object_index;
-	/* (a unit's grenades are the host's, which its inventories bring: none
-	until they come, not the tag's that unit_new gave it, which the host's
-	game engine replaces with the game's at a player's spawn: a player
-	spawned with the button held threw one here the host's copy had not) */
+	/* (a unit's grenades are the host's, which its inventories bring: none until then, not unit_new's from the tag:
+	a player spawned with the button held threw one here the host's copy had not) */
 	if (TEST_FLAG(_object_mask_unit, object_get(object_index)->object.type))
 		csmemset(unit_get(object_index)->unit.grenade_counts, 0, sizeof(unit_get(object_index)->unit.grenade_counts));
 	distributed_client_apply_change(object_index, change);
@@ -2452,10 +2428,8 @@ void network_objects_handle_states(
 		if (!distributed_object_index_valid(state->object_index) || !network_objects_client_has(state->object_index))
 			continue;
 		object = object_get(state->object_index);
-		/* (the unit's light as the host has it: only presses toggle it here,
-		so one missed, or made before this machine joined, left it wrong for
-		good. Not for what this machine's player drives: their press lands
-		here first) */
+		/* (the unit's light as the host has it: only presses toggle it here, so a missed one left it wrong for
+		good. Not for what this machine's player drives: their press lands here first) */
 		if (TEST_FLAG(state->flags, _distributed_object_light_sent_bit) &&
 			TEST_FLAG(_object_mask_unit, object->object.type) &&
 			!distributed_unit_driven_here(state->object_index))
@@ -2520,9 +2494,8 @@ void network_objects_handle_states(
 				own_vehicle = TRUE;
 			}
 		}
-		/* (at rest as the host has it, however close: a copy left at rest
-		while the host's falls hangs there; but not one this machine drives,
-		which the host's word, a round trip old, would stop as it sets off) */
+		/* (at rest as the host has it, however close: a copy left at rest while the host's falls hangs there; not
+		one this machine drives, which the host's word, a round trip old, would stop as it sets off) */
 		at_rest = TEST_FLAG(state->flags, _distributed_object_at_rest_bit) || distributed_vehicle_unsteered(state->object_index);
 		if (!own_vehicle)
 			SET_FLAG(object->object.flags, _object_at_rest_bit, at_rest);
@@ -2817,9 +2790,8 @@ static void distributed_client_ready_picked_up_weapons(
 				continue;
 			weapon_slot = matched_slot;
 		}
-		/* port: a one-weapon loadout's second weapon is readied when it
-		arrives, including while firing. Dropping the announcement on a
-		held trigger left it holstered until a manual switch. */
+		/* port: a one-weapon loadout's second weapon is readied when it arrives, also while firing (dropped on
+		a held trigger, it stayed holstered until a manual switch) */
 		player_control_set_desired_weapon(unit_index, weapon_slot);
 		unit->unit.desired_weapon_index = weapon_slot;
 		picked_up->definition_index = NONE;
@@ -2990,10 +2962,8 @@ static void distributed_client_remove_own_objects(
 	objects_client_new_object_count = 0;
 }
 
-/* Client: keeps each AI-driven vehicle (such as a Pelican on its flight
-path) moving at the velocity the host last sent. These vehicles are held at
-rest here, and a distant one is only updated every few ticks, so otherwise
-it would stop between updates and jump on each one. */
+/* Client: each AI-driven vehicle (a Pelican on its path) moves at the host's last velocity: held at rest here and a
+distant one updated every few ticks, it would otherwise stop between updates and jump on each one. */
 static void distributed_client_carry_unsteered_vehicles(
 	void)
 {
@@ -3176,6 +3146,15 @@ static void distributed_inventory_byte_swap(
 	BYTE_SWAP_ARRAY(inventory->age);
 }
 
+static void distributed_damage_animation_byte_swap(
+	void *entry)
+{
+	struct distributed_damage_animation *animation = entry;
+
+	BYTE_SWAP_FIELD(animation->unit_index);
+	BYTE_SWAP_FIELD(animation->animation_index);
+}
+
 void network_objects_byte_swap(
 	byte type,
 	byte *entries,
@@ -3196,6 +3175,10 @@ void network_objects_byte_swap(
 	case _distributed_message_inventories:
 		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_inventory),
 			distributed_inventory_byte_swap);
+		break;
+	case _distributed_message_damage_animations:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_damage_animation),
+			distributed_damage_animation_byte_swap);
 		break;
 	}
 }

@@ -58,9 +58,8 @@ enum
 	/* port: the least time between two advertisements of the game
 	(milliseconds: network_game_server_handle_message_client_broadcast_game_search) */
 	GAME_ADVERTISEMENT_INTERVAL = 250,
-	/* port: the least time between two answers to one address's pings, and
-	the addresses kept to tell, no more of them answered in that time
-	(network_game_server_handle_message_client_ping) */
+	/* port: the least time between two answers to one address's pings, and the addresses kept to tell, no more of
+	them answered in that time (network_game_server_handle_message_client_ping) */
 	PING_REPLY_INTERVAL = 250,
 	MAXIMUM_PING_REPLY_ADDRESSES = 32,
 };
@@ -1145,10 +1144,8 @@ boolean network_game_server_handle_client_message(
 							}
 							break;
 
-						/* (port: its own handler, which decodes it as the
-						postgame message it is: the pregame's, which this
-						called, took none out of the pregame, nor could decode
-						one) */
+						/* (port: its own handler, which decodes it as the postgame message it is: the pregame's,
+						which this called, took none out of the pregame, nor could decode one) */
 						case _message_client_graceful_game_exit_postgame:
 							result = network_game_server_handle_message_client_graceful_game_exit_postgame(
 								server,
@@ -1182,6 +1179,10 @@ boolean network_game_server_handle_client_message(
 				{
 					long machine_index;
 
+#ifdef __BIG_ENDIAN__
+					/* (port: to this machine's order, as network_distributed_handle_message puts the others) */
+					network_distributed_byte_swap(message, message_buffer_size, FALSE);
+#endif
 					if (network_game_server_client_machine_is_joined_to_game(server, machine) &&
 						network_game_server_get_client_machine(server, machine, &machine_index))
 					{
@@ -1195,6 +1196,9 @@ boolean network_game_server_handle_client_message(
 				{
 					long machine_index;
 
+#ifdef __BIG_ENDIAN__
+					network_distributed_byte_swap(message, message_buffer_size, FALSE);
+#endif
 					if (network_game_server_client_machine_is_joined_to_game(server, machine) &&
 						network_game_server_get_client_machine(server, machine, &machine_index))
 					{
@@ -1407,6 +1411,10 @@ boolean network_game_server_handle_datagram(
 						network_game_server_get_client_machine_at_address(server, source_address->address.long_words[0]);
 					long machine_index;
 
+#ifdef __BIG_ENDIAN__
+					/* (port: to this machine's order, as network_distributed_handle_message puts the others) */
+					network_distributed_byte_swap(message, datagram_size, FALSE);
+#endif
 					if (client_machine && network_game_server_get_client_machine(server, client_machine, &machine_index))
 						network_voice_handle_message(machine_index, message, datagram_size);
 					break;
@@ -1622,11 +1630,8 @@ static boolean network_game_server_handle_message_client_ping(
 	struct message_server_pong pong;
 	struct network_message *reply;
 	boolean result = FALSE;
-	/* port: an address answered no more often than PING_REPLY_INTERVAL, and
-	no more than MAXIMUM_PING_REPLY_ADDRESSES in that time (the answer goes
-	to the client port at the address it came from, which anyone can send
-	one as: a flood of pings would be a flood of answers, at another's
-	machine). A searching client pings once a second */
+	/* port: an address answered once a PING_REPLY_INTERVAL at most, and MAXIMUM_PING_REPLY_ADDRESSES in that time: a
+	ping comes as from anyone, so a flood would be one of answers at another's machine (a client pings once a second) */
 	static struct
 	{
 		unsigned long address;
@@ -1670,9 +1675,8 @@ static boolean network_game_server_handle_message_client_ping(
 		struct transport_address address;
 		address.address_length = IPV4_ADDRESS_LENGTH;
 		address.address.long_words[0] = source_address->address.long_words[0];
-		/* port: to the client port, as the game's advertisement goes, not
-		the port the ping names (every client names that one; any other
-		was an answer at whatever else listens there) */
+		/* port: to the client port, as the game's advertisement goes, not the port the ping names (every client
+		names that one; any other was an answer at whatever else listens there) */
 		address.port = NETWORK_GAME_CLIENT_PORT;
 		result = network_game_server_write(
 			network_game_server_get_connection(server),

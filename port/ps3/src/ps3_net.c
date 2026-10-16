@@ -12,6 +12,8 @@ SO_NBIO, poll). libnet's own calls: their error is the thread's (net_errno), not
 #include <lv2/system.h>
 #include <net/net.h>
 #include <net/netctl.h>
+#include <sys/mutex.h>
+#include <sys/thread.h>
 #include <sysmodule/sysmodule.h>
 
 #define WSABASEERR 10000
@@ -450,7 +452,68 @@ int ps3_net_local_address(uint32_t *address)
 	return result;
 }
 
+/* ---------- host names */
+
+uint32_t ps3_net_resolve(const char *host)
+{
+	static sys_mutex_t lock;
+	/* 0: none, 1: being made, 2: made, -1: failed */
+	static volatile int lock_made;
+	uint32_t address = parse_ipv4(host);
+	uint32_t local_address;
+	struct net_hostent *entry;
+
+	/* (offline, a lookup would wait long for nothing) */
+	if (address || !host[0] || ps3_net_local_address(&local_address) != 1)
+		return address;
+	/* (one lookup at a time: the answer is the sprx's own) */
+	if (__sync_bool_compare_and_swap(&lock_made, 0, 1))
+	{
+		sys_mutex_attr_t attributes;
+		int made;
+
+		sysMutexAttrInitialize(attributes);
+		made = sysMutexCreate(&lock, &attributes) == 0;
+		__sync_synchronize();
+		lock_made = made ? 2 : -1;
+	}
+	while (lock_made == 1)
+		sysThreadYield();
+	if (lock_made > 0)
+		sysMutexLock(lock, 0);
+	entry = netGetHostByName(host);
+	/* (the system's 32-bit pointers: a list of addresses) */
+	if (entry && entry->h_addrtype == AF_INET && entry->h_length == 4 && entry->h_addr_list)
+	{
+		const uint32_t *list = (const uint32_t *)(uintptr_t)entry->h_addr_list;
+
+		if (list[0])
+			memcpy(&address, (const void *)(uintptr_t)list[0], sizeof(address));
+	}
+	if (lock_made > 0)
+		sysMutexUnlock(lock);
+	if (!address)
+		ps3_log_printf("[net] %s: no address (DNS)\n", host);
+	return address;
+}
+
 /* ---------- random numbers */
+
+int ps3_net_secure_random(void *buffer, uint32_t size)
+{
+	uint8_t *cursor = buffer;
+
+	while (size)
+	{
+		uint32_t chunk = size < RANDOM_NUMBER_MAX_SIZE ? size : RANDOM_NUMBER_MAX_SIZE;
+
+		if (sysGetRandomNumber(cursor, chunk) != 0)
+			return 0;
+		cursor += chunk;
+		size -= chunk;
+	}
+	return 1;
+}
 
 void ps3_net_random(void *buffer, uint32_t size)
 {

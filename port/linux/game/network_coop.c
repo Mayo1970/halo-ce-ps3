@@ -1,68 +1,5 @@
-/*
-NETWORK_COOP.C
-
-Campaign co-op over the network (port/linux/NETCODE.md).
-
-A network game on a campaign map, with no game engine running, is co-op.
-Only the host runs the map's scripts (game.c), so everything the scripts do
-that clients need to see is sent from this file:
-
-- Presentation, every tick: whether a cinematic is playing, the letterbox,
-  the camera, the screen fade, the HUD settings the scripts control (what
-  is shown, the mission timer), the players' maximum vitality, and the
-  cutscene skip vote. A client plays them one a tick by the host's clock, a
-  couple of ticks behind the newest, so the camera keeps an even pace. It
-  starts and stops its own cinematic to match, and looks through the host's
-  camera meanwhile. If the host goes quiet for two seconds, the client ends
-  the cinematic so its players aren't stuck.
-- Events, which happen once: script sounds (dialogue, music, ambience),
-  chapter titles, help and objective text, "Checkpoint" messages, screen
-  shake, nav points, and custom animations on units and scenery. Each is
-  sent in three ticks' messages in case one is lost, and numbered so a
-  client applies each exactly once, in order. The engine calls the
-  network_coop_note_ functions (network_coop.h) to queue them.
-- Devices (doors, elevators, switches, lights). A device moves toward its
-  device group's value (devices.c). On a client nothing sets those values
-  but this file: doors a player walks up to and switches a player uses are
-  decided by the host (the player's action is relayed to it). The host
-  sends a group's value for three ticks when it changes, plus a few groups
-  every tick in rotation, those that have moved since the map loaded more
-  often. A scenario group is identified by its index, which is the same on
-  every machine; a device's own group by the device.
-- Breakable surfaces (glass) the host breaks, each once as it breaks and
-  a few at a time again in rotation (for a late joiner or a lost message).
-- Named objects (scenery and devices) the scripts create or destroy.
-  network_objects.c already handles units, vehicles, weapons and equipment.
-  Twice a second the host sends which object names currently exist. A
-  client that sees the same difference twice in a row, on the same BSP,
-  creates or deletes its copy.
-- State a late joiner would otherwise lack, resent every two seconds and on
-  the tick a machine joins (host_resend): where scripted scenery and
-  machines have moved, how objects look (permutations, scale), what the
-  scripts have attached, the looping sounds playing, the full-screen
-  cinematic effect and the nav points; on a join also the objective, the
-  object names and every device that has moved.
-- The view of a client with nobody to spectate yet: the host's view from
-  behind, eased so it doesn't jerk.
-
-The host also makes up for scripts written for one player: vitality they
-set on player0 is set on every player (a10's shields), and a Pelican's
-Warthog drop brings more Warthogs in a larger game.
-
-Skipping a cutscene is a vote. Pressing the skip key during a skippable
-cutscene votes (a client sends its vote to the host every tick), and the
-host skips once more than half the machines have voted. The skip itself is
-the campaign's: the host reverts to the state saved when the cutscene began
-and the script carries on past it. Clients catch up through the object,
-device and name syncs. The host keeps its clock running through the revert,
-because the netcode needs it to only go forward (network_coop_reverted).
-A failed mission (game_lost, or the scripts' game_revert) reverts the same
-way, rather than leaving the players stuck in the failure's cutscene.
-
-Objects (scenery and devices) that aren't synced by network_objects.c are
-found on a client by their scenario name, or, unnamed, by their object
-index and tag, since the map placed them at the same index everywhere.
-*/
+/* NETWORK_COOP.C: campaign co-op (port/linux/NETCODE.md). Only the host runs the scripts, so this sends what they do:
+the presentation each tick, numbered events, devices, glass, named objects, and what a late joiner lacks. */
 
 /* ---------- headers */
 
@@ -117,9 +54,8 @@ index and tag, since the map placed them at the same index everywhere.
 
 /* ---------- constants */
 
-/* A joining player with nobody to spectate yet watches the host's view
-from this far behind and above the host's eyes, easing a fraction of the way
-toward it each tick. */
+/* A joining player with nobody to spectate yet watches the host's view from this far behind and above the host's
+eyes, easing a fraction of the way toward it each tick. */
 #define WATCH_HOST_DISTANCE 3.0f
 #define WATCH_HOST_HEIGHT 1.0f
 #define WATCH_HOST_FOLLOW 0.2f
@@ -128,10 +64,8 @@ toward it each tick. */
 missed a message, would lack (host_resend) */
 #define OBJECT_REFRESH_TICKS (2 * TICKS_PER_SECOND)
 
-/* the screen effect a client takes from its host: the rasterizer's
-convolution types (none, blur, warp) and video overbright modes
-(rasterizer_xbox_screen_effect.c), and at most this many extra convolution
-passes, more than any script asks for */
+/* the screen effect a client takes from its host: the rasterizer's convolution types (none, blur, warp) and video
+overbright modes (rasterizer_xbox_screen_effect.c), and at most this many extra passes, more than any script asks */
 #define SCREEN_EFFECT_CONVOLUTION_TYPES 3
 #define SCREEN_EFFECT_OVERBRIGHT_MODES 3
 #define SCREEN_EFFECT_MAXIMUM_EXTRA_PASSES 8
@@ -143,9 +77,8 @@ enum
 	CAMERA_OBJECT_DISTANCE = 8,
 	/* a client ends the cinematic after this long without hearing from the host */
 	PRESENTATION_SILENCE_TICKS = 2 * TICKS_PER_SECOND,
-	/* A client plays the host's presentations (its cutscene camera, fades,
-	letterbox) one a tick, about this many ticks behind the newest it has,
-	so they keep an even pace however unevenly the network delivers them. */
+	/* A client plays the host's presentations (its cutscene camera, fades, letterbox) one a tick, about this many
+	ticks behind the newest it has, so they keep an even pace however unevenly the network delivers them. */
 	PRESENTATION_DELAY_TICKS = 2,
 	PRESENTATION_BUFFER_COUNT = 8,
 	/* the field of view (radians) is sent as a word, scaled by this */
@@ -274,22 +207,18 @@ struct distributed_coop_presentation
 	byte camera_scripted;
 	/* whether the scripts hold the players' controls (player_enable_input) */
 	byte input_disabled;
-	/* the object the camera films (camera_object_get) and the camera's
-	offset from it: a client puts its camera by its own copy, which its
-	timing may have a tick from the host's */
+	/* the object the camera films (camera_object_get) and the camera's offset from it: a client puts its camera by
+	its own copy, which its timing may have a tick from the host's */
 	long camera_object_index;
 	real_vector3d camera_object_offset;
-	/* whether the scripts' screen shake is running on the host. A client
-	whose shake outlives it (the stop was skipped with a cutscene, or lost)
-	ends its own. */
+	/* whether the scripts' screen shake is running on the host: a client whose shake outlives it (the stop was
+	skipped with a cutscene, or lost) ends its own */
 	byte scripted_shake;
 	/* whether the scripts have set the players' maximum vitality, and to
 	what (network_coop_set_players_vitality) */
 	byte players_vitality_set;
-	/* the cluster the scripts keep active (object_pvs_activate) plus one,
-	0 for none: a cutscene filmed far from every player (b30's Elite at the
-	shaft door) is active on the clients too. Plus one so the zeroed padding
-	of a host without it reads as none. */
+	/* the cluster the scripts keep active (object_pvs_activate) plus one, so a host without it (0) sends none: a
+	cutscene filmed far from every player (b30's Elite at the shaft door) is active on the clients too */
 	short activating_cluster;
 	real players_maximum_body_vitality;
 	real players_maximum_shield_vitality;
@@ -305,18 +234,8 @@ struct distributed_coop_presentation_message
 	struct distributed_coop_presentation presentation;
 };
 
-/* Something that happens once. Which fields mean what depends on the kind:
-
-	sound             type: _coop_sound_ kind; tag_index; object_index (the source, or NONE); reals[0]: scale
-	title             value: title index; reals[0]: delay in seconds
-	hud               type: _coop_hud_ kind; value
-	player_effect     type: _coop_player_effect_ kind; reals: the function's arguments
-	nav_point         type: _coop_nav_point_ kind; value: nav index (NONE to deactivate);
-	                  target: team or unit; object_index: cutscene flag or object; reals[0]: offset
-	unit_animation    object_index: unit; tag_index: graph (NONE: stop); value: animation;
-	                  frame; interpolate
-	scenery_animation object_index, name_index, definition_index: the scenery; tag_index: graph;
-	                  value: animation; frame */
+/* Something that happens once, its fields by kind (the network_coop_note_ functions): a sound's type, tag_index, source
+object and reals[0] scale; a title's value and delay; an animation's object, graph (tag_index), value and frame. */
 struct distributed_coop_event
 {
 	byte kind;
@@ -340,9 +259,8 @@ struct distributed_coop_events_message
 	struct distributed_coop_event events[MAXIMUM_QUEUED_EVENTS];
 };
 
-/* A device group's state. group_index is set for a scenario group. For a
-device's own group it is NONE, and the device is found by name_index, or
-(unnamed) by object_index and definition_index. */
+/* A device group's state: group_index for a scenario group; NONE for a device's own group, the device found by
+name_index, or (unnamed) by object_index and definition_index. */
 struct distributed_coop_device_group
 {
 	short group_index;
@@ -380,9 +298,8 @@ struct distributed_coop_object_names_message
 	struct distributed_coop_object_names names;
 };
 
-/* Where one of the host's scenery or machines is. Scripts move them (a
-cutscene's drop pod) and nothing else tells a client. Found as the
-scenery animations' are (object_find). */
+/* Where one of the host's scenery or machines is: scripts move them (a cutscene's drop pod) and nothing else tells
+a client. Found as the scenery animations' are (object_find). */
 struct distributed_coop_object_transform
 {
 	short name_index;
@@ -403,9 +320,8 @@ struct distributed_coop_object_transforms_message
 	struct distributed_coop_object_transform transforms[MAXIMUM_OBJECT_TRANSFORMS_PER_MESSAGE];
 };
 
-/* How one of the host's objects looks: the permutation of each region of
-its model (NONE for none) and its scale. The scripts change them (a
-helmet off, a ship scaled) and so does damage. */
+/* How one of the host's objects looks: the permutation of each region of its model (NONE for none) and its scale,
+which the scripts change (a helmet off, a ship scaled), and damage too. */
 struct distributed_coop_object_look
 {
 	short name_index;
@@ -453,9 +369,8 @@ static struct
 	real_vector3d watching_host_forward;
 	long heard_time;
 	long fade_start_time;
-	/* the host's presentations as they arrived, by the host's tick; the
-	newest tick heard and the tick last played (nothing is played until
-	one has been heard) */
+	/* the host's presentations as they arrived, by the host's tick; the newest tick heard and the tick last played
+	(nothing is played until one has been heard) */
 	struct distributed_coop_presentation buffered[PRESENTATION_BUFFER_COUNT];
 	long buffered_times[PRESENTATION_BUFFER_COUNT];
 	boolean heard_any;
@@ -493,9 +408,8 @@ static struct
 	struct distributed_coop_device_groups_message message;
 } host_devices;
 
-/* The players' maximum vitality, once the scripts have set a player's: on
-the host as they set it, on a client as the host's presentation has it.
-Every player's unit is kept at it, a new one included. */
+/* The players' maximum vitality, once the scripts have set a player's: on the host as they set it, on a client as
+the host's presentation has it. Every player's unit is kept at it, a new one included. */
 static struct
 {
 	boolean set;
@@ -503,10 +417,8 @@ static struct
 	real maximum_shield;
 } players_vitality;
 
-/* host: the client machines it had last tick. On the tick a new one
-appears, and every OBJECT_REFRESH_TICKS, the state a client that joined
-since would lack is sent again (refresh), and on the join every device that
-has moved since the map loaded too (joined). */
+/* host: the client machines it had last tick. When a new one appears, and every OBJECT_REFRESH_TICKS, what a late
+joiner lacks is sent again (refresh); on a join, every device moved since the map loaded too (joined). */
 static struct
 {
 	long machines[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
@@ -538,9 +450,8 @@ static struct
 /* client: the object names that differed from the host's last time */
 static byte client_names_differing[OBJECT_NAME_BYTES];
 
-/* The cutscene skip vote. The host records when it last heard from each
-client that is showing the cutscene, and when that client last voted. A
-client keeps the host's latest tally for display. */
+/* The cutscene skip vote: the host keeps when it last heard from each client showing the cutscene, and when that
+client last voted; a client keeps the host's latest tally for display. */
 static struct
 {
 	boolean voted;
@@ -648,10 +559,8 @@ static short object_name_type(
 	return TAG_BLOCK_GET_ELEMENT(&scenario->object_names, name_index, struct scenario_object_name)->runtime_object_type;
 }
 
-/* Client: finds the local copy of an object the host named, of one of the
-types in type_mask, and returns its index (or NONE). An unnamed object sits
-at the same object index on every machine; if its salt differs here,
-matching the absolute index is enough, as long as the tag matches too. */
+/* Client: the local copy of an object the host named, of type_mask, or NONE. An unnamed object is at the same index on
+every machine; if its salt differs here, the absolute index will do, as long as the tag matches too. */
 static long object_find(
 	short name_index,
 	long object_index,
@@ -851,11 +760,8 @@ static short device_group_find(
 		device_group_network_get(group_index, &value, &flags, &runtime) && runtime ? group_index : NONE;
 }
 
-/* host: sends the groups that changed, plus the next few in each rotation:
-one through every group, and a quicker one through the groups that have
-moved since the map loaded. A late joiner loaded the same map, so those are
-the ones it lacks, and a level's few moved devices (a light bridge) reach it
-within a tick or two instead of after a pass through hundreds. */
+/* host: the groups that changed, and the next few of two rotations: through every group, and quicker through those
+moved since the map loaded (what a late joiner lacks: a light bridge reaches it in a tick or two, not after hundreds) */
 static void host_send_device_groups(
 	void)
 {
@@ -915,9 +821,8 @@ static void host_send_device_groups(
 	host_devices.refresh_next = count ? (short)((host_devices.refresh_next + DEVICE_GROUP_REFRESHES_PER_TICK) % count) : 0;
 	host_devices.moved_refresh_next = moved_count ?
 		(short)((host_devices.moved_refresh_next + DEVICE_GROUP_REFRESHES_PER_TICK) % moved_count) : 0;
-	/* (in messages of at most MAXIMUM_DEVICE_GROUPS_PER_MESSAGE, since a
-	message counts its entries in a byte: each moved to the front, where the
-	message's entries begin, over those already sent) */
+	/* (in messages of at most MAXIMUM_DEVICE_GROUPS_PER_MESSAGE, a message counting its entries in a byte: each
+	moved to the front, where the message's entries begin, over those already sent) */
 	for (index = 0; index < sent; index += MAXIMUM_DEVICE_GROUPS_PER_MESSAGE)
 	{
 		short message_count = (short)MIN(sent - index, MAXIMUM_DEVICE_GROUPS_PER_MESSAGE);
@@ -929,9 +834,8 @@ static void host_send_device_groups(
 	}
 }
 
-/* Where one of the host's devices is: its position (open, closed, how far
-up an elevator has gone) and power, which the device groups' values only
-aim it at. Found as the scenery animations' are (object_find). */
+/* Where one of the host's devices is: its position (open, closed, how far up an elevator is) and power, which the
+device groups' values only aim it at. Found as the scenery animations' are (object_find). */
 struct distributed_coop_device_state
 {
 	short name_index;
@@ -951,9 +855,8 @@ struct distributed_coop_device_states_message
 	struct distributed_coop_device_state states[MAXIMUM_DEVICE_STATES_PER_MESSAGE];
 };
 
-/* a client puts its device where the host's is when the host's is at rest
-there, or when the two are this far apart while it moves (of the device's
-travel, 0 to 1) */
+/* a client puts its device where the host's is when the host's is at rest there, or when the two are this far
+apart while it moves (of the device's travel, 0 to 1) */
 #define DEVICE_POSITION_TOLERANCE 0.03f
 
 /* host: each device's position and power as last sent, by its absolute
@@ -1152,12 +1055,8 @@ static void host_send_object_looks(
 		send_to_clients(&message, _distributed_message_coop_object_looks, count, sizeof(message.looks[0]));
 }
 
-/* ---------- the cinematic screen effect
-
-The scripts' full-screen effects (cinematic_screen_effect_*: blur, warp,
-light enhancement, desaturation, the video effect) are state the host's
-scripts set and a client's never do. The host sends it when it changes and
-every OBJECT_REFRESH_TICKS, for a client that joined since or missed it. */
+/* ---------- the cinematic screen effect: the scripts' full-screen effects (blur, warp, light enhancement,
+desaturation, video), which only the host's scripts set: sent when it changes and every OBJECT_REFRESH_TICKS */
 
 struct distributed_coop_screen_effect_message
 {
@@ -1205,9 +1104,8 @@ void network_coop_handle_screen_effect(
 		if (!distributed_real_valid(reals[index]))
 			return;
 	}
-	/* (what the rasterizer can draw: its convolution types and overbright
-	modes, a script's few extra passes, and video with no convolution, as
-	rasterizer_screen_effect_set_video leaves it) */
+	/* (what the rasterizer can draw: its convolution types and overbright modes, a script's few extra passes, and
+	video with no convolution, as rasterizer_screen_effect_set_video leaves it) */
 	state.convolution_type = (short)PIN(state.convolution_type, 0, SCREEN_EFFECT_CONVOLUTION_TYPES - 1);
 	state.convolution_extra_passes = (short)PIN(state.convolution_extra_passes, 0, SCREEN_EFFECT_MAXIMUM_EXTRA_PASSES);
 	state.video_overbright_mode = (short)PIN(state.video_overbright_mode, 0, SCREEN_EFFECT_OVERBRIGHT_MODES - 1);
@@ -1242,9 +1140,8 @@ static struct
 } host_attachments[MAXIMUM_ATTACHMENTS];
 static short host_attachment_count;
 
-/* host: the HUD state the scripts set that a late joiner would lack: the
-objective, and the nav points active (their kind, nav index, target, marker
-and offset as the note was given), resent by host_send_hud_state */
+/* host: the HUD state the scripts set that a late joiner would lack: the objective, and the nav points active (kind,
+nav index, target, marker and offset as noted), resent by host_send_hud_state */
 enum
 {
 	MAXIMUM_NAV_POINTS = 16,
@@ -1311,9 +1208,8 @@ static void skip_vote_clear(
 	}
 }
 
-/* host: counts the votes to skip the cinematic, and skips when more than
-half the machines showing it have voted (one still loading, or joined since
-it began, has no say until it shows it) */
+/* host: counts the votes to skip the cinematic, and skips when more than half the machines showing it have voted (one
+still loading, or joined since it began, has no say until it shows it) */
 static void host_count_skip_votes(
 	void)
 {
@@ -1324,10 +1220,8 @@ static void host_count_skip_votes(
 	boolean was_offered = skip_vote.offered;
 	short index;
 
-	/* Wait until the save the script makes when the cutscene becomes
-	skippable has been written; reverting earlier would go back to the save
-	before it. A save requested later in the cutscene doesn't hold up the
-	vote, since the skip cancels it, as in a solo game. */
+	/* Wait until the save the script makes when the cutscene becomes skippable is written (reverting earlier goes
+	back to the save before it). A later save doesn't hold up the vote: the skip cancels it, as in a solo game. */
 	if (!skippable)
 		skip_vote.skip_save_written = FALSE;
 	else if (!main_saving_map())
@@ -1375,10 +1269,8 @@ camera films when the scripts don't name it */
 #define CAMERA_MINIMUM_FIELD_OF_VIEW 0.001f
 #define CAMERA_MAXIMUM_FIELD_OF_VIEW (_pi / 2.0f)
 
-/* Host: the object the cutscene camera films: the nearest vehicle moving
-close to it (a camera riding along with a drop pod or a Pelican), else the
-one the scripts set it relative to; NONE for a camera on its own. The last
-one is kept while it stays close, so the camera doesn't jump between two. */
+/* Host: the object the cutscene camera films: the nearest vehicle moving close to it (a drop pod, a Pelican), else the
+one the scripts set it relative to, NONE for none; the last kept while close, so the camera doesn't jump between two. */
 static long camera_object_get(
 	struct observer_result const *camera)
 {
@@ -1482,10 +1374,8 @@ static void client_cinematic_end(
 	cinematic_stop();
 }
 
-/* client with nothing else to watch: moves the camera (position, forward,
-up) behind and above the host's eyes, like spectating a teammate. It eases
-toward the target so the host looking around doesn't jerk it. Returns
-whether the result is a camera the observer can accept. */
+/* client with nothing else to watch: the camera behind and above the host's eyes, like spectating a teammate, eased so
+the host looking around doesn't jerk it; whether the result is a camera the observer can accept */
 static boolean client_watch_host_from_behind(
 	real_point3d *position,
 	real_vector3d *forward,
@@ -1749,10 +1639,8 @@ static short object_marker_index(
 	return model_index != NONE && marker_name && marker_name[0] ? model_find_marker(model_index, marker_name) : NONE;
 }
 
-/* An attach or a detach. The parent is object_index, name_index and
-definition_index; the child is target, with its definition in tag_index and
-its name index in reals[0]; value and frame are the parent's and the child's
-markers. */
+/* An attach or a detach: the parent is object_index, name_index and definition_index; the child target, its definition
+tag_index and its name index reals[0]; value and frame the parent's and the child's markers. */
 static void client_apply_attach(
 	struct distributed_coop_event const *event)
 {
@@ -1901,9 +1789,8 @@ static boolean tag_name_has(
 	return definition_index != NONE && strstr(tag_get_name(definition_index), text) != NULL;
 }
 
-/* each tick: every player's unit at the players' maximum vitality. The
-host's own units get their current vitality full, as the scripts' set does;
-a client's follows the host's damage states. */
+/* each tick: every player's unit at the players' maximum vitality. The host's own units get their current vitality
+full, as the scripts' set does; a client's follows the host's damage states. */
 static void players_vitality_keep(
 	void)
 {
@@ -1962,9 +1849,8 @@ void network_coop_new_game(
 	coop_enemies_new_game();
 }
 
-/* A network game on a campaign scenario with no game engine. Checking the
-scenario matters: the main menu's scene keeps running while a network game
-is set up, also with no game engine, and it is not co-op. */
+/* A network game on a campaign scenario with no game engine. The scenario matters: the main menu's scene runs while a
+network game is set up, also with no game engine, and it is not co-op. */
 boolean network_coop_active(
 	void)
 {
@@ -1990,11 +1876,8 @@ boolean network_coop_devices_remote(
 	return coop_client();
 }
 
-/* units.c: a vehicle left the vehicle carrying it. When a Pelican drops a
-Warthog in a larger game, the host drops more beside it, so every player has
-a ride: one Warthog for every four players, at most five. They go side by
-side, alternately left and right, each only where no wall stands between it
-and the first, and reach the clients as any vehicle does. */
+/* units.c: a vehicle left the vehicle carrying it. A Pelican's Warthog drop in a larger game brings more beside it (one
+for every four players, at most five), left and right where no wall stands between; clients get them as any vehicle. */
 void network_coop_vehicle_dropped(
 	long vehicle_index,
 	long carrier_index)
@@ -2036,11 +1919,8 @@ void network_coop_vehicle_dropped(
 	error(_error_silent, "co-op: a Pelican dropped %d more Warthogs for %d players", placed, coop_player_count());
 }
 
-/* unit_scripting_commands.c: the scripts set a unit's maximum (maximum
-TRUE) or current vitality. Campaign scripts name only player0 for what
-every player should have, so in co-op a player's is set on every player's
-unit, and a maximum is kept for those spawned later and sent to the
-clients. FALSE if the unit isn't a co-op player's, for the caller to set. */
+/* unit_scripting_commands.c: the scripts set a unit's maximum or current vitality. They name only player0, so in co-op
+it goes on every player's unit (a maximum kept for later spawns and the clients); FALSE: not a co-op player's. */
 boolean network_coop_set_players_vitality(
 	long unit_index,
 	boolean maximum,
@@ -2094,9 +1974,8 @@ static short host_looping_sound_find(
 	return NONE;
 }
 
-/* host, each tick: a looping sound that stopped without the scripts
-stopping it (it ended, or a skipped cutscene's revert took it) is stopped on
-the clients too; the rest are started again with the resent state */
+/* host, each tick: a looping sound that stopped without the scripts stopping it (it ended, or a skipped cutscene's
+revert took it) is stopped on the clients too; the rest are started again with the resent state */
 static void host_send_looping_sounds(
 	void)
 {
@@ -2319,9 +2198,8 @@ void network_coop_note_unit_open(
 	event->value = (short)open;
 }
 
-/* unit_custom_animation_at_frame starts the animation and then sets the
-frame in the same call, so the start is still queued and unsent: the frame
-goes into it */
+/* unit_custom_animation_at_frame starts the animation and then sets the frame in the same call, so the start is still
+queued and unsent: the frame goes into it */
 void network_coop_note_unit_animation_frame(
 	long unit_index,
 	short frame_index)
@@ -2559,15 +2437,8 @@ boolean network_coop_vote_skip(
 	return TRUE;
 }
 
-/* The host reverted its game state, clock included. The clock is
-put back, since clients and the netcode expect it to only go forward, and
-the script threads' wake times move by the same amount so they still wake
-when they would have. The revert also renumbered the input queues from the
-old clock (update_queues_reset_and_fill_with_lies); they are renumbered
-from the restored one, or no tick would run until they caught up. And the
-revert is stamped with the restored time, since the script's game_reverted
-compares the stamp with the clock: otherwise it would play the cinematic
-it was meant to skip. */
+/* The host reverted its game state, clock included: the clock is put back (the netcode needs it to only go forward),
+and the scripts' wake times, input queues and revert stamp follow it (else game_reverted replays the cinematic). */
 void network_coop_reverted(
 	long now)
 {
@@ -2872,9 +2743,8 @@ void network_coop_handle_device_groups(
 		if (!distributed_real_valid(entry->value))
 			continue;
 		value = PIN(entry->value, 0.0f, 1.0f);
-		/* Jump straight to the value when the host did, or when a rotation
-		entry disagrees with us (we missed the change, or joined late).
-		A change entry animates, as it did on the host. */
+		/* Jump straight to the value when the host did, or when a rotation entry disagrees with us (we missed the
+		change, or joined late). A change entry animates, as it did on the host. */
 		snap = (client_devices.seen[group_index] && entry->snaps != client_devices.snaps[group_index]) ||
 			(!entry->changed && value != here);
 		if (snap || value != here || entry->flags != (byte)flags)
@@ -2884,9 +2754,8 @@ void network_coop_handle_device_groups(
 	}
 }
 
-/* Client: creates or deletes named scenery and devices to match the host.
-A difference must show up twice in a row, on the same BSP, so a message
-that crosses a BSP switch or a script's create can't cause a false one. */
+/* Client: creates or deletes named scenery and devices to match the host. A difference must show twice in a row, on
+the same BSP, so a message that crosses a BSP switch or a script's create can't cause a false one. */
 void network_coop_handle_object_names(
 	void const *entries)
 {
@@ -3005,12 +2874,8 @@ static void client_presentation_apply(
 	{
 		client_cinematic_end();
 	}
-	/* Use the host's camera while its scripts control it. Spectate instead
-	when the cutscene leaves the camera with the player, or when the watched
-	teammate rides an AI-flown Pelican (a level's insertion): shots filmed
-	beside a moving Pelican shake against this machine's copy of it. A player
-	with no unit and nobody to watch also gets the host's view, rather than
-	a dead camera at the world origin. */
+	/* The host's camera while its scripts control it, else spectating (also when the teammate rides an AI-flown
+	Pelican: shots beside it shake against this copy); no unit and no one to watch: the host's view, not the origin. */
 	client_host_camera_set((coop_presentation.cinematic_started && presentation->camera_scripted &&
 		!coop_spectate_watching_rider(0)) || coop_spectate_nothing_to_watch(0));
 	if (coop_presentation.cinematic_started)
@@ -3075,8 +2940,7 @@ static void client_presentation_apply(
 	client_apply_hud_state(presentation);
 }
 
-/* client, each tick: plays the next of the host's presentations. It moves
-one host tick a tick, two when it has fallen behind, and waits when it has
+/* client, each tick: plays the next of the host's presentations, one host tick a tick (two when behind), waiting once
 caught up with the newest; a lost tick's place is taken by the one before. */
 static void client_play_presentation(
 	void)
@@ -3111,3 +2975,174 @@ static void client_play_presentation(
 	if (presentation)
 		client_presentation_apply(presentation);
 }
+
+#ifdef __BIG_ENDIAN__
+/* ---------- byte order: the PC builds send the entries as their memory has them (network_distributed.h) */
+
+static void distributed_coop_presentation_byte_swap(
+	void *entry)
+{
+	struct distributed_coop_presentation *presentation = entry;
+
+	BYTE_SWAP_FIELD(presentation->fade_ticks);
+	BYTE_SWAP_FIELD(presentation->fade_elapsed);
+	BYTE_SWAP_FIELD(presentation->fade_start_time);
+	BYTE_SWAP_REALS(presentation->camera_position);
+	BYTE_SWAP_SHORTS(presentation->camera_forward);
+	BYTE_SWAP_SHORTS(presentation->camera_up);
+	BYTE_SWAP_FIELD(presentation->camera_field_of_view);
+	BYTE_SWAP_FIELD(presentation->unit_hud_flags);
+	BYTE_SWAP_FIELD(presentation->weapon_hud_flags);
+	BYTE_SWAP_FIELD(presentation->timer_reference_time);
+	BYTE_SWAP_FIELD(presentation->timer_ticks);
+	BYTE_SWAP_FIELD(presentation->timer_flash_cutoff);
+	BYTE_SWAP_FIELD(presentation->timer_x);
+	BYTE_SWAP_FIELD(presentation->timer_y);
+	BYTE_SWAP_FIELD(presentation->timer_corner);
+	BYTE_SWAP_FIELD(presentation->camera_object_index);
+	BYTE_SWAP_REALS(presentation->camera_object_offset);
+	BYTE_SWAP_FIELD(presentation->activating_cluster);
+	BYTE_SWAP_FIELD(presentation->players_maximum_body_vitality);
+	BYTE_SWAP_FIELD(presentation->players_maximum_shield_vitality);
+	/* (bit vectors of longs: BIT_VECTOR_TEST_FLAG) */
+	BYTE_SWAP_ARRAY(presentation->ally_teams);
+	BYTE_SWAP_ARRAY(presentation->friendly_teams);
+}
+
+static void distributed_coop_device_group_byte_swap(
+	void *entry)
+{
+	struct distributed_coop_device_group *group = entry;
+
+	BYTE_SWAP_FIELD(group->group_index);
+	BYTE_SWAP_FIELD(group->name_index);
+	BYTE_SWAP_FIELD(group->object_index);
+	BYTE_SWAP_FIELD(group->definition_index);
+	BYTE_SWAP_FIELD(group->value);
+}
+
+/* (the names' bits are bytes) */
+static void distributed_coop_object_names_byte_swap(
+	void *entry)
+{
+	struct distributed_coop_object_names *names = entry;
+
+	BYTE_SWAP_FIELD(names->structure_bsp_index);
+	BYTE_SWAP_FIELD(names->name_count);
+}
+
+static void distributed_coop_event_byte_swap(
+	void *entry)
+{
+	struct distributed_coop_event *event = entry;
+
+	BYTE_SWAP_FIELD(event->number);
+	BYTE_SWAP_FIELD(event->value);
+	BYTE_SWAP_FIELD(event->frame);
+	BYTE_SWAP_FIELD(event->name_index);
+	BYTE_SWAP_FIELD(event->object_index);
+	BYTE_SWAP_FIELD(event->target);
+	BYTE_SWAP_FIELD(event->tag_index);
+	BYTE_SWAP_FIELD(event->definition_index);
+	BYTE_SWAP_ARRAY(event->reals);
+}
+
+static void distributed_coop_object_transform_byte_swap(
+	void *entry)
+{
+	struct distributed_coop_object_transform *transform = entry;
+
+	BYTE_SWAP_FIELD(transform->name_index);
+	BYTE_SWAP_FIELD(transform->object_index);
+	BYTE_SWAP_FIELD(transform->definition_index);
+	BYTE_SWAP_REALS(transform->position);
+	BYTE_SWAP_SHORTS(transform->forward);
+	BYTE_SWAP_SHORTS(transform->up);
+}
+
+static void distributed_coop_object_look_byte_swap(
+	void *entry)
+{
+	struct distributed_coop_object_look *look = entry;
+
+	BYTE_SWAP_FIELD(look->name_index);
+	BYTE_SWAP_FIELD(look->object_index);
+	BYTE_SWAP_FIELD(look->definition_index);
+	BYTE_SWAP_FIELD(look->scale);
+}
+
+static void distributed_coop_screen_effect_byte_swap(
+	void *entry)
+{
+	struct rasterizer_screen_effect_port_state *state = entry;
+
+	BYTE_SWAP_FIELD(state->convolution_extra_passes);
+	BYTE_SWAP_FIELD(state->convolution_type);
+	BYTE_SWAP_FIELD(state->video_overbright_mode);
+	BYTE_SWAP_REALS(state->filter_desaturation_tint);
+	BYTE_SWAP_FIELD(state->video_noise_intensity);
+	BYTE_SWAP_ARRAY(state->convolution_radius);
+	BYTE_SWAP_ARRAY(state->convolution_time);
+	BYTE_SWAP_ARRAY(state->filter_light_enhancement_intensity);
+	BYTE_SWAP_ARRAY(state->filter_desaturation_intensity);
+	BYTE_SWAP_ARRAY(state->filter_time);
+	BYTE_SWAP_ARRAY(state->script_values);
+	BYTE_SWAP_FIELD(state->near_clip_distance);
+}
+
+static void distributed_coop_device_state_byte_swap(
+	void *entry)
+{
+	struct distributed_coop_device_state *state = entry;
+
+	BYTE_SWAP_FIELD(state->name_index);
+	BYTE_SWAP_FIELD(state->object_index);
+	BYTE_SWAP_FIELD(state->definition_index);
+	BYTE_SWAP_FIELD(state->position);
+	BYTE_SWAP_FIELD(state->power);
+}
+
+/* (the skip votes are bytes) */
+void network_coop_byte_swap(
+	byte type,
+	byte *entries,
+	short count,
+	byte const *end)
+{
+	switch (type)
+	{
+	case _distributed_message_coop_presentation:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_coop_presentation),
+			distributed_coop_presentation_byte_swap);
+		break;
+	case _distributed_message_coop_device_groups:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_coop_device_group),
+			distributed_coop_device_group_byte_swap);
+		break;
+	case _distributed_message_coop_object_names:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_coop_object_names),
+			distributed_coop_object_names_byte_swap);
+		break;
+	case _distributed_message_coop_events:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_coop_event),
+			distributed_coop_event_byte_swap);
+		break;
+	case _distributed_message_coop_object_transforms:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_coop_object_transform),
+			distributed_coop_object_transform_byte_swap);
+		break;
+	case _distributed_message_coop_object_looks:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_coop_object_look),
+			distributed_coop_object_look_byte_swap);
+		break;
+	case _distributed_message_coop_screen_effect:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct rasterizer_screen_effect_port_state),
+			distributed_coop_screen_effect_byte_swap);
+		break;
+	case _distributed_message_coop_device_states:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_coop_device_state),
+			distributed_coop_device_state_byte_swap);
+		break;
+	}
+}
+#endif

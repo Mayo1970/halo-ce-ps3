@@ -116,6 +116,11 @@ static void thread_state_release(void)
 	}
 }
 
+void platform_thread_exited(void)
+{
+	thread_state_release();
+}
+
 static void note_wait(void *site)
 {
 	struct thread_state *state = thread_state_get();

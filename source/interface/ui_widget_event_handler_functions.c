@@ -1122,9 +1122,8 @@ static boolean pause_game_quit_to_main_menu(
 	struct event_record *event,
 	boolean *widget_deleted)
 {
-	/* port: in co-op, take every player on this machine out of the network
-	game with one press (not one per split screen player). The solo save is
-	left alone. */
+	/* port: in co-op, take every player on this machine out of the network game with one press (not one per split
+	screen player). The solo save is left alone. */
 	if (network_coop_active())
 	{
 		short controller_index;
@@ -1536,9 +1535,8 @@ static boolean network_game_remove_local_player(
 	match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 4073,
 		event && event->controller_index >= 0 && event->controller_index < 4,
 		"valid controller index required to remove player from network game");
-	/* port: a multiplayer map played alone (its pause screen: ui_widget.c's
-	ui_check_for_pause_game) has no network game to leave: the main menu,
-	the map not saved (as the campaign's pause screen quits it) */
+	/* port: a multiplayer map played alone (its pause screen: ui_widget.c's ui_check_for_pause_game) has no network
+	game to leave: the main menu, the map not saved (as the campaign's pause screen quits it) */
 	if (!global_network_game_client_get())
 	{
 		main_goto_main_menu();
@@ -2109,8 +2107,7 @@ static boolean multiplayer_level_list_initialize(
 	match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 1229,
 		definition->child_count == 3,
 		"expected 3 list items for 'multiplayer level list' widget");
-	/* port: the Xbox levels, then the Custom Edition maps in the maps
-	folders, looked for again as the list opens
+	/* port: the Xbox levels, then the Custom Edition maps in the maps folders, looked for again as the list opens
 	(port/linux/game/custom_edition_maps.c) */
 	custom_edition_maps_look_again();
 	levels = custom_edition_maps_level_list(event_handler_functions.multiplayer_levels, level_count,
@@ -2492,20 +2489,16 @@ static boolean multiplayer_profiles_list_initialize(
 	return TRUE;
 }
 
-/* port: whether a widget of a map's may not run an event handler's function.
-A widget's handlers name the functions they run by their index in the
-function table, which nothing checks, so a game map's widget could run the
-main menu's functions (deleting player and playlist profiles, saving them,
-running the demos) and the port's own (writing config.toml, quitting,
-connecting), on its created event too, as its screen opens. The shipped
-game maps' widgets (their pause screens) run none of these: the port's own
-menus' tags (pc_menu_tag) may run the port's, and the main menu (ui.map)
-the main menu's. Logged once */
+/* port: whether a map's widget may not run a handler's function: tags name them by an unchecked index, so a game map
+could delete profiles or write config.toml; only the port's tags (pc_menu_tag) run the port's, ui.map the main menu's */
 static boolean ui_widget_function_denied(
 	struct widget_instance *widget,
 	word function_index)
 {
 	extern boolean pc_menu_tag(long tag_index);
+#ifdef HALO_PS3
+	extern boolean pc_menu_xbox_patch_tag(long tag_index);
+#endif
 	static short const main_menu_functions[] =
 	{
 		41, /* mp profile change name */
@@ -2521,6 +2514,11 @@ static boolean ui_widget_function_denied(
 
 	if (pc_menu_tag(widget->definition_tag_index))
 		return FALSE;
+#ifdef HALO_PS3
+	/* port: and the INTERNET PLAY screen the PS3 adds to the Xbox's menus (port/linux/game/menu_tags.c) */
+	if (pc_menu_xbox_patch_tag(widget->definition_tag_index))
+		return FALSE;
+#endif
 	if (function_index >= PC_MENU_FUNCTION_BASE && function_index < 0x8000)
 	{
 		denied = TRUE;
@@ -2554,10 +2552,8 @@ boolean ui_widget_event_handler_function_invoke(
 	match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 478,
 		widget != NULL && widget_deleted != NULL,
 		"(widget != NULL) && (widget_deleted != NULL)");
-	/* port: a map's own widgets (not the menus' tags the port adds) may not
-	run what changes the player's files or settings: ui_widget_function_denied
-	(failed, as an invalid function is, so the handler opens and closes no
-	screens after it) */
+	/* port: a map's own widgets (not the port's menus' tags) may not run what changes the player's files or settings:
+	ui_widget_function_denied (failed as an invalid function is, so the handler opens and closes no screens after it) */
 	if (ui_widget_function_denied(widget, function_index))
 		return FALSE;
 	/* port: the menus' own functions (port/linux/game/menu_functions.c) */
@@ -5056,9 +5052,8 @@ static boolean solo_level_initialize_list_single_player(
 /* port: the PC version's multiplayer menus (port/linux/game/menu_functions.c),
 on our lists rather than the Xbox's spinners: */
 
-/* the multiplayer maps (the Xbox's 13), and the one used last (else 0),
-unless last_used is NULL: it is read from a file of the save root, which the
-menus that name maps each frame need not do */
+/* the multiplayer maps (the Xbox's 13), and the one used last (else 0), unless last_used is NULL: it is read from a
+file of the save root, which the menus that name maps each frame need not do */
 short ui_widget_port_multiplayer_maps(
 	char const *const **names,
 	short *last_used)
@@ -5143,10 +5138,8 @@ short ui_widget_port_gametypes(
 	return (short)count;
 }
 
-/* port: sets up the server for co-op (port/linux/game/menu_functions.c):
-the campaign level, the difficulty, and a gametype with no game engine,
-which is what makes a network game co-op (game.c, players.c). Returns FALSE
-without a server or a campaign level. */
+/* port: sets up the server for co-op (port/linux/game/menu_functions.c): the campaign level, the difficulty, and a
+gametype with no game engine, which makes a network game co-op (game.c, players.c); FALSE without a server or level */
 boolean ui_widget_port_cooperative_level_choose(
 	char const *map_name,
 	short difficulty)
@@ -5201,11 +5194,8 @@ boolean ui_widget_port_gametype_choose(
 	return TRUE;
 }
 
-/* hosting (as the Xbox's server list's Y): always a new game. A game made
-before and backed out of keeps its server (the lobby's last player leaving
-pauses it: netgame_unjoin_player), and network_game_start_new_server joins
-only a server it makes, so the client it made for that one never joined it
-and the lobby had nobody in it */
+/* hosting (as the Xbox's server list's Y): always a new game. A game backed out of keeps its server (its lobby's last
+player pauses it), and network_game_start_new_server joins only a server it makes: the lobby would have had nobody */
 boolean ui_widget_port_host(
 	struct widget_instance *widget,
 	struct event_record *event,

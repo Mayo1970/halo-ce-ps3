@@ -1,34 +1,5 @@
-/*
-NETWORK_ACTORS.C
-
-AI sync (port/linux/NETCODE.md).
-
-Only the host runs the AI (game.c skips ai_update on clients). An actor
-drives its unit the way a player does, through unit_control. The clients
-have the units (network_objects.c); this file makes them move like the
-host's.
-
-Each tick the host records the control every actor gave its unit (a hook
-in unit_control, and the bursts it holds the trigger for) and sends it to
-each client with the unit's state: position, seat, shields and health,
-camouflage, and whether it flees in a panic. Units near a client's players
-are sent every tick, others less often, but a unit starting a one-tick
-action (a jump, a grenade) goes to everyone that tick. Each tick a client
-feeds the latest control into unit_control, the same path that drives a
-remote player's unit, so the unit walks, aims, fires and throws as it does
-on the host. The state corrects any drift.
-
-What the AI starts once is numbered, so a client plays each once however
-many times it receives it: animation impulses (dives, vaults), melee
-attacks and leaps (which the AI starts directly, not through the control),
-speech, and custom animations (outside co-op, whose events carry them).
-Pain and death sounds aren't sent: a client plays those itself as it
-replays the host's damage.
-
-A client creates no actors of its own (actors.c): the host's are the only
-ones. Deaths need nothing here: network_damage.c kills a client's copy of
-an AI unit the same way it kills a player's.
-*/
+/* NETWORK_ACTORS.C: AI sync (port/linux/NETCODE.md). Only the host runs the AI: each tick it sends each actor's control
+and its unit's state, which drive a client's copy through unit_control; what an actor starts once is numbered. */
 
 /* ---------- headers */
 
@@ -50,14 +21,12 @@ an AI unit the same way it kills a player's.
 
 enum
 {
-	/* AI units tracked at once: every actor (halo_port_capacity.h's
-	HALO_PORT_MAXIMUM_ACTORS) and the units the cutscenes' recorded
-	animations drive */
+	/* AI units tracked at once: every actor (halo_port_capacity.h's HALO_PORT_MAXIMUM_ACTORS) and the units the
+	cutscenes' recorded animations drive */
 	MAXIMUM_NETWORK_ACTORS = HALO_PORT_MAXIMUM_ACTORS + 32,
 	MAXIMUM_ENTRIES_PER_MESSAGE = 64,
-	/* A client keeps applying a control for this long after the host last
-	sent one. After that the unit is left alone: the actor let go of it, or
-	the host went quiet. */
+	/* how long a client applies a control after the host last sent one; then the unit is left alone (the actor
+	let go of it, or the host went quiet) */
 	CONTROL_HELD_TICKS = 2 * TICKS_PER_SECOND,
 	/* an impulse is repeated in this many entries, in case one is lost */
 	IMPULSE_REPEAT_TICKS = 3,
@@ -66,9 +35,8 @@ enum
 	NO_IMPULSE = 0xFF,
 	NO_TEAM = 0xFF,
 
-	/* An entry's impulse is one of the animation impulses or, past them, an
-	action the AI starts directly: a melee attack (unit_melee_attack_begin)
-	or a leap (unit_leap_begin). */
+	/* an entry's impulse: an animation impulse or, past them, an action the AI starts directly: a melee attack
+	(unit_melee_attack_begin) or a leap (unit_leap_begin) */
 	_actor_action_melee = NUMBER_OF_UNIT_ANIMATION_IMPULSES,
 	_actor_action_leap,
 	NUMBER_OF_ACTOR_ACTIONS,
@@ -230,9 +198,8 @@ struct client_actor
 
 static struct host_actor host_actors[MAXIMUM_NETWORK_ACTORS];
 static short host_actor_count;
-/* host: the numbers of every unit's impulses, speech and animations, from
-one counter, so a unit that drops out of the table and comes back can't
-repeat the number a client last played */
+/* host: the numbers of every unit's impulses, speech and animations, from one counter, so a unit that drops out of
+the table and comes back can't repeat the number a client last played */
 static byte host_event_number;
 
 static struct client_actor client_actors[MAXIMUM_NETWORK_ACTORS];
@@ -424,10 +391,8 @@ static boolean actor_state_apply(
 
 	if (!distributed_object_index_valid(state->unit_index) || !network_objects_client_has(state->unit_index))
 		return FALSE;
-	/* (a body the host's unit got back up from: a Flood combat form that
-	feigned death, which it does only once its body is at rest. Left dead,
-	the ragdoll was dragged about by the host's positions. The host sends
-	only living units.) */
+	/* (a body the host's unit got back up from: a Flood combat form that feigned death, once at rest. Left dead,
+	the ragdoll was dragged about by the host's positions. The host sends only living units.) */
 	if (object_try_and_get_and_verify_type(state->unit_index, _object_mask_unit) &&
 		TEST_FLAG(unit_get(state->unit_index)->object.damage_flags, _object_dead_bit) &&
 		TEST_FLAG(unit_get(state->unit_index)->object.flags, _object_at_rest_bit) &&
@@ -719,13 +684,8 @@ static void host_send_damage(
 	}
 }
 
-/* Host, after each tick: sends each client the AI units driven this tick.
-Units near the client's players go every tick, others less often. A unit
-with a fresh impulse, action, speech or animation goes to everyone in each
-of the next IMPULSE_REPEAT_TICKS ticks, and one starting a one-tick action
-goes that tick. A unit no actor drove this tick is dropped from the table,
-unless it is fleeing: a unit running blindly moves by itself, without its
-actor's control, and dropped it stood running in place on the clients. */
+/* Host, after each tick: the units driven, near a client's players every tick, others less often, a fresh one-shot to
+all. An undriven unit leaves the table, but not a fleeing one (it runs alone: dropped, it ran in place on clients). */
 void network_actors_host_tick(
 	void)
 {
@@ -900,3 +860,63 @@ void network_actors_drive(
 		}
 	}
 }
+
+#ifdef __BIG_ENDIAN__
+/* ---------- byte order: the PC builds send the entries as their memory has them (network_distributed.h) */
+
+static void distributed_actor_state_byte_swap(
+	void *entry)
+{
+	struct distributed_actor_state *state = entry;
+
+	BYTE_SWAP_FIELD(state->unit_index);
+	BYTE_SWAP_FIELD(state->vehicle_index);
+	BYTE_SWAP_FIELD(state->seat_index);
+	BYTE_SWAP_FIELD(state->control_flags);
+	BYTE_SWAP_ARRAY(state->facing);
+	BYTE_SWAP_ARRAY(state->aiming);
+	BYTE_SWAP_ARRAY(state->looking);
+	BYTE_SWAP_FIELD(state->impulse_alignment);
+	BYTE_SWAP_FIELD(state->run_blindly_angle);
+	BYTE_SWAP_FIELD(state->body_vitality);
+	BYTE_SWAP_FIELD(state->shield_vitality);
+	BYTE_SWAP_FIELD(state->speech_sound);
+	BYTE_SWAP_FIELD(state->user_animation_graph);
+	BYTE_SWAP_FIELD(state->user_animation);
+	BYTE_SWAP_REALS(state->position);
+	BYTE_SWAP_SHORTS(state->velocity);
+	BYTE_SWAP_SHORTS(state->forward);
+	BYTE_SWAP_SHORTS(state->up);
+}
+
+static void distributed_actor_damage_byte_swap(
+	void *entry)
+{
+	struct distributed_actor_damage *damage = entry;
+
+	BYTE_SWAP_FIELD(damage->unit_index);
+	BYTE_SWAP_FIELD(damage->current_shield_damage);
+	BYTE_SWAP_FIELD(damage->recent_shield_damage);
+	BYTE_SWAP_FIELD(damage->current_body_damage);
+	BYTE_SWAP_FIELD(damage->recent_body_damage);
+}
+
+void network_actors_byte_swap(
+	byte type,
+	byte *entries,
+	short count,
+	byte const *end)
+{
+	switch (type)
+	{
+	case _distributed_message_actor_states:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_actor_state),
+			distributed_actor_state_byte_swap);
+		break;
+	case _distributed_message_actor_damage:
+		distributed_entries_byte_swap_each(entries, end, count, sizeof(struct distributed_actor_damage),
+			distributed_actor_damage_byte_swap);
+		break;
+	}
+}
+#endif

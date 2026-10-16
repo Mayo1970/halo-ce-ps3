@@ -1,17 +1,5 @@
-/*
-P2P_CRYPTO.C
-
-What internet play needs to keep an invite's signalling and its tunnel
-private (p2p.c): SHA-256 (FIPS 180-4) and HMAC-SHA256 (RFC 2104), from
-which an invite's topics and keys are derived; ChaCha20-Poly1305 (RFC 8439)
-with additional data, which seals the tunnel's packets (a counter for their
-nonce) and, with a random nonce sent ahead of the ciphertext, signalling's
-messages; X25519 (RFC 7748), with which two machines agree on their
-tunnel's keys without sending them; and Ed25519 (RFC 8032, Monocypher's),
-with which a host signs its public game's listing (p2p_lobby.c). The public
-brokers carry sealed messages, so only holders of the invite read them; the
-tunnel's packets are sealed with keys only its two machines have.
-*/
+/* P2P_CRYPTO.C: internet play's privacy (p2p.c), with SHA-256 (FIPS 180-4) and HMAC (RFC 2104) for topics and keys,
+ChaCha20-Poly1305 sealing packets and messages, X25519 for keys never sent, Ed25519 signing public games' listings */
 
 #include "posix.h"
 #include "p2p_internal.h"
@@ -19,6 +7,7 @@ tunnel's packets are sealed with keys only its two machines have.
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -28,7 +17,7 @@ struct sha256
 {
 	unsigned int state[8];
 	unsigned char block[64];
-	unsigned long long length;
+	uint64_t length;
 	int used;
 };
 
@@ -100,7 +89,7 @@ static void sha256_add(struct sha256 *context, const void *data, int size)
 {
 	const unsigned char *bytes = data;
 
-	context->length += (unsigned long long)size;
+	context->length += (uint64_t)size;
 	while (size > 0)
 	{
 		int count = 64 - context->used < size ? 64 - context->used : size;
@@ -119,7 +108,7 @@ static void sha256_add(struct sha256 *context, const void *data, int size)
 
 static void sha256_end(struct sha256 *context, unsigned char *digest)
 {
-	unsigned long long bits = context->length * 8;
+	uint64_t bits = context->length * 8;
 	unsigned char length[8];
 	int index;
 
@@ -279,7 +268,7 @@ static void poly1305_add(struct poly1305 *context, const unsigned char *data, in
 	while (size > 0)
 	{
 		unsigned char block[16];
-		unsigned long long d0, d1, d2, d3, d4;
+		uint64_t d0, d1, d2, d3, d4;
 		unsigned int carry;
 
 		if (size < 16)
@@ -294,16 +283,16 @@ static void poly1305_add(struct poly1305 *context, const unsigned char *data, in
 		h2 += (load32(data + 6) >> 4) & 0x3ffffff;
 		h3 += (load32(data + 9) >> 6) & 0x3ffffff;
 		h4 += (load32(data + 12) >> 8) | (1u << 24);
-		d0 = (unsigned long long)h0 * r0 + (unsigned long long)h1 * s4 + (unsigned long long)h2 * s3 +
-			(unsigned long long)h3 * s2 + (unsigned long long)h4 * s1;
-		d1 = (unsigned long long)h0 * r1 + (unsigned long long)h1 * r0 + (unsigned long long)h2 * s4 +
-			(unsigned long long)h3 * s3 + (unsigned long long)h4 * s2;
-		d2 = (unsigned long long)h0 * r2 + (unsigned long long)h1 * r1 + (unsigned long long)h2 * r0 +
-			(unsigned long long)h3 * s4 + (unsigned long long)h4 * s3;
-		d3 = (unsigned long long)h0 * r3 + (unsigned long long)h1 * r2 + (unsigned long long)h2 * r1 +
-			(unsigned long long)h3 * r0 + (unsigned long long)h4 * s4;
-		d4 = (unsigned long long)h0 * r4 + (unsigned long long)h1 * r3 + (unsigned long long)h2 * r2 +
-			(unsigned long long)h3 * r1 + (unsigned long long)h4 * r0;
+		d0 = (uint64_t)h0 * r0 + (uint64_t)h1 * s4 + (uint64_t)h2 * s3 +
+			(uint64_t)h3 * s2 + (uint64_t)h4 * s1;
+		d1 = (uint64_t)h0 * r1 + (uint64_t)h1 * r0 + (uint64_t)h2 * s4 +
+			(uint64_t)h3 * s3 + (uint64_t)h4 * s2;
+		d2 = (uint64_t)h0 * r2 + (uint64_t)h1 * r1 + (uint64_t)h2 * r0 +
+			(uint64_t)h3 * s4 + (uint64_t)h4 * s3;
+		d3 = (uint64_t)h0 * r3 + (uint64_t)h1 * r2 + (uint64_t)h2 * r1 +
+			(uint64_t)h3 * r0 + (uint64_t)h4 * s4;
+		d4 = (uint64_t)h0 * r4 + (uint64_t)h1 * r3 + (uint64_t)h2 * r2 +
+			(uint64_t)h3 * r1 + (uint64_t)h4 * r0;
 		carry = (unsigned int)(d0 >> 26); h0 = (unsigned int)d0 & 0x3ffffff;
 		d1 += carry; carry = (unsigned int)(d1 >> 26); h1 = (unsigned int)d1 & 0x3ffffff;
 		d2 += carry; carry = (unsigned int)(d2 >> 26); h2 = (unsigned int)d2 & 0x3ffffff;
@@ -322,7 +311,7 @@ static void poly1305_end(struct poly1305 *context, unsigned char *tag)
 	unsigned int h0 = context->h[0], h1 = context->h[1], h2 = context->h[2], h3 = context->h[3],
 		h4 = context->h[4];
 	unsigned int g0, g1, g2, g3, g4, carry, mask;
-	unsigned long long sum;
+	uint64_t sum;
 
 	carry = h1 >> 26; h1 &= 0x3ffffff;
 	h2 += carry; carry = h2 >> 26; h2 &= 0x3ffffff;
@@ -347,10 +336,10 @@ static void poly1305_end(struct poly1305 *context, unsigned char *tag)
 	h1 = h1 >> 6 | h2 << 20;
 	h2 = h2 >> 12 | h3 << 14;
 	h3 = h3 >> 18 | h4 << 8;
-	sum = (unsigned long long)h0 + context->pad[0]; store32(tag, (unsigned int)sum);
-	sum = (unsigned long long)h1 + context->pad[1] + (sum >> 32); store32(tag + 4, (unsigned int)sum);
-	sum = (unsigned long long)h2 + context->pad[2] + (sum >> 32); store32(tag + 8, (unsigned int)sum);
-	sum = (unsigned long long)h3 + context->pad[3] + (sum >> 32); store32(tag + 12, (unsigned int)sum);
+	sum = (uint64_t)h0 + context->pad[0]; store32(tag, (unsigned int)sum);
+	sum = (uint64_t)h1 + context->pad[1] + (sum >> 32); store32(tag + 4, (unsigned int)sum);
+	sum = (uint64_t)h2 + context->pad[2] + (sum >> 32); store32(tag + 8, (unsigned int)sum);
+	sum = (uint64_t)h3 + context->pad[3] + (sum >> 32); store32(tag + 12, (unsigned int)sum);
 }
 
 /* ---------- ChaCha20-Poly1305 (RFC 8439) */
@@ -422,15 +411,14 @@ int p2p_equal(const void *first, const void *second, int size)
 	return difference == 0;
 }
 
-/* ---------- X25519 (RFC 7748), after TweetNaCl's crypto_scalarmult
-(Bernstein, van Gastel, Janssen, Lange, Schwabe, Smetsers; public domain):
-field elements in sixteen 16-bit limbs, every step in constant time */
+/* ---------- X25519 (RFC 7748), after TweetNaCl's crypto_scalarmult (Bernstein, van Gastel, Janssen, Lange, Schwabe,
+Smetsers; public domain): field elements in sixteen 16-bit limbs, every step in constant time */
 
-typedef long long field[16];
+typedef int64_t field[16];
 
 static void field_carry(field value)
 {
-	long long carry;
+	int64_t carry;
 	int index;
 
 	for (index = 0; index < 16; index++)
@@ -443,14 +431,14 @@ static void field_carry(field value)
 }
 
 /* swaps p and q if bit, without branching on it */
-static void field_swap(field p, field q, long long bit)
+static void field_swap(field p, field q, int64_t bit)
 {
-	long long mask = ~(bit - 1);
+	int64_t mask = ~(bit - 1);
 	int index;
 
 	for (index = 0; index < 16; index++)
 	{
-		long long t = mask & (p[index] ^ q[index]);
+		int64_t t = mask & (p[index] ^ q[index]);
 
 		p[index] ^= t;
 		q[index] ^= t;
@@ -468,7 +456,7 @@ static void field_pack(unsigned char *bytes, const field value)
 	field_carry(t);
 	for (pass = 0; pass < 2; pass++)
 	{
-		long long borrow;
+		int64_t borrow;
 
 		m[0] = t[0] - 0xffed;
 		for (index = 1; index < 15; index++)
@@ -493,7 +481,7 @@ static void field_unpack(field value, const unsigned char *bytes)
 	int index;
 
 	for (index = 0; index < 16; index++)
-		value[index] = bytes[2 * index] + ((long long)bytes[2 * index + 1] << 8);
+		value[index] = bytes[2 * index] + ((int64_t)bytes[2 * index + 1] << 8);
 	value[15] &= 0x7fff;
 }
 
@@ -515,7 +503,7 @@ static void field_subtract(field out, const field a, const field b)
 
 static void field_multiply(field out, const field a, const field b)
 {
-	long long t[31];
+	int64_t t[31];
 	int i, j;
 
 	memset(t, 0, sizeof(t));
@@ -565,7 +553,7 @@ void p2p_x25519(unsigned char *result, const unsigned char *scalar, const unsign
 	a[0] = d[0] = 1;
 	for (index = 254; index >= 0; index--)
 	{
-		long long bit = (z[index >> 3] >> (index & 7)) & 1;
+		int64_t bit = (z[index >> 3] >> (index & 7)) & 1;
 
 		field_swap(a, b, bit);
 		field_swap(c, d, bit);
@@ -595,9 +583,8 @@ void p2p_x25519(unsigned char *result, const unsigned char *scalar, const unsign
 	field_pack(result, a);
 }
 
-/* ---------- Ed25519 (RFC 8032, with SHA-512), from Monocypher
-(port/third_party/monocypher): a run's key, from which its X25519 key also
-comes, signs the listing of a public game (p2p_lobby.c) */
+/* ---------- Ed25519 (RFC 8032, with SHA-512), from Monocypher (port/third_party/monocypher): a run's key, from which
+its X25519 key also comes, signs the listing of a public game (p2p_lobby.c) */
 
 void p2p_sha512(const void *data, int size, unsigned char *digest)
 {
@@ -642,9 +629,8 @@ int p2p_ed25519_to_x25519(const unsigned char *public_key, unsigned char *x25519
 	unsigned char product[P2P_KEY_SIZE];
 
 	crypto_eddsa_to_x25519(x25519_public, public_key);
-	/* a point of small order (whose multiple by a clamped scalar, a
-	multiple of 8, is 0) has signatures anyone can make, and secrets anyone
-	knows */
+	/* a point of small order (whose multiple by a clamped scalar, a multiple of 8, is 0) has signatures anyone can
+	make, and secrets anyone knows */
 	crypto_x25519(product, scalar, x25519_public);
 	return !p2p_equal(product, zero, P2P_KEY_SIZE);
 }
