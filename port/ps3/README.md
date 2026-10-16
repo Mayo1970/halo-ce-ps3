@@ -5,7 +5,8 @@ The PS3 port builds with PSL1GHT (ppu-gcc 7.2) in the Docker image
 map, swaps the map data to the PS3's byte order, and draws the game with the
 RSX (G4 in `GOALS.md`). The PS3 pads are its Xbox gamepads (G5). Its
 DirectSound plays on the PS3 audio port (G6). Its Winsock and XNet use the
-PSL1GHT sockets, for system link with the PC builds on the LAN (G7).
+PSL1GHT sockets, for system link with the PC builds on the LAN and for
+internet play (G7).
 `GOALS.md` in the root folder gives the plan and the blockers.
 
 The code is in three parts:
@@ -31,7 +32,9 @@ because `long` has a different size on each side.
 | `src/ps3_input.c` | DualShock 3 and Sixaxis pads on all 7 ports: buttons, sticks and pressures, and the motors. |
 | `src/ps3_audio.c` | One 48 kHz stereo float audio port, fed from a ring by a thread. `xbox/dsound_ps3.c` opens it, and `ps3_host_exit` stops it. |
 | `src/ps3_posix.c` | The part of `port/linux/src/posix.h` that `msvc_crt.c` calls. |
-| `src/ps3_net.c` | The sockets of `xbox/xnet_ps3.c`: libnet's own calls (their error is each thread's, not newlib's one `errno`), `sin_len` set, `SO_NBIO` for non-blocking sockets, select on `netPoll` with Winsock's readiness (a failed connect in the error set), the PS3's address from netctl (asked once a second), random numbers from lv2. Errors come back as Winsock codes. |
+| `src/ps3_net.c` | The sockets of `xbox/xnet_ps3.c`: libnet's own calls (their error is each thread's, not newlib's one `errno`), `sin_len` set, `SO_NBIO` for non-blocking sockets, select on `netPoll` with Winsock's readiness (a failed connect in the error set), the PS3's address from netctl (asked once a second), random numbers from lv2, DNS (`netGetHostByName`, one name at a time). Errors come back as Winsock codes. |
+| `src/ps3_upnp.c` | The UPnP client of internet play (`posix.h`): it asks the router to forward the tunnel's UDP port, and removes the forwards that no copy of the game uses. |
+| `src/ps3_mbedtls.c`, `include/ps3_mbedtls_config.h` | Mbed TLS 3.6 (`port/third_party/mbedtls`) for the DTLS of `port/linux/src/posix_dtls.c` (internet play with browsers): lv2's random numbers and time, no files or sockets. |
 | `src/ps3_setjmp.S`, `include/setjmp.h` | A 64-bit `setjmp`/`longjmp` in place of the newlib one, which overflows `jmp_buf`. |
 | `src/ps3_timers.c`, `include/ps3_timers.h` | The timer build: the game thread's time by phase, which the game, the Direct3D device and `src/ps3_gpu.c` add up, logged every 300 frames. |
 | `xbox/ps3_platform.h` | Force-included in the Xbox layer, in place of `port/linux/src/platform.h`. |
@@ -43,8 +46,11 @@ because `long` has a different size on each side.
 | `xbox/xbox_texture_layout.c` | The layout of Xbox textures, and their texels for the RSX: A8R8G8B8 in the same order (the RSX swizzles as the NV2A does), DXT blocks as they are. |
 | `xbox/xinput_ps3.c` | XInput on `src/ps3_input.c`: each pad takes the lowest free Xbox port (0 to 3) and keeps it until it disconnects. The game's polls read the pads once a frame. |
 | `xbox/dsound_ps3.c` | DirectSound on `src/ps3_audio.c`, after `port/linux/src/dsound_sdl.c`: a mixer thread (priority 1000) keeps the port's ring 43 ms ahead. Streams decode each packet (Xbox ADPCM or PCM, little-endian) to floats when the game gives it; the packets complete on the game's thread, in `DirectSoundDoWork` and `Flush`. Buffers loop (the loading screen's tones). 3D voices get the Linux build's distance and pan. |
-| `xbox/xnet_ps3.c` | Winsock and XNet on `src/ps3_net.c`, from `port/linux/src/xnet.c` without internet play and the latency test: Winsock's addresses, options and select, `network.address` and `network.broadcast` from `config.toml` (as on Linux), an XNADDR with the PS3's address, `WSAGetLastError` as the thread's last error (as on Windows). |
-| `xbox/port_stubs.c` | The Linux build's services that the PS3 does not have yet: internet play, the PC menus, the high-res HUD and text. |
+| `xbox/xnet_ps3.c` | Winsock and XNet on `src/ps3_net.c`, from `port/linux/src/xnet.c` without the latency test: Winsock's addresses, options and select, `network.address` and `network.broadcast` from `config.toml` (as on Linux), an XNADDR with the PS3's address, `WSAGetLastError` as the thread's last error (as on Windows), internet play's peers through their stand-ins. It writes `brokers.txt` at each start. |
+| `xbox/posix_ps3.c` | The sockets, random numbers and DNS of `port/linux/src/posix.h` on `src/ps3_net.c`, for internet play (`port/linux/src/p2p*.c`). |
+| `xbox/ps3_pthread.c`, `xbox/include/pthread.h` | The mutexes and threads of `port/linux/src/p2p*.c` on the host layer: newlib has no pthreads. |
+| `include/halo_ps3_kcp.h` | KCP's 64-bit integers as `int64_t` (in the Xbox layer, `long long` is `int int`). |
+| `xbox/port_stubs.c` | The Linux build's services that the PS3 does not have yet: the PC menus, the high-res HUD and text. |
 
 ## Build
 
@@ -108,6 +114,7 @@ The game writes these files:
 | File | Contents |
 | --- | --- |
 | `/dev_hdd0/data/HaloCE/config.toml` | The settings, with the defaults at the first start |
+| `/dev_hdd0/data/HaloCE/brokers.txt` | The MQTT brokers of internet play, written again at each start (`port/assets/network/brokers.txt`) |
 | `/dev_hdd0/data/HaloCE/z/` | The Xbox `z:\`: the map cache (`cache000.map` to `cache005.map`, about 730 MB) and `savegame.bin` |
 | `/dev_hdd0/data/HaloCE/u/` | The Xbox `u:\`: the user data |
 | `debug.txt` in the data root | The game's log |
@@ -132,7 +139,7 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 | Drawing | `[gpu] ready` and the RSX local memory; `Direct3D:` lines: each vertex shader translated, the first pixel shaders, and every 600 frames the draws, the skips, the texture uploads, the textures in RSX memory (and the part no draw used in 600 frames) and the vertex cache (the vertex elements converted into it and at draws, its use); `[gpu] frame N` every 600 frames: the programs and the scratch use | The game's picture, 4:3 in the middle of the display |
 | Timers | `[time]` lines every 300 frames (`src/ps3_timers.c`): the game thread's ms a frame by phase (game ticks, render and its parts, Direct3D draws, waits). With `TIMER_PROBE_FRAMES` 30 (now 0, off), also the RSX's ms by part in probe frames (the game thread waits for the RSX after each part) | |
 | Sound | `[aud] port N` at the start; `DirectSound:` every 10 s: the streams and buffers that play, the packets decoded, the mixer's time per 5333 us chunk, and the port blocks played silent or partial (underruns) | The game's sound on the PS3 audio output |
-| Network | `Winsock: PSL1GHT sockets, this PS3 at a.b.c.d` at the start (or `no network`); `[net] <call>: lv2 error N` for the first 32 socket errors that are not would-block; `Winsock: SO_RCVBUF of N bytes refused` with the size lv2 took; the game's own `network` and `transport` lines | System link games of the PC builds in the game list |
+| Network | `Winsock: PSL1GHT sockets, this PS3 at a.b.c.d` at the start (or `no network`); `[net] <call>: lv2 error N` for the first 32 socket errors that are not would-block; `Winsock: SO_RCVBUF of N bytes refused` with the size lv2 took; the game's own `network` and `transport` lines; `Internet play:` lines (the brokers, STUN, UPnP, joins); `menus: the multiplayer menu has LAN PLAY and INTERNET PLAY` | The PC builds' games on the LAN in LAN PLAY's list; public internet games in INTERNET PLAY's list |
 | Exit | `[ps3] exit 0` | PS button > Quit Game goes back to the XMB |
 | Failure | `EXCEPTION halt` and the call stack: `./build.sh symbols ADDRESSES="..."` names its functions | A red pulse until PS button > Quit Game |
 
@@ -140,20 +147,53 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 
 The PS3 plays system link with the PC builds of the same source on the LAN.
 Both must have the same network version (`HALO_PORT_NETWORK_VERSION` in
-`port/linux/include/halo_port_limits.h`, 11 now) and the same maps. The game
+`port/linux/include/halo_port_limits.h`, 29 now) and the same maps. The game
 uses UDP ports 5150 (host) and 5151 (clients), with broadcasts to find games,
 and TCP port 5150.
 
 On the wire, message headers and the typed packet fields are big-endian: the
 PS3's own order, which the PC swaps to. The rest is the PC's little-endian
 memory: the game advertisement, the game settings record, the distributed
-netcode's messages and the game type's state in them. The PS3 swaps those
-when it sends and when it receives (the `*_byte_swap` functions, under
-`__BIG_ENDIAN__`). A new or changed field in them needs its swap line.
+netcode's messages (co-op's, the AI's, voice chat's and map sharing's too)
+and the game type's state in them. The PS3 swaps those when it sends and
+when it receives (the `*_byte_swap` functions, under `__BIG_ENDIAN__`). A new
+or changed field in them, or a new message kind, needs its swap line.
 
 When the broadcasts do not reach the other machine, list its address, or the
 LAN's broadcast address, in `network.broadcast` in `config.toml`, on both
 machines (for example `network.broadcast = "192.168.178.255"`).
+
+In the multiplayer menu, LAN PLAY is in the place of SYSTEM LINK PLAY
+(`port/linux/game/menu_tags.c`, `xbox_multiplayer_patch`). It opens a copy of
+the System Link game list without the "press START to join" screens. The
+list shows only the games of the LAN: the hosts that internet play reaches
+are in INTERNET PLAY's list. A on a game joins it. Y, or A when the list has
+no games, hosts a game (CREATE GAME). Only player 1 plays, with player 1's
+profile (the active profile, else the last used, else the first): the
+"press START to join" screens of the other pads are not on this path.
+
+## Internet play (G7)
+
+Internet play is the PC builds' (`port/linux/src/p2p*.c`; see
+`port/linux/README.md`, "Internet play"). In the multiplayer menu, INTERNET
+PLAY is after LAN PLAY. It opens a copy of the System Link game list, which
+shows the public games of the server browser, 9 rows at a time (the rows
+scroll at their ends). A on a game joins it: the PS3 reaches the host, then
+the pregame screen opens. Player 1's profile plays, as in LAN PLAY.
+
+- `network.online = false` turns internet play off, and
+  `network.public_lobby = false` the game list.
+- The game asks the router to forward the tunnel's port (UPnP,
+  `network.allow_upnp`).
+- Players in a browser connect through WebRTC (DTLS with Mbed TLS).
+- The list refuses games with a password (no screen types it) and closed
+  games.
+- A game that the PS3 hosts is not in the server browser. Its invite link is
+  in the log (`Internet play: hosting.`).
+- Discord does not operate: the PS3 has no Discord client.
+- The game does not run its `atexit` functions when it stops: a hosted
+  game's listing stays at the brokers until it expires, and a UPnP forward
+  until its hour ends.
 
 ## Bring-up test
 

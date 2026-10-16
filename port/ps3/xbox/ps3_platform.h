@@ -36,6 +36,8 @@ void platform_unimplemented(const char *name);
 /* ---------- errors */
 
 DWORD platform_set_last_error_from_errno(int error_number);
+/* a thread the Xbox layer did not start (pthread.h's) ends: its state (GetLastError) is freed */
+void platform_thread_exited(void);
 
 /* ---------- handles */
 

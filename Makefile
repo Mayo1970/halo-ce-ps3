@@ -25,16 +25,22 @@ MAKE_SELF_NPDRM := $(PS3DEV)/bin/make_self_npdrm
 SFO             := $(PS3DEV)/bin/sfo
 PKG             := $(PS3DEV)/bin/pkg
 
-PS3_DIR  := port/ps3
-TOML_DIR := port/third_party/tomlc17
-MUSL_DIR := port/third_party/musl-math
-ZLIB_DIR := port/third_party/zlib
+PS3_DIR     := port/ps3
+TOML_DIR    := port/third_party/tomlc17
+MUSL_DIR    := port/third_party/musl-math
+ZLIB_DIR    := port/third_party/zlib
+KCP_DIR     := port/third_party/kcp
+MBEDTLS_DIR := port/third_party/mbedtls
+# Mbed TLS's units and those that include its headers, with its PS3 configuration (ps3_mbedtls_config.h)
+MBEDTLS_FLAGS := -I$(MBEDTLS_DIR)/include -DMBEDTLS_USER_CONFIG_FILE='"ps3_mbedtls_config.h"'
 
 # ---------- the host layer (port/ps3/src): lv2 and newlib with their own 64-bit long
 
 HOST_SRCS := $(wildcard $(PS3_DIR)/src/*.c)
 HOST_ASMS := $(wildcard $(PS3_DIR)/src/*.S)
 HOST_OBJS := $(patsubst %,$(BUILD)/obj/%.o,$(basename $(HOST_SRCS) $(HOST_ASMS)))
+# internet play's DTLS with browsers (posix.h), with the host's long as on the other native builds
+HOST_OBJS += $(BUILD)/obj/port/linux/src/posix_dtls.o
 
 # -O2 only: -O3 broke boot on this toolchain (ioQuake3-PS3). The include folder
 # goes first so that its setjmp.h shadows newlib's.
@@ -99,9 +105,12 @@ game: $(GAME_OBJS)
 # ---------- the Xbox layer: port/ps3/xbox, and the Linux build's units that need no host change
 
 PLATFORM_SEMANTICS := $(BUILD)/platform_msvc_semantics.h
+# internet play (p2p*.c) and its streams (KCP) have the game's long, as xnet_ps3.c, which calls them
 XBOX_SRCS := $(wildcard $(PS3_DIR)/xbox/*.c) \
              $(addprefix port/linux/src/,bink_null.c d3d8_resources.c halo_linker_common.c msvc_crt.c \
-             msvc_wide.c port_config.c xbdm.c xbox_xapi.c)
+             msvc_wide.c port_config.c xbdm.c xbox_xapi.c p2p.c p2p_crypto.c p2p_discord.c p2p_lobby.c \
+             p2p_signal.c p2p_webrtc.c) \
+             $(KCP_DIR)/ikcp.c
 XBOX_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(XBOX_SRCS))
 
 # the game's ABI and the XDK declarations; ps3_platform.h stands in for port/linux/src/platform.h.
@@ -111,8 +120,20 @@ XBOX_CFLAGS = -std=gnu99 -fgnu89-inline $(GAME_ABI) -mminimal-toc -Wall -Wno-unu
               -DHALO_LINUX_PLATFORM_LAYER $(XBOX_DEFINES) \
               -include $(PS3_DIR)/include/halo_ps3_prefix.h -include $(PLATFORM_SEMANTICS) \
               -include $(PS3_DIR)/xbox/ps3_platform.h \
-              -I$(PS3_DIR)/include -Iport/linux/include -I$(PS3_DIR)/src -Iport/linux/src -I$(TOML_DIR) \
-              -Isource -Isource/cseries -idirafter port/include/xdk
+              -I$(PS3_DIR)/include -I$(PS3_DIR)/xbox/include -Iport/linux/include -I$(PS3_DIR)/src -Iport/linux/src \
+              -I$(TOML_DIR) -I$(KCP_DIR) -Iport/third_party/monocypher -Isource -Isource/cseries -idirafter port/include/xdk
+
+# KCP's 64-bit integers are long long, which the game's long makes int int (halo_ps3_kcp.h); its own warnings off
+$(BUILD)/obj/port/linux/src/p2p.o: XBOX_DEFINES := -include $(PS3_DIR)/include/halo_ps3_kcp.h
+$(BUILD)/obj/$(KCP_DIR)/ikcp.o: XBOX_DEFINES := -include $(PS3_DIR)/include/halo_ps3_kcp.h -w
+
+# internet play's brokers as a C string, which xnet_ps3.c writes beside config.toml at each start
+$(BUILD)/brokers_txt.h: port/assets/network/brokers.txt
+	@mkdir -p $(dir $@)
+	@sed -e 's/\r$$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' $< > $@
+
+$(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: $(BUILD)/brokers_txt.h
+$(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: XBOX_DEFINES := -I$(BUILD)
 
 $(PLATFORM_SEMANTICS): FORCE
 	@python3 tools/ps3_msvc_semantics.py --output $@ --inlines port/include/xdk
@@ -149,15 +170,28 @@ $(ZLIB_OBJS): $(BUILD)/obj/%.o: %.c
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) -std=gnu11 -DZ_PREFIX -Dz_errmsg=z_port_errmsg -w -MMD -MP -c $< -o $@
 
-# Monocypher: map sharing's BLAKE2b (port_stubs.c's p2p_blake2b_256); stb_vorbis: Custom Edition maps' Ogg
-# Vorbis (custom_edition_sounds.c), with the host's long, which its interface has none of
+# Monocypher: internet play's keys and signatures, map sharing's BLAKE2b; stb_vorbis: Custom Edition maps' Ogg
+# Vorbis (custom_edition_sounds.c), with the host's long, which their interfaces have none of
 THIRD_PARTY_OBJS := $(BUILD)/obj/port/third_party/monocypher/monocypher.o \
+                   $(BUILD)/obj/port/third_party/monocypher/monocypher-ed25519.o \
                    $(BUILD)/obj/port/third_party/stb_vorbis/stb_vorbis.o
 
 $(THIRD_PARTY_OBJS): $(BUILD)/obj/%.o: %.c
 	@mkdir -p $(dir $@)
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) -std=gnu11 -w -MMD -MP -c $< -o $@
+
+# Mbed TLS: internet play's DTLS with browsers (posix_dtls.c), with the host's long
+MBEDTLS_SRCS := $(wildcard $(MBEDTLS_DIR)/library/*.c)
+MBEDTLS_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(MBEDTLS_SRCS))
+
+# (its headers before the portlibs' Mbed TLS 2, which CFLAGS has)
+$(MBEDTLS_OBJS): $(BUILD)/obj/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(MBEDTLS_FLAGS) -I$(MBEDTLS_DIR)/library $(CFLAGS) -w -MMD -MP -c $< -o $@
+
+$(BUILD)/obj/port/linux/src/posix_dtls.o $(BUILD)/obj/$(PS3_DIR)/src/ps3_mbedtls.o: CFLAGS := $(MBEDTLS_FLAGS) $(CFLAGS)
 
 # ---------- the program
 
@@ -166,7 +200,8 @@ $(THIRD_PARTY_OBJS): $(BUILD)/obj/%.o: %.c
 all: $(BUILD)/$(TARGET).elf
 
 # the host objects come first, before libc, so ps3_setjmp.o replaces its setjmp
-ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) $(GAME_OBJS)
+ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) $(MBEDTLS_OBJS) \
+           $(GAME_OBJS)
 
 $(BUILD)/$(TARGET).elf: $(ALL_OBJS)
 	@echo "LD $@"
@@ -230,5 +265,5 @@ symbols: $(BUILD)/$(TARGET).elf
 clean:
 	@rm -rf $(BUILD)
 
--include $(HOST_OBJS:.o=.d) $(XBOX_OBJS:.o=.d) $(TOML_OBJS:.o=.d) $(MUSL_OBJS:.o=.d) $(ZLIB_OBJS:.o=.d) $(THIRD_PARTY_OBJS:.o=.d) $(GAME_OBJS:.o=.d) \
+-include $(HOST_OBJS:.o=.d) $(XBOX_OBJS:.o=.d) $(TOML_OBJS:.o=.d) $(MUSL_OBJS:.o=.d) $(ZLIB_OBJS:.o=.d) $(THIRD_PARTY_OBJS:.o=.d) $(MBEDTLS_OBJS:.o=.d) $(GAME_OBJS:.o=.d) \
 	$(BRINGUP_OBJS:.o=.d)

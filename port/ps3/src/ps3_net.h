@@ -34,5 +34,9 @@ int ps3_net_select(int *read, int *read_count, int *write, int *write_count, int
 /* this PS3's IPv4 address from netctl: 1 with it, 0 with none, -1 while netctl still gets one */
 int ps3_net_local_address(uint32_t *address);
 void ps3_net_random(void *buffer, uint32_t size);
+/* lv2's random numbers alone: 0 if lv2 gave none (keys must not come from the timebase) */
+int ps3_net_secure_random(void *buffer, uint32_t size);
+/* the address of a host name or dotted quad, 0 if none; blocks while the name is looked up (DNS) */
+uint32_t ps3_net_resolve(const char *host);
 
 #endif

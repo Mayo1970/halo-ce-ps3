@@ -1,155 +1,9 @@
-/* The Linux build's services the PS3 has not yet (p2p.c, menu_files.c, hud_hires.c, text_hires.c, sdl_platform.c,
+/* The Linux build's services the PS3 has not yet (menu_files.c, hud_hires.c, text_hires.c, sdl_platform.c,
 voice_audio.c, xbox_textures.c's Custom Edition texels, memory_watch.c): each reports "none", which the game handles. */
 
 #include <string.h>
 
-#include "p2p.h"
 #include "halo_menus.h"
-
-/* ---------- internet play */
-
-void p2p_discord_identity(char *id, int id_size, char *name, int name_size)
-{
-	if (id_size > 0)
-		id[0] = '\0';
-	if (name_size > 0)
-		name[0] = '\0';
-}
-
-void p2p_discord_sanitize(char *destination, int size, const char *source, int name)
-{
-	(void)source;
-	(void)name;
-	if (size > 0)
-		destination[0] = '\0';
-}
-
-void p2p_hardware_id(char *hex, int size)
-{
-	if (size > 0)
-		hex[0] = '\0';
-}
-
-void p2p_hardware_id_sanitize(char *destination, int size, const char *source)
-{
-	(void)source;
-	if (size > 0)
-		destination[0] = '\0';
-}
-
-int p2p_invite_link(char *link, int size)
-{
-	if (size > 0)
-		link[0] = '\0';
-	return 0;
-}
-
-int p2p_join_invite(const char *text)
-{
-	(void)text;
-	return 0;
-}
-
-void p2p_lobby_browse(int on)
-{
-	(void)on;
-}
-
-int p2p_lobby_games(struct p2p_listing *games, int maximum_count)
-{
-	(void)games;
-	(void)maximum_count;
-	return 0;
-}
-
-void p2p_lobby_mark_failed(const unsigned char *identifier)
-{
-	(void)identifier;
-}
-
-void p2p_lobby_refresh(void)
-{
-}
-
-int p2p_peer_address(const unsigned char *identifier, unsigned long *address)
-{
-	(void)identifier;
-	(void)address;
-	return 0;
-}
-
-unsigned long p2p_peer_endpoint_address(unsigned long virtual_address)
-{
-	return virtual_address;
-}
-
-void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int open,
-	int in_progress, int has_teams)
-{
-	(void)name; (void)map; (void)gametype; (void)engine_type; (void)open; (void)in_progress; (void)has_teams;
-}
-
-void p2p_set_game_player_counts(int count, int maximum)
-{
-	(void)count;
-	(void)maximum;
-}
-
-void p2p_set_hosting_allowed(int allowed)
-{
-	(void)allowed;
-}
-
-void p2p_set_hosting_public(int public)
-{
-	(void)public;
-}
-
-void p2p_set_hosting_password(const char *password)
-{
-	(void)password;
-}
-
-int p2p_listing_unlock(struct p2p_listing *listing, const char *password)
-{
-	(void)listing;
-	(void)password;
-	return 0;
-}
-
-int p2p_peer_key_hash(unsigned long virtual_address, unsigned char *identifier, unsigned char *key_hash)
-{
-	(void)virtual_address;
-	(void)identifier;
-	(void)key_hash;
-	return 0;
-}
-
-void p2p_set_answering_players(int on)
-{
-	(void)on;
-}
-
-int p2p_reach_player(const unsigned char *key_hash)
-{
-	(void)key_hash;
-	return 0;
-}
-
-int p2p_peer_reached(const unsigned char *identifier, unsigned long *address)
-{
-	(void)identifier;
-	(void)address;
-	return 0;
-}
-
-/* map sharing's piece hashes, as p2p_crypto.c's (the Makefile builds Monocypher) */
-void crypto_blake2b(unsigned char *hash, size_t hash_size, const unsigned char *message, size_t message_size);
-
-void p2p_blake2b_256(const void *data, unsigned long size, unsigned char *digest)
-{
-	crypto_blake2b(digest, 32, data, size);
-}
 
 /* ---------- voice chat (voice_audio.c): no microphone, and the others' voices are not played */
 
@@ -211,7 +65,7 @@ long halo_menus_utf16(char const *utf8, unsigned short *out, long capacity)
 {
 	long count = 0;
 
-	/* (unreachable without menus) ASCII only */
+	/* ASCII only: the Xbox menus' INTERNET PLAY strings (menu_tags.c) */
 	while (count + 1 < capacity && utf8[count])
 	{
 		out[count] = (unsigned char)utf8[count];
