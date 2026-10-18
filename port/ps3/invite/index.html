@@ -1,0 +1,603 @@
+<!doctype html>
+<!--
+The invite code converter, for GitHub Pages: an invite link (halo://join/...) to an 8-digit code that a console types,
+and a code to its link. The link is kept on public MQTT brokers, sealed with the code: port/linux/src/p2p_crypto.c.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Invite Codes</title>
+<style>
+  :root {
+    --background: #f4f5f7;
+    --card: #ffffff;
+    --text: #1b1e23;
+    --muted: #5d6470;
+    --line: #d9dde3;
+    --accent: #2f6fdb;
+    --accent-text: #ffffff;
+    --error: #b42318;
+    --code: #10151c;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: #111418;
+      --card: #1a1f25;
+      --text: #e8ebef;
+      --muted: #9aa3ae;
+      --line: #2c333c;
+      --accent: #5b93f0;
+      --accent-text: #0b1220;
+      --error: #f97066;
+      --code: #f2f5f8;
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  main {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 32px 16px 48px;
+  }
+
+  h1 {
+    margin: 0 0 4px;
+    font-size: 28px;
+  }
+
+  h2 {
+    margin: 0 0 12px;
+    font-size: 19px;
+  }
+
+  p {
+    margin: 0 0 12px;
+  }
+
+  .lead,
+  .note,
+  footer {
+    color: var(--muted);
+  }
+
+  .card {
+    margin-top: 24px;
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--card);
+  }
+
+  label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--background);
+    color: var(--text);
+    font: inherit;
+  }
+
+  button,
+  .button {
+    padding: 10px 16px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font: inherit;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .result {
+    margin-top: 16px;
+  }
+
+  .result:empty {
+    display: none;
+  }
+
+  .code {
+    margin: 4px 0 8px;
+    color: var(--code);
+    font: 700 44px/1.1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    letter-spacing: 0.08em;
+  }
+
+  .link {
+    display: block;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: 14px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+
+  .error {
+    color: var(--error);
+  }
+
+  footer {
+    margin-top: 32px;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Invite Codes</h1>
+  <p class="lead">Turn an internet play invite link into a short code for a console, and a console's code back into its
+    link.</p>
+
+  <section class="card">
+    <h2>Link to code</h2>
+    <form id="make-form">
+      <label for="link-input">Invite link</label>
+      <div class="row">
+        <input id="link-input" autocomplete="off" spellcheck="false" placeholder="halo://join/...">
+        <button id="make-button" type="submit">Make code</button>
+      </div>
+    </form>
+    <div id="make-result" class="result" aria-live="polite"></div>
+  </section>
+
+  <section class="card">
+    <h2>Code to link</h2>
+    <form id="find-form">
+      <label for="code-input">Invite code</label>
+      <div class="row">
+        <input id="code-input" inputmode="numeric" autocomplete="off" placeholder="1234 5678" maxlength="12">
+        <button id="find-button" type="submit">Find link</button>
+      </div>
+    </form>
+    <div id="find-result" class="result" aria-live="polite"></div>
+  </section>
+
+  <footer>
+    <p>A code works for 30 minutes. Anyone who has the code can join the game until then.</p>
+    <p>The page keeps the link on public MQTT brokers (EMQX, HiveMQ, Eclipse Mosquitto), encrypted with the code.</p>
+  </footer>
+</main>
+
+<script id="core">
+'use strict';
+
+// the invite codes of port/linux/src/p2p_crypto.c and p2p_signal.c: a key from the code's digits, the topic it names,
+// and the invite (the host's key hash and the token) sealed with it, retained on the brokers for EXPIRY_SECONDS
+const InviteCodes = (() => {
+  const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt',
+    'wss://test.mosquitto.org:8081/mqtt'];
+  const SALT = 'hceu invite code 1';
+  const ROUNDS = 100000;
+  const DIGITS = 8;
+  const VERSION = 1;
+  const INVITE_SIZE = 32;
+  const NONCE_SIZE = 16;
+  const TAG_SIZE = 16;
+  const PAYLOAD_SIZE = 2 + NONCE_SIZE + INVITE_SIZE + TAG_SIZE;
+  const EXPIRY_SECONDS = 1800;
+  const CONNECT_MS = 8000;
+  const LOOKUP_MS = 10000;
+
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const random = (count) => crypto.getRandomValues(new Uint8Array(count));
+
+  function concat(...parts) {
+    const bytes = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+    let at = 0;
+    for (const part of parts) {
+      bytes.set(part, at);
+      at += part.length;
+    }
+    return bytes;
+  }
+
+  // ---------- the code
+
+  // the invite's 32 bytes in a link (or its 64 hex digits alone), else null
+  function parseLink(text) {
+    const match = /(?:^|[^0-9a-f])([0-9a-f]{64})(?![0-9a-f])/i.exec(text.trim());
+    if (!match) return null;
+    return Uint8Array.from(match[1].match(/../g), (pair) => parseInt(pair, 16));
+  }
+
+  // the code's digits (spaces and dashes allowed), else null
+  function parseCode(text) {
+    const digits = text.replace(/[\s-]/g, '');
+    return /^\d+$/.test(digits) && digits.length === DIGITS ? digits : null;
+  }
+
+  // (values past the last whole 10^8 would make the low codes likelier)
+  function makeCode() {
+    const value = new Uint32Array(1);
+    do crypto.getRandomValues(value); while (value[0] >= 4200000000);
+    return String(value[0] % 100000000).padStart(DIGITS, '0');
+  }
+
+  const spaced = (digits) => digits.slice(0, DIGITS / 2) + ' ' + digits.slice(DIGITS / 2);
+
+  async function codeKey(digits) {
+    const material = await crypto.subtle.importKey('raw', encoder.encode(digits), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(SALT),
+      iterations: ROUNDS }, material, 256);
+    return new Uint8Array(bits);
+  }
+
+  async function hash(key, label, data = new Uint8Array(0)) {
+    const hmac = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC', hmac, concat(encoder.encode(label), data)));
+  }
+
+  async function codeTopic(key) {
+    return 'hceu/3/code/' + hex((await hash(key, 'topic')).subarray(0, 16));
+  }
+
+  // a kind and version, a nonce, the invite XORed with the HMAC of the nonce, the HMAC of both cut short
+  async function seal(key, invite, nonce = random(NONCE_SIZE)) {
+    const stream = await hash(key, 'stream', nonce);
+    const sealed = invite.map((byte, index) => byte ^ stream[index]);
+    const tag = (await hash(key, 'tag', concat(nonce, sealed))).subarray(0, TAG_SIZE);
+    return concat(Uint8Array.of('C'.charCodeAt(0), VERSION), nonce, sealed, tag);
+  }
+
+  // the invite, or null if the payload is not one sealed with the key
+  async function open(key, payload) {
+    if (payload.length !== PAYLOAD_SIZE || payload[0] !== 'C'.charCodeAt(0) || payload[1] !== VERSION) return null;
+    const nonce = payload.subarray(2, 2 + NONCE_SIZE);
+    const sealed = payload.subarray(2 + NONCE_SIZE, 2 + NONCE_SIZE + INVITE_SIZE);
+    const tag = (await hash(key, 'tag', concat(nonce, sealed))).subarray(0, TAG_SIZE);
+    if (hex(tag) !== hex(payload.subarray(PAYLOAD_SIZE - TAG_SIZE))) return null;
+    const stream = await hash(key, 'stream', nonce);
+    return sealed.map((byte, index) => byte ^ stream[index]);
+  }
+
+  // ---------- MQTT 5 over a WebSocket, one connection a job: connect, subscribe, publish at least once (retained)
+
+  function lengthBytes(length) {
+    const bytes = [];
+    do {
+      let byte = length % 128;
+      length = Math.floor(length / 128);
+      if (length) byte |= 128;
+      bytes.push(byte);
+    } while (length);
+    return bytes;
+  }
+
+  function field(text) {
+    const bytes = encoder.encode(text);
+    return [bytes.length >> 8, bytes.length & 255, ...bytes];
+  }
+
+  class Broker {
+    constructor(url) {
+      this.url = url;
+      this.buffer = new Uint8Array(0);
+      this.nextIdentifier = 1;
+      this.waiting = new Map();
+      this.topics = new Map();
+    }
+
+    connect() {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => this.fail(new Error('no answer')), CONNECT_MS);
+        this.connected = (accepted) => {
+          clearTimeout(timer);
+          if (accepted) resolve();
+          else this.fail(new Error('refused'));
+        };
+        this.failed = (error) => {
+          clearTimeout(timer);
+          reject(error);
+        };
+        try {
+          this.socket = new WebSocket(this.url, 'mqtt');
+        } catch (error) {
+          this.fail(error);
+          return;
+        }
+        this.socket.binaryType = 'arraybuffer';
+        this.socket.onopen = () => this.send(0x10, [...field('MQTT'), 5, 0x02, 0, 60, 0,
+          ...field('hceu-code-' + hex(random(6)))]);
+        this.socket.onmessage = (event) => this.received(new Uint8Array(event.data));
+        this.socket.onerror = () => {};
+        this.socket.onclose = () => this.fail(new Error('closed'));
+      });
+    }
+
+    send(first, body) {
+      if (this.socket && this.socket.readyState === 1)
+        this.socket.send(concat(Uint8Array.of(first, ...lengthBytes(body.length)), Uint8Array.from(body)));
+    }
+
+    // a packet that waits for its acknowledgement (SUBACK, PUBACK)
+    request(first, build) {
+      const identifier = this.nextIdentifier++;
+      return new Promise((resolve, reject) => {
+        this.waiting.set(identifier, { resolve, reject });
+        this.send(first, build([identifier >> 8, identifier & 255]));
+      });
+    }
+
+    subscribe(topic, onMessage) {
+      this.topics.set(topic, onMessage);
+      return this.request(0x82, (identifier) => [...identifier, 0, ...field(topic), 0]);
+    }
+
+    // retained, at least once; an empty payload clears the topic
+    publish(topic, payload, expirySeconds) {
+      const properties = payload.length ? [5, 0x02, (expirySeconds >>> 24) & 255, (expirySeconds >>> 16) & 255,
+        (expirySeconds >>> 8) & 255, expirySeconds & 255] : [0];
+      return this.request(0x33, (identifier) => [...field(topic), ...identifier, ...properties, ...payload]);
+    }
+
+    received(bytes) {
+      this.buffer = concat(this.buffer, bytes);
+      for (;;) {
+        let length = 0;
+        let multiplier = 1;
+        let at = 1;
+        for (;;) {
+          if (at >= this.buffer.length || at > 4) return;
+          const byte = this.buffer[at++];
+          length += (byte & 127) * multiplier;
+          multiplier *= 128;
+          if (!(byte & 128)) break;
+        }
+        if (this.buffer.length < at + length) return;
+        this.handle(this.buffer[0], this.buffer.subarray(at, at + length));
+        this.buffer = this.buffer.slice(at + length);
+      }
+    }
+
+    handle(first, body) {
+      const type = first >> 4;
+      if (type === 2 && body.length >= 2) {
+        this.connected(body[1] === 0);
+      } else if ((type === 4 || type === 9) && body.length >= 2) {
+        // PUBACK (a reason past its identifier), SUBACK (properties, then a reason): 0x80 or more refuses
+        const identifier = (body[0] << 8) | body[1];
+        const reason = type === 4 ? (body.length > 2 ? body[2] : 0) : body[body.length - 1];
+        const waiter = this.waiting.get(identifier);
+        this.waiting.delete(identifier);
+        if (waiter && reason < 0x80) waiter.resolve();
+        else if (waiter) waiter.reject(new Error('refused'));
+      } else if (type === 3 && body.length >= 2) {
+        const topicLength = (body[0] << 8) | body[1];
+        let at = 2 + topicLength;
+        const topic = decoder.decode(body.subarray(2, at));
+        if ((first >> 1) & 3) {
+          this.send(0x40, [body[at], body[at + 1]]);
+          at += 2;
+        }
+        let properties = 0;
+        let multiplier = 1;
+        for (;;) {
+          if (at >= body.length) return;
+          const byte = body[at++];
+          properties += (byte & 127) * multiplier;
+          multiplier *= 128;
+          if (!(byte & 128)) break;
+        }
+        const onMessage = this.topics.get(topic);
+        if (onMessage && at + properties <= body.length) onMessage(body.slice(at + properties));
+      } else if (type === 14) {
+        this.close();
+      }
+    }
+
+    fail(error) {
+      for (const waiter of this.waiting.values()) waiter.reject(error);
+      this.waiting.clear();
+      if (this.failed) this.failed(error);
+      this.close();
+    }
+
+    close() {
+      if (!this.socket) return;
+      const socket = this.socket;
+      this.socket = null;
+      socket.onclose = null;
+      try {
+        if (socket.readyState === 1) socket.send(Uint8Array.of(0xE0, 0));
+        socket.close();
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  function withTimeout(promise, milliseconds) {
+    return Promise.race([promise, new Promise((resolve, reject) =>
+      setTimeout(() => reject(new Error('no answer')), milliseconds))]);
+  }
+
+  // the payload retained on every broker that takes it: true once one did (the slower go on), false if none did
+  function publishEverywhere(topic, payload, expirySeconds, urls) {
+    return new Promise((resolve) => {
+      let left = urls.length;
+      urls.forEach(async (url) => {
+        const broker = new Broker(url);
+        try {
+          await broker.connect();
+          await withTimeout(broker.publish(topic, payload, expirySeconds), CONNECT_MS);
+          resolve(true);
+        } catch {
+          if (!--left) resolve(false);
+        } finally {
+          broker.close();
+        }
+      });
+    });
+  }
+
+  // the invite retained under the topic on any broker, opened with the key; null if none in time
+  function lookUpEverywhere(topic, key, urls) {
+    const brokers = urls.map((url) => new Broker(url));
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (invite) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        brokers.forEach((broker) => broker.close());
+        resolve(invite);
+      };
+      const timer = setTimeout(() => finish(null), LOOKUP_MS);
+      brokers.forEach((broker) => broker.connect()
+        .then(() => broker.subscribe(topic, async (payload) => {
+          const invite = await open(key, payload);
+          if (invite) finish(invite);
+        }))
+        .catch(() => {}));
+    });
+  }
+
+  // a new code for the link's invite: { code, expires } (a Date); throws with a message to show
+  async function makeInviteCode(linkText, urls = BROKERS, expirySeconds = EXPIRY_SECONDS) {
+    const invite = parseLink(linkText);
+    if (!invite) throw new Error('That is not an invite link. It looks like halo://join/ and 64 letters and digits.');
+    const code = makeCode();
+    const key = await codeKey(code);
+    if (!await publishEverywhere(await codeTopic(key), await seal(key, invite), expirySeconds, urls))
+      throw new Error('No broker could be reached. Check the connection and try again.');
+    return { code: spaced(code), expires: new Date(Date.now() + expirySeconds * 1000) };
+  }
+
+  // the link of a code: the link, or null if no game has it; throws with a message to show
+  async function findInviteLink(codeText, urls = BROKERS) {
+    const digits = parseCode(codeText);
+    if (!digits) throw new Error('A code has 8 digits.');
+    const key = await codeKey(digits);
+    const invite = await lookUpEverywhere(await codeTopic(key), key, urls);
+    return invite ? 'halo://join/' + hex(invite) : null;
+  }
+
+  return { makeInviteCode, findInviteLink, parseLink, parseCode, codeKey, codeTopic, seal, open, publishEverywhere,
+    hex, spaced };
+})();
+</script>
+
+<script>
+'use strict';
+
+(() => {
+  const element = (id) => document.getElementById(id);
+
+  function show(container, parts) {
+    container.replaceChildren(...parts);
+  }
+
+  function paragraph(text, className) {
+    const node = document.createElement('p');
+    node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
+  async function busy(button, label, work) {
+    const text = button.textContent;
+    button.disabled = true;
+    button.textContent = label;
+    try {
+      await work();
+    } finally {
+      button.disabled = false;
+      button.textContent = text;
+    }
+  }
+
+  element('make-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const result = element('make-result');
+    busy(element('make-button'), 'Making...', async () => {
+      try {
+        const { code, expires } = await InviteCodes.makeInviteCode(element('link-input').value);
+        const codeNode = paragraph(code, 'code');
+        const time = expires.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        show(result, [codeNode,
+          paragraph('On the PS3: MULTIPLAYER > INTERNET PLAY, press Y and type the code.', 'note'),
+          paragraph('The code works until ' + time + '.', 'note')]);
+      } catch (error) {
+        show(result, [paragraph(error.message, 'error')]);
+      }
+    });
+  });
+
+  element('find-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const result = element('find-result');
+    busy(element('find-button'), 'Finding...', async () => {
+      try {
+        const link = await InviteCodes.findInviteLink(element('code-input').value);
+        if (!link) {
+          show(result, [paragraph('No game has this code, or the code expired.', 'error')]);
+          return;
+        }
+        const linkNode = paragraph(link, 'link');
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = 'Copy link';
+        copy.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(link);
+            copy.textContent = 'Copied';
+          } catch {
+            copy.textContent = 'Select the link and copy it';
+          }
+        });
+        const openLink = document.createElement('a');
+        openLink.className = 'button';
+        openLink.href = link;
+        openLink.textContent = 'Open in the game';
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.append(copy, openLink);
+        show(result, [linkNode, row,
+          paragraph('On the PC: open the link, or copy it and go back to the game, which joins it.', 'note')]);
+      } catch (error) {
+        show(result, [paragraph(error.message, 'error')]);
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>
