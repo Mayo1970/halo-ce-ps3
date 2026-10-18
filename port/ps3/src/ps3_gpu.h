@@ -13,11 +13,13 @@ Xbox layer has the game's 32-bit long. Offsets are RSX local memory offsets. */
 /* takes the RSX from the display thread (ps3_main.c); 0 on success */
 int ps3_gpu_initialize(void);
 
-/* draws a colour surface 4:3 in the middle of the display, flips at the next vsync and starts the
-next frame (its scratch, after the RSX has finished the frame before last) */
+/* draws a colour surface pixel for pixel in the middle of the display (scaled down to fit if larger), flips at the
+next vsync and starts the next frame (its scratch, after the RSX has finished the frame before last) */
 void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height);
 /* returns when the RSX has done every command so far (a backend label, written once its pipeline drains) */
 void ps3_gpu_wait_idle(void);
+/* the display's size, and whether it is 16:9 */
+void ps3_gpu_display(uint32_t *width, uint32_t *height, int *widescreen);
 
 /* ---------- memory */
 
@@ -66,8 +68,13 @@ struct ps3_gpu_surface
 	uint16_t height;
 };
 
-/* A8R8G8B8 colour and Z24S8 depth, both linear */
+/* A8R8G8B8 colour and Z24S8 depth surfaces */
 void ps3_gpu_set_surface(const struct ps3_gpu_surface *surface);
+/* a target's memory: tiled where asked and a region is free (the depth Z-compressed; ZCull for zcull, once), else
+linear; its pitch and the bytes it took */
+void *ps3_gpu_target_allocate(uint32_t width, uint32_t height, int depth, int tiled, int zcull, uint32_t *offset,
+	uint32_t *pitch, uint32_t *bytes);
+void ps3_gpu_target_free(void *memory, uint32_t bytes);
 /* flags: D3DCLEAR's (1 depth, 2 stencil, 0x10 0x20 0x40 0x80 red green blue alpha); the rectangle from
 the top left. depth_stencil: the 24-bit depth above the stencil byte. */
 void ps3_gpu_clear(uint32_t flags, uint32_t argb, uint32_t depth_stencil, uint32_t x, uint32_t y, uint32_t width,
@@ -147,6 +154,8 @@ struct ps3_gpu_texture
 	uint16_t bias;
 	uint16_t minimum_level;
 	uint16_t maximum_level;
+	/* GCM's remap word, 0 for the identity */
+	uint32_t remap;
 };
 
 /* NULL turns the unit off */

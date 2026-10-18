@@ -3094,7 +3094,7 @@ static boolean main_loop_iteration(
 #ifdef HALO_PS3
 		ps3_main_loop_count++;
 		ps3_timers_frame();
-		/* a probe frame first lets the RSX finish the earlier frames */
+		/* port: the RSX's frame starts here (its timestamps: ps3_timers_rsx_wait) */
 		ps3_timers_rsx_wait(_ps3_timer_rsx_previous);
 #endif
 		PS3_MAIN_STEP(1);

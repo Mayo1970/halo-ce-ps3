@@ -4,6 +4,7 @@ voice_audio.c, xbox_textures.c's Custom Edition texels, memory_watch.c): each re
 #include <string.h>
 
 #include "halo_menus.h"
+#include "port_config.h"
 
 /* ---------- voice chat (voice_audio.c): no microphone, and the others' voices are not played */
 
@@ -207,10 +208,18 @@ void memory_watch_prepare_write(void *address, unsigned long size)
 
 /* ---------- the desktop: window, clipboard, quit */
 
+/* display.interpolation (VIDEO SETTINGS' FRAME RATE): 60 frames a second between the 30 Hz ticks, else 30 */
 int halo_interpolation_enabled(void)
 {
-	/* 30 frames each second, as on the Xbox, until G4 paces frames at the display */
-	return 0;
+	static int enabled;
+	static unsigned long read_at = (unsigned long)-1;
+
+	if (read_at != config_changes())
+	{
+		read_at = config_changes();
+		enabled = config_boolean("display.interpolation");
+	}
+	return enabled;
 }
 
 void platform_display_apply(void)

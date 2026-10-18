@@ -13,6 +13,8 @@ static const char *cgcomp = "/usr/local/ps3dev/bin/cgcomp";
 static const char *work = "/tmp";
 static unsigned long failures;
 static int verbose;
+/* the fragment programs' registers (check_fragment_key) */
+static uint32_t register_slots, register_distinct, half_colors;
 
 static void fail(const char *format, ...)
 {
@@ -202,7 +204,7 @@ static void print_fragment_source(FILE *file, const struct rsx_source *source, i
 		fputc('|', file);
 	switch (source->type)
 	{
-	case _rsx_register_temporary: fprintf(file, "R%u", source->index); break;
+	case _rsx_register_temporary: fprintf(file, "%c%u", source->half ? 'H' : 'R', source->index); break;
 	case _rsx_register_input: fprintf(file, "f[%s]", fragment_input_name(source->index)); break;
 	case _rsx_register_constant: fprintf(file, "c[%d]", constant_index); break;
 	default: fprintf(file, "R0"); break;
@@ -264,9 +266,9 @@ static void print_fragment(FILE *file, const struct rsx_instruction *instruction
 		if (instruction->destination_type == _rsx_register_none)
 			fprintf(file, "RC");
 		else if (instruction->destination_type == _rsx_register_output)
-			fprintf(file, "result.color");
+			fprintf(file, instruction->destination_half ? "o[COLH]" : "result.color");
 		else
-			fprintf(file, "R%u", instruction->destination);
+			fprintf(file, "%c%u", instruction->destination_half ? 'H' : 'R', instruction->destination);
 		print_mask(file, instruction->mask);
 		for (position = 0; position < sources; position++)
 		{
@@ -1339,15 +1341,36 @@ static int reference_fragment(const struct rsx_fragment_key *key, const struct f
 
 /* ---------- RSX fragment programs: an interpreter of the instructions */
 
+/* a value as a half-precision register holds it: 11 significant bits, rounded to the nearest (even), 2^-24 below
+2^-14, infinite from 65520 */
+static float half_round(float x)
+{
+	int exponent;
+	float quantum;
+
+	if (isnan(x) || isinf(x) || x == 0.0f)
+		return x;
+	if (fabsf(x) >= 65520.0f)
+		return x < 0.0f ? -INFINITY : INFINITY;
+	frexpf(x, &exponent);
+	quantum = exponent - 1 < -14 ? ldexpf(1.0f, -24) : ldexpf(1.0f, exponent - 11);
+	return rintf(x / quantum) * quantum;
+}
+
+/* a translated program's run: R registers 32-bit, H registers half (ps3_rsx_fp.c's half_precision), a scaled
+stage's lookups on a texture of its scale (the coordinates back to the reference's units) */
 static int rsx_fragment_run(const struct rsx_instruction *instructions, uint32_t count,
 	const struct rsx_fragment_key *key, const struct fragment_inputs *in, float result[4])
 {
-	float registers[64][4], condition[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	float registers[64][4], halves[64][4], condition[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	uint32_t index;
-	int component;
+	int component, half_output = 0;
 
 	for (index = 0; index < 64; index++)
+	{
 		registers[index][0] = registers[index][1] = registers[index][2] = registers[index][3] = 7.0e6f;
+		halves[index][0] = halves[index][1] = halves[index][2] = halves[index][3] = 7.0e3f;
+	}
 	for (index = 0; index < count; index++)
 	{
 		const struct rsx_instruction *instruction = &instructions[index];
@@ -1362,7 +1385,9 @@ static int rsx_fragment_run(const struct rsx_instruction *instructions, uint32_t
 			memset(raw, 0, sizeof(raw));
 			switch (source->type)
 			{
-			case _rsx_register_temporary: memcpy(raw, registers[source->index & 63], 16); break;
+			case _rsx_register_temporary:
+				memcpy(raw, source->half ? halves[source->index & 63] : registers[source->index & 63], 16);
+				break;
 			case _rsx_register_input:
 				if (source->index == _rsx_fp_input_color0) memcpy(raw, in->color0, 16);
 				else if (source->index == _rsx_fp_input_color1) memcpy(raw, in->color1, 16);
@@ -1404,15 +1429,23 @@ static int rsx_fragment_run(const struct rsx_instruction *instructions, uint32_t
 		case _rsx_fp_rcp: value[0] = value[1] = value[2] = value[3] = 1.0f / sources[0][0]; break;
 		case _rsx_fp_ex2: value[0] = value[1] = value[2] = value[3] = exp2f(sources[0][0]); break;
 		case _rsx_fp_lg2: value[0] = value[1] = value[2] = value[3] = log2f(sources[0][0]); break;
-		case _rsx_fp_tex: texture_sample(instruction->texture_unit, key->sampler_type[instruction->texture_unit & 3], sources[0], value); break;
+		case _rsx_fp_tex:
 		case _rsx_fp_txp:
 		{
+			int unit = instruction->texture_unit & 3;
 			float coordinates[4];
 
-			for (component = 0; component < 3; component++)
-				coordinates[component] = sources[0][component] / sources[0][3];
-			coordinates[3] = 1.0f;
-			texture_sample(instruction->texture_unit, key->sampler_type[instruction->texture_unit & 3], coordinates, value);
+			for (component = 0; component < 4; component++)
+				coordinates[component] = instruction->opcode == _rsx_fp_txp && component < 3 ?
+					sources[0][component] / sources[0][3] : sources[0][component];
+			if (instruction->opcode == _rsx_fp_txp)
+				coordinates[3] = 1.0f;
+			if (key->texture_scaled & (1 << unit))
+			{
+				coordinates[0] /= in->uniforms[_rsx_uniform_texture_scale + unit][0];
+				coordinates[1] /= in->uniforms[_rsx_uniform_texture_scale + unit][1];
+			}
+			texture_sample(unit, key->sampler_type[unit], coordinates, value);
 			break;
 		}
 		case _rsx_fp_kil:
@@ -1449,11 +1482,16 @@ static int rsx_fragment_run(const struct rsx_instruction *instructions, uint32_t
 				continue;
 			if (instruction->condition_update)
 				condition[component] = value[component];
-			if (instruction->destination_type != _rsx_register_none)
+			if (instruction->destination_type != _rsx_register_none && instruction->destination_half)
+				halves[instruction->destination & 63][component] = half_round(value[component]);
+			else if (instruction->destination_type != _rsx_register_none)
 				registers[instruction->destination & 63][component] = value[component];
 		}
+		if (instruction->destination_type != _rsx_register_none && !instruction->destination)
+			half_output = instruction->destination_half;
 	}
-	memcpy(result, registers[0], 16);
+	/* the colour: R0, or H0 (FP_CONTROL without 0x40) */
+	memcpy(result, half_output ? halves[0] : registers[0], 16);
 	return 0;
 }
 
@@ -1557,6 +1595,12 @@ static void random_key(struct rsx_fragment_key *key)
 	key->compare_mode = random_next() & 0xffff;
 	key->fog_enable = (uint8_t)random_below(2);
 	key->fog_table_mode = (uint8_t)random_below(4);
+	/* a linear target at the screen's scale (d3d8_rsx.c's bind_textures) on a quarter of the stages */
+	for (stage = 0; stage < 4; stage++)
+	{
+		if (random_below(4) == 0)
+			key->texture_scaled |= (uint8_t)(1 << stage);
+	}
 }
 
 static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t number, uint32_t *instruction_total)
@@ -1575,6 +1619,39 @@ static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t numb
 		return;
 	}
 	*instruction_total += count;
+	/* the R registers the program takes (an H is half of one, two at least), and as many 32-bit ones as it has
+	registers */
+	{
+		uint8_t full[64], half[64];
+		uint32_t slots = 2, distinct = 0;
+
+		memset(full, 0, sizeof(full));
+		memset(half, 0, sizeof(half));
+		for (index = 0; index < count; index++)
+		{
+			const struct rsx_instruction *instruction = &instructions[index];
+			int position;
+
+			if (instruction->destination_type != _rsx_register_none)
+				(instruction->destination_half ? half : full)[instruction->destination & 63] = 1;
+			for (position = 0; position < 3; position++)
+			{
+				if (instruction->source[position].type == _rsx_register_temporary)
+					(instruction->source[position].half ? half : full)[instruction->source[position].index & 63] = 1;
+			}
+		}
+		for (index = 0; index < 64; index++)
+		{
+			distinct += full[index] + half[index];
+			if (full[index] && index + 1 > slots)
+				slots = index + 1;
+			if (half[index] && index / 2 + 1 > slots)
+				slots = index / 2 + 1;
+		}
+		register_slots += slots;
+		register_distinct += distinct > 2 ? distinct : 2;
+		half_colors += half[0];
+	}
 	word_count = rsx_fragment_encode(instructions, count, words);
 	snprintf(path, sizeof(path), "%s/fp%04u.fp", work, number);
 	file = fopen(path, "w");
@@ -1610,11 +1687,52 @@ static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t numb
 	}
 	free(assembled);
 
+	/* an R register holds two H registers: none used as both */
+	{
+		uint8_t as_full[64], as_half[64];
+
+		memset(as_full, 0, sizeof(as_full));
+		memset(as_half, 0, sizeof(as_half));
+		for (index = 0; index < count; index++)
+		{
+			const struct rsx_instruction *instruction = &instructions[index];
+			int position;
+
+			if (instruction->destination_type != _rsx_register_none)
+			{
+				if (instruction->destination_half)
+					as_half[(instruction->destination / 2) & 63] = 1;
+				else
+					as_full[instruction->destination & 63] = 1;
+			}
+			for (position = 0; position < 3; position++)
+			{
+				const struct rsx_source *source = &instruction->source[position];
+
+				if (source->type != _rsx_register_temporary)
+					continue;
+				if (source->half)
+					as_half[(source->index / 2) & 63] = 1;
+				else
+					as_full[source->index & 63] = 1;
+			}
+		}
+		for (index = 0; index < 64; index++)
+		{
+			if (as_full[index] && as_half[index])
+			{
+				fail("fragment key %u: R%u is also H%u or H%u (%s)", number, index, 2 * index, 2 * index + 1, path);
+				return;
+			}
+		}
+	}
+
 	/* the RSX's registers start undefined: no read before a write */
 	{
-		uint8_t written[64];
+		uint8_t written[64], written_half[64];
 
 		memset(written, 0, sizeof(written));
+		memset(written_half, 0, sizeof(written_half));
 		for (index = 0; index < count; index++)
 		{
 			const struct rsx_instruction *instruction = &instructions[index];
@@ -1636,16 +1754,20 @@ static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t numb
 					continue;
 				for (component = 0; component < 4; component++)
 				{
-					if ((used & (1 << component)) && !(written[source->index] & (1 << source->swizzle[component])))
+					uint8_t held = source->half ? written_half[source->index & 63] : written[source->index & 63];
+
+					if ((used & (1 << component)) && !(held & (1 << source->swizzle[component])))
 					{
-						fail("fragment key %u: instruction %u reads R%u.%c unwritten (%s)", number, index,
-							source->index, components[source->swizzle[component]], path);
+						fail("fragment key %u: instruction %u reads %c%u.%c unwritten (%s)", number, index,
+							source->half ? 'H' : 'R', source->index, components[source->swizzle[component]], path);
 						return;
 					}
 				}
 			}
-			if (instruction->destination_type != _rsx_register_none)
-				written[instruction->destination] |= instruction->mask;
+			if (instruction->destination_type != _rsx_register_none && instruction->destination_half)
+				written_half[instruction->destination & 63] |= instruction->mask;
+			else if (instruction->destination_type != _rsx_register_none)
+				written[instruction->destination & 63] |= instruction->mask;
 		}
 	}
 
@@ -1673,6 +1795,14 @@ static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t numb
 				in.uniforms[uniform][component] = random_float(0.0f, 1.0f);
 		}
 		in.uniforms[_rsx_uniform_fog][1] = in.uniforms[_rsx_uniform_fog][0] + random_float(0.1f, 1.0f);
+		/* a scaled stage's pixels a unit, as a screen target's (1 to 2.25) */
+		for (uniform = 0; uniform < 4; uniform++)
+		{
+			in.uniforms[_rsx_uniform_texture_scale + uniform][0] = random_float(1.0f, 2.25f);
+			in.uniforms[_rsx_uniform_texture_scale + uniform][1] = random_float(1.0f, 2.25f);
+			in.uniforms[_rsx_uniform_texture_scale + uniform][2] = 1.0f;
+			in.uniforms[_rsx_uniform_texture_scale + uniform][3] = 1.0f;
+		}
 		reference_killed = reference_fragment(key, &in, reference);
 		killed = rsx_fragment_run(instructions, count, key, &in, result);
 		if (killed != reference_killed)
@@ -1728,8 +1858,9 @@ int main(int argc, char *argv[])
 		random_key(&key);
 		check_fragment_key(&key, number, &instruction_total);
 	}
-	printf("fragment programs: %u random keys, %u instructions on average\n", fragment_keys,
-		instruction_total / fragment_keys);
+	printf("fragment programs: %u random keys, %u instructions on average; %.2f R registers on average (%.2f if each "
+		"were 32-bit), %u colours in H0\n", fragment_keys, instruction_total / fragment_keys,
+		(double)register_slots / fragment_keys, (double)register_distinct / fragment_keys, half_colors);
 	printf("%lu failures\n", failures);
 	return failures ? 1 : 0;
 }

@@ -2051,10 +2051,44 @@ enum
 	_xbox_code_button,
 	_xbox_code_key,
 	_xbox_invite_code,
+	/* SETTINGS' screen of PLAYER PROFILES and VIDEO SETTINGS, and VIDEO SETTINGS' (xbox_settings_wire) */
+	_xbox_settings_texts,
+	_xbox_settings_descriptions,
+	_xbox_settings_title,
+	_xbox_video_title,
+	_xbox_video_labels,
+	_xbox_video_widescreen_values,
+	_xbox_video_frame_rate_values,
+	_xbox_video_help,
+	_xbox_settings_screen,
+	_xbox_settings_header,
+	_xbox_settings_list,
+	_xbox_settings_profiles_item,
+	_xbox_settings_video_item,
+	_xbox_settings_description,
+	_xbox_settings_picture,
+	_xbox_settings_description_text,
+	_xbox_video_screen,
+	_xbox_video_header,
+	_xbox_video_list,
+	_xbox_video_widescreen_row,
+	_xbox_video_widescreen_label,
+	_xbox_video_widescreen_spinner,
+	_xbox_video_frame_rate_row,
+	_xbox_video_frame_rate_label,
+	_xbox_video_frame_rate_spinner,
+	_xbox_video_help_text,
 	NUMBER_OF_XBOX_TAGS,
-	/* (the string lists come first) */
+	/* (each part's string lists come first) */
 	FIRST_XBOX_WIDGET = _xbox_lan_item,
+	FIRST_XBOX_SETTINGS_TAG = _xbox_settings_texts,
+	FIRST_XBOX_SETTINGS_WIDGET = _xbox_settings_screen,
 };
+
+#define XBOX_SETTINGS "ui\\shell\\main_menu\\settings_select\\"
+#define XBOX_PROFILE_EDIT XBOX_SETTINGS "player_setup\\player_profile_edit\\"
+#define XBOX_ADVANCED_CONTROLS XBOX_PROFILE_EDIT "advanced_controls\\"
+#define XBOX_VIDEO XBOX_SETTINGS "video_settings\\"
 
 /* named as the map's tags are (the instances keep the pointers) */
 static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
@@ -2074,6 +2108,51 @@ static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
 	XBOX_INTERNET "enter_code_button",
 	XBOX_INTERNET "enter_code_key",
 	XBOX_PREGAME "invite_code_text",
+	XBOX_SETTINGS "settings_options",
+	XBOX_SETTINGS "settings_option_descriptions",
+	XBOX_SETTINGS "settings_title",
+	XBOX_VIDEO "video_title",
+	XBOX_VIDEO "video_labels",
+	XBOX_VIDEO "var_widescreen",
+	XBOX_VIDEO "var_frame_rate",
+	XBOX_VIDEO "video_help_strings",
+	XBOX_SETTINGS "settings_select_screen",
+	XBOX_SETTINGS "header_settings",
+	XBOX_SETTINGS "settings_select_list",
+	XBOX_SETTINGS "settings_profiles_item",
+	XBOX_SETTINGS "settings_video_item",
+	XBOX_SETTINGS "settings_list_ext_desc",
+	XBOX_SETTINGS "settings_options_pic",
+	XBOX_SETTINGS "settings_options_txt",
+	XBOX_VIDEO "video_settings_screen",
+	XBOX_VIDEO "header_video_settings",
+	XBOX_VIDEO "video_settings_menu",
+	XBOX_VIDEO "op_widescreen",
+	XBOX_VIDEO "widescreen_label",
+	XBOX_VIDEO "widescreen_spinner",
+	XBOX_VIDEO "op_frame_rate",
+	XBOX_VIDEO "frame_rate_label",
+	XBOX_VIDEO "frame_rate_spinner",
+	XBOX_VIDEO "video_settings_help",
+};
+
+/* the map's widgets VIDEO SETTINGS copies (xbox_settings_find) */
+struct xbox_settings_stock
+{
+	long main_menu_item;
+	long profiles_screen;
+	long type_screen;
+	long type_list;
+	long first_item;
+	long second_item;
+	long type_description;
+	long advanced_screen;
+	long advanced_list;
+	long first_row;
+	long second_row;
+	long advanced_help;
+	long button_key;
+	long options_key;
 };
 
 /* a list's handler: its event, the function it runs, and whether it then opens the map select (hosting) */
@@ -2200,6 +2279,363 @@ static void xbox_child_set(struct ui_widget_child_reference *child, long tag_ind
 	strncpy(child->name, name, sizeof(child->name) - 1);
 }
 
+/* ---------- SETTINGS (the PS3's): a screen of PLAYER PROFILES and VIDEO SETTINGS, a copy of the multiplayer menu's;
+VIDEO SETTINGS' WIDESCREEN and FRAME RATE, a copy of the profile's ADVANCED CONTROLS, written to config.toml */
+
+/* the headers' place and colour, those of the maps' header pictures' text (in the menu's large font) */
+#define XBOX_HEADER_TOP 46
+#define XBOX_HEADER_LEFT 65
+#define XBOX_HEADER_HEIGHT 26
+#define XBOX_HEADER_RIGHT 600
+
+static struct ui_widget_definition *xbox_widget(long tag_index)
+{
+	return tag_index == NONE ? NULL : tag_get(UI_WIDGET_DEFINITION_TAG, tag_index);
+}
+
+static long xbox_child_tag(long tag_index, long child)
+{
+	struct ui_widget_definition *widget = xbox_widget(tag_index);
+
+	if (!widget || child >= widget->child_widgets.count)
+		return NONE;
+	return ((struct ui_widget_child_reference *)widget->child_widgets.address)[child].widget_tag.index;
+}
+
+/* the map's widgets the screens copy, each as the Xbox's ui.map has it; FALSE if one is not */
+static boolean xbox_settings_find(struct xbox_settings_stock *stock)
+{
+	struct ui_widget_definition *item;
+	long index;
+	boolean opens = FALSE;
+
+	stock->main_menu_item = tag_loaded(UI_WIDGET_DEFINITION_TAG, "ui\\shell\\main_menu\\main_menu_item_settings");
+	stock->profiles_screen = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_SETTINGS "player_setup\\player_profile_select_screen");
+	stock->type_screen = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_select_screen");
+	stock->type_list = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_select_list");
+	stock->first_item = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_coop_item");
+	stock->second_item = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_split_item");
+	stock->type_description = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_list_ext_desc");
+	stock->advanced_screen = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_ADVANCED_CONTROLS "advanced_controls_screen");
+	stock->advanced_list = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_ADVANCED_CONTROLS "advanced_controls_menu");
+	stock->first_row = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_ADVANCED_CONTROLS "op_invert_joystick");
+	stock->second_row = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_ADVANCED_CONTROLS "op_controller_vibration");
+	stock->advanced_help = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_ADVANCED_CONTROLS "advanced_controls_help");
+	stock->button_key = tag_loaded(UI_WIDGET_DEFINITION_TAG, "ui\\shell\\main_menu\\button_key");
+	stock->options_key = tag_loaded(UI_WIDGET_DEFINITION_TAG, "ui\\shell\\main_menu\\button_key_options");
+	if (stock->main_menu_item == NONE || stock->profiles_screen == NONE || stock->type_screen == NONE ||
+		stock->type_list == NONE || stock->first_item == NONE || stock->second_item == NONE ||
+		stock->type_description == NONE || stock->advanced_screen == NONE || stock->advanced_list == NONE ||
+		stock->first_row == NONE || stock->second_row == NONE || stock->advanced_help == NONE ||
+		stock->button_key == NONE || stock->options_key == NONE)
+		return FALSE;
+	item = xbox_widget(stock->main_menu_item);
+	for (index = 0; index < item->event_handlers.count; index++)
+	{
+		struct ui_widget_event_handler_reference const *handler =
+			(struct ui_widget_event_handler_reference const *)item->event_handlers.address + index;
+
+		opens |= TEST_FLAG(handler->flags, _event_handler_open_widget_bit) &&
+			handler->widget_tag.index == stock->profiles_screen;
+	}
+	/* the screens' children: the multiplayer menu's header, list, key and line; its description's picture and
+	text; ADVANCED CONTROLS' list, header and key; each row's label and spinner */
+	return opens && xbox_widget(stock->type_screen)->child_widgets.count == 4 &&
+		xbox_child_tag(stock->type_screen, 1) == stock->type_list &&
+		xbox_child_tag(stock->type_screen, 2) == stock->button_key &&
+		xbox_widget(stock->type_description)->child_widgets.count == 2 &&
+		xbox_widget(stock->advanced_screen)->child_widgets.count == 3 &&
+		xbox_child_tag(stock->advanced_screen, 0) == stock->advanced_list &&
+		xbox_child_tag(stock->advanced_screen, 2) == stock->options_key &&
+		xbox_widget(stock->advanced_list)->child_widgets.count >= 2 &&
+		xbox_child_tag(stock->advanced_list, 0) == stock->first_row &&
+		xbox_widget(stock->first_row)->child_widgets.count == 2 &&
+		xbox_widget(stock->second_row)->child_widgets.count == 2 &&
+		xbox_widget(xbox_child_tag(stock->first_row, 1)) &&
+		xbox_widget(xbox_child_tag(stock->first_row, 1))->type == _widget_type_spinner_list &&
+		xbox_widget(xbox_child_tag(stock->second_row, 1)) &&
+		xbox_widget(xbox_child_tag(stock->second_row, 1))->type == _widget_type_spinner_list;
+}
+
+/* the string lists and the copies, whose references xbox_settings_wire sets once the tags exist */
+static void xbox_settings_define(struct xbox_settings_stock const *stock, void **definitions)
+{
+	/* (ASCII: port_stubs.c's halo_menus_utf16) */
+	char const *texts[] = { "PLAYER PROFILES", "VIDEO SETTINGS" };
+	char const *descriptions[] =
+	{
+		"Create, edit or delete the\r\nplayer profiles: name,\r\ncontrols and color.",
+		"Choose the picture's shape\r\n(widescreen or 4:3) and the\r\nframe rate (60 or 30).",
+	};
+	char const *settings_title = "SETTINGS";
+	char const *video_title = "VIDEO SETTINGS";
+	char const *labels[] = { "WIDESCREEN", "FRAME RATE" };
+	char const *widescreen_values[] = { "ON", "OFF" };
+	char const *frame_rate_values[] = { "60", "30" };
+	char const *help[] =
+	{
+		"The picture fills a 16:9 screen, and you see more\r\nof the world at its sides.",
+		"The picture keeps the Xbox's 4:3 shape, in the\r\nmiddle of the screen.",
+		"The game draws 60 frames a second, blending the\r\nworld between its 30 updates a second.",
+		"The game draws 30 frames a second, as on the Xbox.",
+	};
+
+	definitions[_xbox_settings_texts] = string_list_build(texts, NUMBEROF(texts));
+	definitions[_xbox_settings_descriptions] = string_list_build(descriptions, NUMBEROF(descriptions));
+	definitions[_xbox_settings_title] = string_list_build(&settings_title, 1);
+	definitions[_xbox_video_title] = string_list_build(&video_title, 1);
+	definitions[_xbox_video_labels] = string_list_build(labels, NUMBEROF(labels));
+	definitions[_xbox_video_widescreen_values] = string_list_build(widescreen_values, NUMBEROF(widescreen_values));
+	definitions[_xbox_video_frame_rate_values] = string_list_build(frame_rate_values, NUMBEROF(frame_rate_values));
+	definitions[_xbox_video_help] = string_list_build(help, NUMBEROF(help));
+	definitions[_xbox_settings_screen] = xbox_widget_copy(stock->type_screen, "settings_select_screen");
+	definitions[_xbox_settings_header] = xbox_widget_copy(stock->first_item, "header_settings");
+	definitions[_xbox_settings_list] = xbox_widget_copy(stock->type_list, "settings_select_list");
+	/* (both as SPLIT SCREEN's item, which only opens its screen; the first in CO-OP's place) */
+	definitions[_xbox_settings_profiles_item] = xbox_widget_copy(stock->second_item, "settings_profiles_item");
+	definitions[_xbox_settings_video_item] = xbox_widget_copy(stock->second_item, "settings_video_item");
+	definitions[_xbox_settings_description] = xbox_widget_copy(stock->type_description, "settings_list_ext_desc");
+	definitions[_xbox_settings_picture] = xbox_widget_copy(xbox_child_tag(stock->type_description, 0),
+		"settings_options_pic");
+	definitions[_xbox_settings_description_text] = xbox_widget_copy(xbox_child_tag(stock->type_description, 1),
+		"settings_options_txt");
+	definitions[_xbox_video_screen] = xbox_widget_copy(stock->advanced_screen, "video_settings_screen");
+	definitions[_xbox_video_header] = xbox_widget_copy(stock->first_item, "header_video_settings");
+	definitions[_xbox_video_list] = xbox_widget_copy(stock->advanced_list, "video_settings_menu");
+	definitions[_xbox_video_widescreen_row] = xbox_widget_copy(stock->first_row, "op_widescreen");
+	definitions[_xbox_video_widescreen_label] = xbox_widget_copy(xbox_child_tag(stock->first_row, 0), "widescreen_label");
+	definitions[_xbox_video_widescreen_spinner] = xbox_widget_copy(xbox_child_tag(stock->first_row, 1),
+		"widescreen_spinner");
+	definitions[_xbox_video_frame_rate_row] = xbox_widget_copy(stock->second_row, "op_frame_rate");
+	definitions[_xbox_video_frame_rate_label] = xbox_widget_copy(xbox_child_tag(stock->second_row, 0), "frame_rate_label");
+	definitions[_xbox_video_frame_rate_spinner] = xbox_widget_copy(xbox_child_tag(stock->second_row, 1),
+		"frame_rate_spinner");
+	definitions[_xbox_video_help_text] = xbox_widget_copy(stock->advanced_help, "video_settings_help");
+}
+
+/* a screen's children: the copy's records of its template's, those named here pointing at the port's widgets */
+static void xbox_children_set(struct ui_widget_definition *widget, long const *template_children, long count,
+	long const *tags, char const *const *names)
+{
+	struct ui_widget_child_reference *children = allocate(count * sizeof(*children));
+	long index;
+
+	if (!children)
+		return;
+	for (index = 0; index < count; index++)
+	{
+		children[index] = ((struct ui_widget_child_reference *)widget->child_widgets.address)[template_children[index]];
+		if (tags[index] != NONE)
+			xbox_child_set(&children[index], tags[index], names[index]);
+	}
+	widget->child_widgets.count = count;
+	widget->child_widgets.address = children;
+}
+
+/* a text widget (a list item's copy) as a screen's header: its title in the header pictures' place and blue */
+static void xbox_header_set(struct ui_widget_definition *header, long title_tag)
+{
+	header->bounds.y0 = XBOX_HEADER_TOP;
+	header->bounds.x0 = XBOX_HEADER_LEFT;
+	header->bounds.y1 = XBOX_HEADER_TOP + XBOX_HEADER_HEIGHT;
+	header->bounds.x1 = XBOX_HEADER_RIGHT;
+	header->event_handlers.count = 0;
+	header->game_data_inputs.count = 0;
+	header->justification = (short)name_index("left", align_names, NUMBEROF(align_names));
+	header->text_color.alpha = 1.0f;
+	header->text_color.red = 41.0f / 255.0f;
+	header->text_color.green = 149.0f / 255.0f;
+	header->text_color.blue = 1.0f;
+	reference_set(&header->text_label_string_list, UNICODE_STRING_LIST_TAG, title_tag);
+	header->string_list_index = 0;
+}
+
+/* handlers that run a function, and with go_back return to the screen before */
+static void xbox_handlers_set(struct ui_widget_definition *widget, char const *const *events, long count,
+	char const *function, boolean go_back)
+{
+	struct ui_widget_event_handler_reference *handlers = allocate(count * sizeof(*handlers));
+	long index;
+
+	if (!handlers)
+		return;
+	for (index = 0; index < count; index++)
+	{
+		handlers[index].flags = FLAG(_event_handler_run_function_bit) |
+			(go_back ? FLAG(_event_handler_go_back_to_previous_widget_bit) : 0);
+		handlers[index].event_type = (short)name_index(events[index], event_names, NUMBEROF(event_names));
+		handlers[index].function = (short)function_index(function, "xbox", 0);
+		reference_clear(&handlers[index].widget_tag, UI_WIDGET_DEFINITION_TAG);
+		reference_clear(&handlers[index].sound_effect, SOUND_TAG);
+	}
+	widget->event_handlers.count = count;
+	widget->event_handlers.address = handlers;
+}
+
+static void xbox_input_set(struct ui_widget_definition *widget, char const *function)
+{
+	struct ui_widget_game_data_input_reference *inputs = allocate(sizeof(*inputs));
+
+	if (!inputs)
+		return;
+	inputs->function = (short)game_data_input_index(function, "xbox", 0);
+	widget->game_data_inputs.count = 1;
+	widget->game_data_inputs.address = inputs;
+}
+
+/* a spinner bound to a setting: its values, shown by its strings in order ("port setting load" and "port settings
+save", menu_functions.c) */
+static void xbox_setting_add(long definition_index, char const *setting, char const *const *values, long count)
+{
+	struct pc_menu_setting *settings = realloc(menu_tags.settings, (menu_tags.setting_count + 1) * sizeof(*settings));
+	struct pc_menu_setting *entry;
+	long index;
+
+	if (!settings)
+	{
+		build.failed = TRUE;
+		return;
+	}
+	menu_tags.settings = settings;
+	entry = &menu_tags.settings[menu_tags.setting_count++];
+	memset(entry, 0, sizeof(*entry));
+	entry->definition_index = definition_index;
+	entry->setting = setting;
+	entry->loaded_index = NONE;
+	for (index = 0; index < count && index < MAXIMUM_STRINGS; index++)
+		entry->values[index] = values[index];
+	entry->value_count = index;
+}
+
+/* the screens' references, children and handlers, and their two settings */
+static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **definitions, long const *tags)
+{
+	/* (display.screen_width: 0 is the display's shape, 640 the Xbox's 4:3) */
+	static char const *const widescreen_values[] = { "0", "640" };
+	static char const *const frame_rate_values[] = { "true", "false" };
+	static char const *const accept_events[] = { "a", "start" };
+	static char const *const created_event[] = { "created" };
+	struct ui_widget_definition *screen = definitions[_xbox_settings_screen];
+	struct ui_widget_definition *list = definitions[_xbox_settings_list];
+	struct ui_widget_definition *description = definitions[_xbox_settings_description];
+	struct ui_widget_definition *picture = definitions[_xbox_settings_picture];
+	struct ui_widget_definition *text = definitions[_xbox_settings_description_text];
+	struct ui_widget_definition *video_screen = definitions[_xbox_video_screen];
+	struct ui_widget_definition *video_list = definitions[_xbox_video_list];
+	long index;
+
+	/* SETTINGS: the header, the list of two, the key (the multiplayer menu's line goes) */
+	{
+		long template_children[] = { 0, 1, 2 };
+		long children[] = { tags[_xbox_settings_header], tags[_xbox_settings_list], NONE };
+		char const *names[] = { "header_settings", "settings_select_list", "" };
+
+		xbox_children_set(screen, template_children, NUMBEROF(children), children, names);
+	}
+	screen->event_handlers.count = 0;
+	xbox_header_set(definitions[_xbox_settings_header], tags[_xbox_settings_title]);
+	{
+		long template_children[] = { 0, 1 };
+		long children[] = { tags[_xbox_settings_profiles_item], tags[_xbox_settings_video_item] };
+		char const *names[] = { "settings_profiles_item", "settings_video_item" };
+
+		xbox_children_set(list, template_children, NUMBEROF(children), children, names);
+	}
+	xbox_input_set(list, "multiplayer type menu update desc");
+	reference_set(&list->extended_description_widget, UI_WIDGET_DEFINITION_TAG, tags[_xbox_settings_description]);
+	((struct ui_widget_definition *)definitions[_xbox_settings_profiles_item])->bounds =
+		xbox_widget(stock->first_item)->bounds;
+	xbox_item_set(definitions[_xbox_settings_profiles_item], tags[_xbox_settings_texts], stock->profiles_screen);
+	xbox_item_set(definitions[_xbox_settings_video_item], tags[_xbox_settings_texts], tags[_xbox_video_screen]);
+	((struct ui_widget_definition *)definitions[_xbox_settings_video_item])->string_list_index = 1;
+	/* the description: no picture (its frames are the multiplayer modes'), the text up where it was */
+	{
+		long template_children[] = { 0, 1 };
+		long children[] = { tags[_xbox_settings_picture], tags[_xbox_settings_description_text] };
+		char const *names[] = { "settings_options_pic", "settings_options_txt" };
+
+		xbox_children_set(description, template_children, NUMBEROF(children), children, names);
+		if (!build.failed)
+		{
+			struct ui_widget_child_reference *records = description->child_widgets.address;
+
+			records[1].vertical_offset = (short)(records[0].vertical_offset + picture->bounds.y0 - text->bounds.y0);
+		}
+	}
+	reference_clear(&picture->background_bitmap, BITMAP_GROUP_TAG);
+	reference_set(&text->text_label_string_list, UNICODE_STRING_LIST_TAG, tags[_xbox_settings_descriptions]);
+	text->string_list_index = 0;
+
+	/* VIDEO SETTINGS: ADVANCED CONTROLS' list of its first two rows, its header the port's, its key */
+	{
+		long template_children[] = { 0, 1, 2 };
+		long children[] = { tags[_xbox_video_list], tags[_xbox_video_header], NONE };
+		char const *names[] = { "video_settings_menu", "header_video_settings", "" };
+
+		xbox_children_set(video_screen, template_children, NUMBEROF(children), children, names);
+	}
+	video_screen->event_handlers.count = 0;
+	xbox_header_set(definitions[_xbox_video_header], tags[_xbox_video_title]);
+	{
+		long template_children[] = { 0, 1 };
+		long children[] = { tags[_xbox_video_widescreen_row], tags[_xbox_video_frame_rate_row] };
+		char const *names[] = { "op_widescreen", "op_frame_rate" };
+
+		xbox_children_set(video_list, template_children, NUMBEROF(children), children, names);
+	}
+	/* (the help line of the row and value focused, the Xbox's: game_options_menu_update_text_desc) */
+	xbox_input_set(video_list, "game settings lists text update");
+	reference_set(&video_list->extended_description_widget, UI_WIDGET_DEFINITION_TAG, tags[_xbox_video_help_text]);
+	/* A or START: the changed values into config.toml (applied from the next frame), and back */
+	xbox_handlers_set(video_list, accept_events, NUMBEROF(accept_events), "port settings save", TRUE);
+	for (index = 0; index < 2; index++)
+	{
+		long row = index ? _xbox_video_frame_rate_row : _xbox_video_widescreen_row;
+		long label = index ? _xbox_video_frame_rate_label : _xbox_video_widescreen_label;
+		long spinner = index ? _xbox_video_frame_rate_spinner : _xbox_video_widescreen_spinner;
+		long values = index ? _xbox_video_frame_rate_values : _xbox_video_widescreen_values;
+		long template_children[] = { 0, 1 };
+		long children[2];
+		char const *names[2];
+
+		children[0] = tags[label];
+		children[1] = tags[spinner];
+		names[0] = ((struct ui_widget_definition *)definitions[label])->name;
+		names[1] = ((struct ui_widget_definition *)definitions[spinner])->name;
+		xbox_children_set(definitions[row], template_children, 2, children, names);
+		reference_set(&((struct ui_widget_definition *)definitions[label])->text_label_string_list,
+			UNICODE_STRING_LIST_TAG, tags[_xbox_video_labels]);
+		((struct ui_widget_definition *)definitions[label])->string_list_index = (short)index;
+		reference_set(&((struct ui_widget_definition *)definitions[spinner])->text_label_string_list,
+			UNICODE_STRING_LIST_TAG, tags[values]);
+		xbox_handlers_set(definitions[spinner], created_event, 1, "port setting load", FALSE);
+	}
+	reference_set(&((struct ui_widget_definition *)definitions[_xbox_video_help_text])->text_label_string_list,
+		UNICODE_STRING_LIST_TAG, tags[_xbox_video_help]);
+	((struct ui_widget_definition *)definitions[_xbox_video_help_text])->string_list_index = 0;
+	xbox_setting_add(tags[_xbox_video_widescreen_spinner], "display.screen_width", widescreen_values, 2);
+	xbox_setting_add(tags[_xbox_video_frame_rate_spinner], "display.interpolation", frame_rate_values, 2);
+}
+
+/* the map's own, last, as it cannot be undone: the main menu's SETTINGS opens the new screen */
+static void xbox_settings_open(struct xbox_settings_stock const *stock, long settings_screen)
+{
+	struct ui_widget_definition *item = xbox_widget(stock->main_menu_item);
+	struct ui_widget_event_handler_reference *handlers = allocate(item->event_handlers.count * sizeof(*handlers));
+	long index;
+
+	if (!handlers)
+		return;
+	memcpy(handlers, item->event_handlers.address, item->event_handlers.count * sizeof(*handlers));
+	for (index = 0; index < item->event_handlers.count; index++)
+	{
+		if (TEST_FLAG(handlers[index].flags, _event_handler_open_widget_bit) &&
+			handlers[index].widget_tag.index == stock->profiles_screen)
+			reference_set(&handlers[index].widget_tag, UI_WIDGET_DEFINITION_TAG, settings_screen);
+	}
+	item->event_handlers.address = handlers;
+}
+
 static void xbox_multiplayer_patch(void)
 {
 	/* (ASCII: port_stubs.c's halo_menus_utf16) */
@@ -2234,9 +2670,11 @@ static void xbox_multiplayer_patch(void)
 	struct string_list *description_strings;
 	struct string_list_entry *entries;
 	struct cache_file_tag_instance *instances;
+	struct xbox_settings_stock settings_stock;
 	void *definitions[NUMBER_OF_XBOX_TAGS];
 	long tags[NUMBER_OF_XBOX_TAGS];
-	long index, type_description, blue_line = NONE, teams_child = NONE;
+	long index, type_description, blue_line = NONE, teams_child = NONE, count;
+	boolean settings;
 
 	if (type_screen == NONE || type_list == NONE || system_link == NONE || options_text == NONE ||
 		descriptions == NONE || map_select == NONE || server_screen == NONE || server_list == NONE ||
@@ -2283,11 +2721,16 @@ static void xbox_multiplayer_patch(void)
 		platform_log("menus: ui.map's System Link screens are not the Xbox's: no LAN PLAY or INTERNET PLAY");
 		return;
 	}
+	/* (before the multiplayer menu changes below: the Xbox's screens as they are) */
+	settings = xbox_settings_find(&settings_stock);
+	if (!settings)
+		platform_log("menus: ui.map's settings screens are not the Xbox's: no VIDEO SETTINGS");
+	count = settings ? NUMBER_OF_XBOX_TAGS : FIRST_XBOX_SETTINGS_TAG;
 	memset(&build, 0, sizeof(build));
-	instances = instances_grow(NUMBER_OF_XBOX_TAGS, &build.first_index, &build.first_salt);
+	instances = instances_grow(count, &build.first_index, &build.first_salt);
 	if (!instances)
 		goto failed;
-	for (index = 0; index < NUMBER_OF_XBOX_TAGS; index++)
+	for (index = 0; index < count; index++)
 		tags[index] = next_tag();
 	/* the items, the game lists, INTERNET PLAY's description and message: copies of System Link's */
 	definitions[_xbox_lan_text] = string_list_build(&lan_text, 1);
@@ -2307,6 +2750,8 @@ static void xbox_multiplayer_patch(void)
 	definitions[_xbox_code_button] = code_button = xbox_widget_copy(create_button, "enter_code_button");
 	definitions[_xbox_code_key] = code_key = xbox_widget_copy(create_key, "enter_code_key");
 	definitions[_xbox_invite_code] = invite_code = xbox_widget_copy(choose_teams, "invite_code_text");
+	if (settings)
+		xbox_settings_define(&settings_stock, definitions);
 	key_children = allocate(2 * sizeof(*key_children));
 	invite_code_input = allocate(sizeof(*invite_code_input));
 	entries = allocate((stock_descriptions->strings.count + 1) * sizeof(*entries));
@@ -2314,11 +2759,13 @@ static void xbox_multiplayer_patch(void)
 	pregame_children = allocate((pregame->child_widgets.count + 1) * sizeof(*pregame_children));
 	if (build.failed)
 		goto failed;
-	for (index = 0; index < NUMBER_OF_XBOX_TAGS; index++)
+	for (index = 0; index < count; index++)
 	{
 		struct cache_file_tag_instance *instance = &instances[DATUM_INDEX_TO_ABSOLUTE_INDEX(tags[index])];
 
-		instance->group_tag = index < FIRST_XBOX_WIDGET ? UNICODE_STRING_LIST_TAG : UI_WIDGET_DEFINITION_TAG;
+		instance->group_tag = index < FIRST_XBOX_WIDGET ||
+			(index >= FIRST_XBOX_SETTINGS_TAG && index < FIRST_XBOX_SETTINGS_WIDGET) ?
+			UNICODE_STRING_LIST_TAG : UI_WIDGET_DEFINITION_TAG;
 		instance->parent_group_tags[0] = NONE;
 		instance->parent_group_tags[1] = NONE;
 		instance->tag_index = tags[index];
@@ -2368,6 +2815,8 @@ static void xbox_multiplayer_patch(void)
 	}
 	reference_clear(&status->text_label_string_list, UNICODE_STRING_LIST_TAG);
 	type_description = game_data_input_index("xbox mp type desc", "xbox", 0);
+	if (settings)
+		xbox_settings_wire(&settings_stock, definitions, tags);
 	if (build.failed)
 		goto failed;
 	/* the map's own last, as they cannot be undone: LAN PLAY for SYSTEM LINK PLAY, INTERNET PLAY after it */
@@ -2391,8 +2840,11 @@ static void xbox_multiplayer_patch(void)
 	pregame_children[pregame->child_widgets.count].horizontal_offset = XBOX_INVITE_CODE_LEFT;
 	pregame->child_widgets.count = pregame->child_widgets.count + 1;
 	pregame->child_widgets.address = pregame_children;
+	if (settings)
+		xbox_settings_open(&settings_stock, tags[_xbox_settings_screen]);
 	menu_tags.xbox_patched = TRUE;
-	platform_log("menus: the multiplayer menu has LAN PLAY and INTERNET PLAY");
+	platform_log("menus: the multiplayer menu has LAN PLAY and INTERNET PLAY%s",
+		settings && !build.failed ? "; SETTINGS has VIDEO SETTINGS" : "");
 	memset(&build, 0, sizeof(build));
 	return;
 

@@ -252,7 +252,58 @@ static DWORD convert_texel(unsigned char kind, const unsigned char *source, cons
 	}
 }
 
-/* linear levels: rows of A8R8G8B8 64-byte aligned, as the RSX's linear surfaces */
+/* 8- and 16-bit texels at their size where the RSX samples their format, with the remap that gives convert_texel's
+channels: half or a quarter of A8R8G8B8's memory and texture bandwidth. 0 converts every one to A8R8G8B8. */
+#define RSX_NATIVE_TEXELS 1
+
+struct rsx_native
+{
+	/* GCM's format, 0 for A8R8G8B8 words from convert_texel */
+	unsigned char format;
+	unsigned char bytes;
+	/* GCM_TEXTURE_REMAP_MODE's word; a single 8-bit texel is the B input, a G8B8's bytes are G then B */
+	unsigned short remap;
+	/* 16-bit texels: the Xbox's little-endian words to the RSX's big-endian ones */
+	unsigned char swap;
+};
+
+static struct rsx_native rsx_native(unsigned char kind)
+{
+	struct rsx_native native = { 0, 4, 0xaae4, 0 };
+
+#if RSX_NATIVE_TEXELS
+	switch (kind)
+	{
+	case _texel_r5g6b5: native.format = 4; native.bytes = 2; native.swap = 1; break;
+	case _texel_a1r5g5b5: native.format = 2; native.bytes = 2; native.swap = 1; break;
+	/* (A1R5G5B5 with alpha one) */
+	case _texel_x1r5g5b5: native.format = 2; native.bytes = 2; native.swap = 1; native.remap = 0xa9e4; break;
+	case _texel_a4r4g4b4: native.format = 3; native.bytes = 2; native.swap = 1; break;
+	/* B8: l8 is (1, L, L, L), al8 (L, L, L, L), a8 (A, 1, 1, 1) */
+	case _texel_l8: native.format = 1; native.bytes = 1; native.remap = 0xa9ff; break;
+	case _texel_al8: native.format = 1; native.bytes = 1; native.remap = 0xaaff; break;
+	case _texel_a8: native.format = 1; native.bytes = 1; native.remap = 0x5603; break;
+	/* G8B8 from the bytes as they lie: L (G), then A (B) */
+	case _texel_a8l8: native.format = 11; native.bytes = 2; native.remap = 0xaaab; break;
+	default: break;
+	}
+#endif
+	return native;
+}
+
+/* the RSX's format for a texture (GCM's, without LIN and UNRM) and its remap */
+unsigned char xgpu_texture_rsx_format(const struct xgpu_texture_description *description, unsigned long *remap)
+{
+	struct format_information information = format_information(description->format);
+	struct rsx_native native = rsx_native(information.kind);
+
+	*remap = native.remap;
+	if (description->compressed)
+		return information.kind == _texel_dxt1 ? 6 : information.kind == _texel_dxt3 ? 7 : 8;
+	return native.format ? native.format : 5;
+}
+
+/* linear levels: rows 64-byte aligned, as the RSX's linear surfaces */
 unsigned long xgpu_texture_rsx_pitch(const struct xgpu_texture_description *description, unsigned long level)
 {
 	struct format_information information = format_information(description->format);
@@ -260,7 +311,7 @@ unsigned long xgpu_texture_rsx_pitch(const struct xgpu_texture_description *desc
 
 	if (description->compressed)
 		return ((width + 3) / 4) * information.bytes;
-	return (width * 4 + 63) & ~63UL;
+	return (width * rsx_native(information.kind).bytes + 63) & ~63UL;
 }
 
 unsigned long xgpu_texture_rsx_level_bytes(const struct xgpu_texture_description *description, unsigned long level)
@@ -273,7 +324,25 @@ unsigned long xgpu_texture_rsx_level_bytes(const struct xgpu_texture_description
 		return level_bytes(description, level);
 	if (description->linear)
 		return xgpu_texture_rsx_pitch(description, level) * height;
-	return width * height * depth * 4;
+	return width * height * depth * rsx_native(format_information(description->format).kind).bytes;
+}
+
+/* a native level's texels as they are, 16-bit ones swapped to the RSX's order */
+static void rsx_native_copy(const struct rsx_native *native, const unsigned char *source, unsigned char *destination,
+	unsigned long count)
+{
+	unsigned long index;
+
+	if (!native->swap)
+	{
+		memcpy(destination, source, count * native->bytes);
+		return;
+	}
+	for (index = 0; index < count; index++)
+	{
+		destination[index * 2] = source[index * 2 + 1];
+		destination[index * 2 + 1] = source[index * 2];
+	}
 }
 
 /* destination is RSX memory, written once in order; the RSX's swizzle is the NV2A's, so swizzled
@@ -282,6 +351,7 @@ void xgpu_texture_rsx_convert_level(const struct xgpu_texture_description *descr
 	const unsigned char *source, const DWORD *palette, void *destination)
 {
 	struct format_information information = format_information(description->format);
+	struct rsx_native native = rsx_native(information.kind);
 	unsigned long width = level_dimension(description->width, level);
 	unsigned long height = level_dimension(description->height, level);
 	unsigned long depth = level_dimension(description->depth, level);
@@ -291,6 +361,25 @@ void xgpu_texture_rsx_convert_level(const struct xgpu_texture_description *descr
 	if (description->compressed)
 	{
 		memcpy(destination, source, level_bytes(description, level));
+		return;
+	}
+	if (native.format)
+	{
+		unsigned char *bytes = destination;
+
+		if (!description->linear)
+		{
+			rsx_native_copy(&native, source, bytes, width * height * depth);
+			return;
+		}
+		/* each row into the RSX's pitch, the rest of it zero */
+		for (y = 0; y < height; y++)
+		{
+			unsigned long pitch = xgpu_texture_rsx_pitch(description, level);
+
+			rsx_native_copy(&native, source + y * description->pitch, bytes + y * pitch, width);
+			memset(bytes + y * pitch + width * native.bytes, 0, pitch - width * native.bytes);
+		}
 		return;
 	}
 	if (description->linear)

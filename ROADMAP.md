@@ -51,8 +51,26 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-06)
 
-- 2026-10-18: Invite codes (Matt: "Yes. Let's go with this."): built, not
-  tested. 8 digits that stand for an invite link, sealed on the MQTT brokers
+- 2026-10-19: G8, the fixes (Matt: "Just go with the fixes. We'll measure
+  from top-down then."; WIDESCREEN and FRAME RATE in the video settings,
+  "Inside SETTINGS", defaults widescreen and 60): built, not tested. 60
+  frames per second (interpolation), the game at 1280x720 (16:9) or 960x720
+  (4:3), the Direct3D layer's CPU cuts, tiled targets with Z compression and
+  ZCull, native 8- and 16-bit textures, resident vertex programs, RSX
+  timestamps; half-precision shaders built and left off (the PC check). PKG
+  of 00:13 in `build/ps3_g8/`. See "G8 analysis" ("The fixes").
+  Hardware FAILURE (Matt: "There's a blue screen."): the RSX did not finish
+  the game's first frame (frame label 0); the display thread's blue stays.
+  Diagnostic PKG of 00:50 in `build/ps3_g8/` (`RSX_CHECKPOINTS` in
+  `ps3_gpu.c`, frame labels in `ps3_video.c`): the timestamp report (type
+  0x10) stops the RSX. Fixed (type 1, trap 44), the diagnostic still on:
+  PKG of 01:00. Hardware SUCCESS (Matt: "It runs!"): menus 59.9 frames
+  per second; a30 54 to 60 calm, 33 to 37 in heavy combat (game thread
+  about 28 ms: ticks 11 to 16 ms each, render 15 to 20; RSX 14 to 18 ms).
+  No change of WIDESCREEN or FRAME RATE in the log. Clean PKG (diagnostic
+  off) of 01:14 in `build/ps3_g8/`, not tested. Step 5 waits for Matt.
+- 2026-10-18: Invite codes (Matt: "Yes. Let's go with this."): hardware
+  SUCCESS (Matt: "it works as intended"). 8 digits that stand for an invite link, sealed on the MQTT brokers
   for 30 minutes. INTERNET PLAY: Y (ENTER CODE) types one; the PS3 host's
   pregame screen shows its own. `port/ps3/invite/index.html` (for GitHub
   Pages) converts a link to a code and back. PKG of 22:02 in
@@ -202,15 +220,17 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     sound and the parts of each window (`render.c`); the Direct3D draws
     (state, textures, texture hash, uploads, colours, vertices, indices);
     the waits (vblank, flip, RSX).
-  - The RSX probe (Matt, 2026-10-06): a fourth `[time]` line. Every 30th
-    frame the game thread waits for the RSX at the frame's start, at each
-    window's start and parts (`render.c`) and after the render
-    (`ps3_timers_rsx_wait` in `ps3_gpu.c`, on `ps3_gpu_wait_idle`); the
-    line gives each wait in ms a probe frame. A wait is a low bound of the
-    RSX's time of that part: the RSX can start a part while the game thread
-    still sends it. The other lines leave the waits out ("probe waits").
-    Off from 2026-10-06: `TIMER_PROBE_FRAMES` is 0 in `ps3_timers.c` (30
-    probes again). A probe frame stalls about 70 ms.
+  - The RSX timestamps (G8, 2026-10-19, in place of the RSX probe of
+    2026-10-06): a fourth `[time]` line, `[time] RSX in N frames`: the RSX's
+    ms a frame and by part. At the frame's start, at each window's start and
+    parts (`render.c`), after the render and at the present, the RSX writes
+    its time to a report (`ps3_timers_rsx_wait`, trap 44), read two frames
+    later; a part is the time from the split before to its own. No stall.
+  - G8 lines: `screen: WxH drawn at PxQ` at the start and at each WIDESCREEN
+    change; `[gpu] target ... tiled (region N, pitch P)` (`, ZCull` on the
+    screen's depth); `[vid] display buffer N tiled`; `[gpu] frame N`: the
+    vertex programs uploaded and switched; `menus: ... SETTINGS has VIDEO
+    SETTINGS`.
   - The G7 measurement build (Matt, 2026-10-06):
     - Two `[mem]` lines every 10 s (`ps3_main.c` `memory_heartbeat`). The
       first: the free main memory from lv2 syscall 352 (`ps3_memory_user`,
@@ -244,7 +264,168 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
-| G8 60 frames per second: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX | Not started (Matt, 2026-10-06: the last goal) |
+| G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 waits (see "G8 analysis") |
+
+## G8 analysis (2026-10-18)
+
+Matt: "The next step is to get this to 60 FPS and 720p. Analyze what can
+achieve this." A read-only analysis of the code, the disassembly and the
+logged data. No code change.
+
+- Now (a10, the runs of 2026-10-06):
+  - The display is 1280x720 with 3 buffers and vsync flips (`ps3_video.c`).
+    The game draws 640x480; Present scales it to 960x720, 4:3 in the middle
+    (`ps3_gpu.c` `blit_draw`). `halo_interpolation_enabled` returns 0
+    (`port_stubs.c`): 30 frames per second.
+  - Game thread: calm scenes 10 to 12 ms a frame with a tick (render 7.0 to
+    7.8, tick 3.3 to 3.8); heavy scenes 18 to 21 ms (render 13 to 15, tick
+    4 to 8; 450 to 565 draws).
+  - RSX: under 33 ms (wait 0.0 at the cap). Not measured since the shader
+    optimizer; about 40 ms in the heavy scene before it.
+- The budget at 60: 16.7 ms a frame on the game thread and on the RSX. A
+  tick runs every second frame: 33.3 ms hold one tick and two renders.
+  Calm: 17 to 19 ms of 33.3 (fits). Heavy: 30 to 38 ms (up to 5 ms over),
+  plus the interpolation and the per-frame updates (director, observer,
+  player control), not measured.
+- 60 frames per second, the code:
+  - `render_interpolation.c` is in the build. `halo_interpolation_enabled`
+    reads `display.interpolation`, as `sdl_platform.c` does.
+  - `D3DDevice_Present` skips its wait for 2 emulated flips when it
+    interpolates and counts the flip, as `d3d8_gl.c` does. The real flips
+    (`ps3_video_begin_frame`, 3 buffers) then cap at the display's rate.
+  - Memory: the interpolation's records, about 0.6 MB (8192 objects) and
+    about 200 bytes a node. Main memory's lowest: 36 MB (2026-10-16).
+- 720p, the code (upstream's model: `d3d8_gl.c` `screen_mode_choose`,
+  `render_target_get`, `bind_textures`):
+  - The game keeps its 480 lines. `halo_screen_width` gives 852 for 16:9.
+    The targets the size of the screen and the secondary target (320x240)
+    get 1280x720 pixels a screen (scale 1.502 x 1.5); viewports, scissors
+    and clears scale; a linear target's texel coordinates scale (`UNRM`
+    textures); `halo_screen_ui_offset` centres the menus (106);
+    `halo_screen_scale` gives 1.5 (screen effects). `d3d8_rsx.c` gives 640
+    and 1 now.
+  - Present copies 1:1 (no 4:3 box, no clear).
+  - The shapes:
+
+    | Shape | Pixels | Times 640x480 | View across |
+    | --- | --- | --- | --- |
+    | 1280x720, 16:9 | 921600 | 3.0 | 86 degrees (stock 70) |
+    | 960x720, 4:3 | 691200 | 2.25 | 70 degrees, as now |
+    | 1024x576, 16:9, scaled to 720p | 589824 | 1.92 | 86 degrees |
+
+    The wider view draws more objects and BSP (CPU and RSX).
+  - RSX memory: about 10 MB more (peak 131.5 of 234 MB).
+- The RSX at 720p:
+  - A heavy frame at 1280x720 in 16.7 ms is about 5.5 ms at 640x480 for
+    the pixel work.
+  - The RSX has about 3.5 to 6 times the NV2A's rates: fill (8 ROPs at
+    500 MHz, the NV2A 4 at 233), bandwidth (22.4 GB/s, the NV2A 6.4
+    shared), texels. 1280x720 at 60 is 6 times the pixels a second of the
+    Xbox's 640x480 at 30; 960x720 at 60 is 4.5 times. Scenes with many
+    blended effects can stay over 16.7 ms at 1280x720.
+  - Cuts (none is proven on hardware in the sibling ports):
+    1. Tiled colour and depth surfaces with Z compression
+       (`gcmSetTileInfo`, `gcmBindTile`, `GCM_COMPMODE_Z32_SEPSTENCIL`).
+       Every surface is linear now (`ps3_gpu.c`, `ps3_video.c`). 1280 x 4
+       = 0x1400, a tiled pitch.
+    2. ZCull on the main depth buffer (`gcmBindZcull`): no shading of
+       occluded fragments, in every depth-tested pass.
+    3. Half-precision temporaries in the translated pixel shaders: fewer
+       registers, more fragments in flight. The encoder has none; the PC
+       check needs an fp16 model.
+    4. Native 16-bit and 8-bit textures. Every non-DXT texture becomes
+       A8R8G8B8 now (`xbox_texture_layout.c`).
+    5. Vertex programs kept in the RSX's 512 slots: about 40 loads a frame
+       now.
+- CPU cuts (game thread):
+  1. `d3d8_rsx.c` per draw (the timer run: 450 to 520 draws):
+     - Colours 1.0 to 2.0 ms: 76 int-to-float conversions through memory
+       (load-hit-store) and 76 divides a draw (the disassembly of
+       `prepare_draw_state`). A table, and a rebuild only when the pixel
+       shader constants change.
+     - Indices 0.5 to 1.8 ms: two passes over each index. A draw whose
+       vertices are all in the vertex cache can bind the arrays at the base
+       vertex and copy the indices as they are. The models' index buffers
+       are in the tag cache: cache them as the vertices. The BSP's are made
+       each frame (`dynamic_triangles`).
+     - Vertices at draws 0.4 to 1.6 ms: float elements copied as they are.
+     - Estimate: 2 to 4 ms a frame in heavy scenes.
+  2. Only if heavy scenes still miss: the Direct3D layer on the PPE's
+     second hardware thread (a recorded command list). A large change: the
+     texture cache, the dynamic vertices and the text cache then need
+     fences (the game sees the RSX done at once now, `D3DDevice_IsBusy`).
+     The gain is less than the work moved: the two threads share one core.
+  3. SPUs: no easy candidate. The costs are the game's own render code and
+     the per-draw state work.
+  4. Fused multiply-adds: not in the simulation, which must match the PC
+     builds (`port/linux/README.md`). Possible in the units that only draw
+     (`source/rasterizer`, `source/render`); gain not known.
+- Found: `rsxSetTimeStamp` in the image's librsx writes its data to word 2
+  of its 2-word command (disassembled; PSL1GHT's source has the same
+  fault). The RSX would read a stale word. Its type, 0x10, stops the RSX
+  (hardware, 2026-10-19): use `rsxSetReport(context, GCM_ZPASS_PIXEL_CNT,
+  index)` (trap 44).
+- Out of reach of this plan: the large online games (44 players: 10.8
+  frames per second, 0.82 ticks a frame, 2026-10-16). There the tick costs.
+- Proposed steps:
+  1. A measurement build, no change of the picture: interpolation on (60
+     at 640x480), Present's flip wait as above, RSX timestamps at the
+     frame's parts in place of the probe (no stall), the timer lines. The
+     run: a10, a calm part and the heavy scene.
+  2. The CPU cuts of item 1. Measure.
+  3. 720p: the screen scale, in the shape Matt chooses (or a setting).
+     Measure the RSX.
+  4. The RSX cuts, in the order the timestamps give.
+  5. The second hardware thread, only if heavy scenes still miss.
+- The fixes (2026-10-19, Matt: "Just go with the fixes. We'll measure from
+  top-down then. ... make the widescreen an option in the video settings.
+  ... And a framerate toggle between 30 and 60."; step 5 only if heavy
+  scenes still miss). Built, not tested on the PS3:
+  - 60 frames per second: `halo_interpolation_enabled` reads
+    `display.interpolation` (`port_stubs.c`); `D3DDevice_Present` counts the
+    flip without the emulated wait when it interpolates.
+  - 720p: `d3d8_rsx.c` has d3d8_gl.c's screen model: `display.screen_width`
+    (0: 852 units for 16:9; 640: 4:3), targets of the screen's size and the
+    320x240 secondary target at `screen_scale` pixels a unit (1280x720 or
+    960x720), scissors and clears in pixels, the menus centred
+    (`ui_offset` in the screen constants and the clear rectangles),
+    `halo_screen_commit` (a change between frames: the surfaces resized,
+    the targets evicted), `halo_screen_scale`. A linear target's texel
+    coordinates are scaled in the pixel shader (the key's `texture_scaled`,
+    uniform `_rsx_uniform_texture_scale`). Present copies the back buffer
+    pixel for pixel in the middle (`blit_draw`), clearing only around a 4:3
+    picture.
+  - Menu: SETTINGS opens a new screen (a copy of the multiplayer menu's) of
+    PLAYER PROFILES and VIDEO SETTINGS; VIDEO SETTINGS is a copy of ADVANCED
+    CONTROLS with WIDESCREEN (ON/OFF) and FRAME RATE (60/30), bound to the
+    two settings ("port setting load", "port settings save"); headers in
+    the large font, the header pictures' blue. `menu_tags.c`
+    (`xbox_settings_find`, `_define`, `_wire`, `_open`), in the same table
+    growth as LAN PLAY (trap 48).
+  - CPU: the pixel shader constants are converted with a table and only
+    when their states change; a map buffer that the vertex cache holds
+    whole draws with its indices as they are (one pass, a bound check by
+    their OR), the models' index buffers copied once into the arena
+    (`index_cache_offset`); `bind_targets` keeps its lookups while the
+    surfaces stay. Vertices at draws: unchanged (the float path copies).
+  - RSX: the screen's targets tiled (regions 3 to 14), the depth with Z
+    compression and ZCull (`ps3_gpu_target_allocate`, trap 47); the display
+    buffers tiled (regions 0 to 2, `ps3_video.c`); 8- and 16-bit textures
+    native with a remap (`xbox_texture_layout.c`); vertex programs resident
+    in the 512 slots, dropped at each system overlay
+    (`ps3_system_overlay_events`); timestamps at the frame's splits in
+    place of the probe (`ps3_timers_rsx_wait`, `[time] RSX`, trap 44).
+    Each has a switch at the top of its file (`RSX_TILED_TARGETS`,
+    `TILED_DISPLAY_BUFFERS`, `RSX_NATIVE_TEXELS`, `RSX_RESIDENT_PROGRAMS`).
+  - Half precision (`ps3_rsx_fp.c` `half_precision`, `HALF_PRECISION` 0):
+    built and off. The PC check, 3000 keys: 2.96 R registers on average
+    against 3.07, 879 colours in H0, 13 results off the NV2A's by up to
+    7.5e-3 (tests, divides, lookups and their sources must stay 32-bit,
+    which leaves little).
+  - Checks: `KEYS=3000` with `SEED=1` and `SEED=7`: 0 failures (the scaled
+    stages included; the checker models H registers and scaled lookups);
+    the changed units compile with GCC's warnings (none new); `check`: 0
+    `r2off`, `.got` 0x7f80. PKG of 00:13 in `build/ps3_g8/`.
 
 ## G7 analysis (2026-10-06)
 
@@ -940,6 +1121,27 @@ the whole tree. No code change.
     it gets the 2.28 headers (`mbedtls_ms_time_t` unknown).
 43. New files in `port/ps3/xbox/` are ignored (`.gitignore` rule `xbox/`):
     add each one with `git add -f`.
+44. `rsxSetTimeStamp` of the image's librsx (and PSL1GHT's source) writes
+    its data to word 2 of its 2-word command: the RSX reads a stale word.
+    Its report type, 0x10, stops the RSX at once (hardware, 2026-10-19: the
+    blue screen). For the RSX's time use `rsxSetReport(context,
+    GCM_ZPASS_PIXEL_CNT, index)`: each report holds the time (nouveau's NV40
+    timestamps use this type).
+45. Every make target (`check`, `pkg`, `self`) builds the ELF first. Run it
+    only with your own `BUILD` folder: `./build.sh BUILD=<another session's
+    folder> check` recompiles that folder with your tree.
+46. `d3d8_rsx.c` keeps the game's units (852x480 or 640x480) and the RSX's
+    pixels apart: `device.target_width` is in units (the screen constants),
+    `target_scale` and `target_pixel_*` give the pixels (scissors, clears,
+    the surface). A linear target that the game samples with texel
+    coordinates needs its stage in the key's `texture_scaled`.
+47. ZCull (one region, the screen's depth): a depth write with GREATER,
+    NOTEQUAL, GEQUAL or ALWAYS, or a depth clear of part of it, makes its
+    data stale (`zcull_invalidate`); a clear of all of it starts it again.
+    A target with ZCull or a tiled region is freed only with the RSX idle.
+48. The menus' tags for LAN PLAY, INTERNET PLAY and SETTINGS come from one
+    `instances_grow` a load (`xbox_multiplayer_patch`): a second would take
+    the first's tags as the map's (`original_count`).
 
 ## Commands
 
@@ -1352,3 +1554,54 @@ then `./build.sh pkg LOG_IP=<address>`.
   comments over 2 lines in `p2p.h`, `p2p_internal.h` and
   `virtual_keyboard.c` are shortened. PKG of 22:02 in `build/ps3_code/`.
   Not tested on hardware.
+- 2026-10-18: Invite codes on hardware: SUCCESS (Matt: "I tested it and it
+  works as intended!"). PKG of 22:02 in `build/ps3_code/`.
+- 2026-10-18: G8 analysis, 60 frames per second and 720p (Matt: "The next
+  step is to get this to 60 FPS and 720p. Analyze what can achieve this."):
+  "G8 analysis". The game thread misses 16.7 ms only in heavy scenes (up to
+  5 ms); the RSX is not measured since the shader optimizer; 1280x720 is 3
+  times the pixels. `rsxSetTimeStamp` of the image is faulty (use
+  `rsxSetReport` with type 0x10). No code change.
+- 2026-10-19: G8, the fixes (Matt: "Just go with the fixes. We'll measure
+  from top-down then."; the video settings "Inside SETTINGS", defaults
+  widescreen and 60): `port_stubs.c`, `d3d8_rsx.c`,
+  `xbox_texture_layout.c`, `ps3_platform.h`, `ps3_gpu.c` and `.h`,
+  `ps3_video.c` and `.h`, `ps3_system.c` and `.h`, `ps3_timers.c` and `.h`,
+  `ps3_rsx_fp.c`, `ps3_rsx_asm.c`, `ps3_rsx_program.h`, `menu_tags.c`,
+  `source/main/main.c` and `source/render/render.c` (their `port:` timer
+  comments), `tools/ps3_rsx_shader_check.c`, `port/ps3/README.md` ("Video
+  settings"), traps 44 to 48. See "G8 analysis" ("The fixes"). `check`: 0
+  `r2off`, `.got` 0x7f80. PKG of 00:13 in `build/ps3_g8/`. A `check` with
+  `BUILD=build/ps3_code` (by mistake, trap 45) recompiled 82 of that
+  folder's objects before it was stopped: they are deleted, its ELF and PKG
+  of 22:02 are unchanged. Waiting for the hardware test.
+- 2026-10-19: G8 fixes on hardware: FAILURE (Matt: "There's a blue
+  screen."). Log: "[gpu] frame 4: the RSX did not finish frame 2 (label 0)"
+  at each frame; the game runs a frame each 2 s (the fence timeout); the
+  display thread's dark blue stays; the boot lines are missing. Diagnostic,
+  no fix: `RSX_CHECKPOINTS` in `ps3_gpu.c` (a command label and a back-end
+  label after each kind of command; at a fence timeout, the last ones the
+  RSX took and finished), frame labels in `ps3_video.c` (end, flip,
+  finished; also in the `[hb]` heartbeat). `check`: 0 `r2off`, `.got`
+  0x8030. PKG of 00:50 in `build/ps3_g8/`.
+- 2026-10-19: The diagnostic on hardware (Matt: "There."): at each fence
+  timeout, "the front end took 12 (the timestamp report; next the frame
+  label), the back end finished 11 (the present blit)": the RSX stops at
+  the game's first `rsxSetReport` with type 0x10 (the first report it
+  gets). The display thread's 4 frames all finished. Fix: `REPORT_TIMESTAMP`
+  is `GCM_ZPASS_PIXEL_CNT` (1); trap 44 corrected. `RSX_CHECKPOINTS` stays 1
+  for the next run (ZCull, Z compression, native textures and resident
+  programs have not run on the RSX yet). `check`: 0 `r2off`, `.got`
+  0x8030. PKG of 01:00 in `build/ps3_g8/`.
+- 2026-10-19: PKG of 01:00 on hardware: SUCCESS (Matt: "It runs!"), menus
+  and a30 for about 5 minutes, no RSX stop, a clean exit. Tiled targets, Z
+  compression, ZCull, native textures and resident vertex programs ran.
+  The `[time]` lines (diagnostic on): menus 59.9 frames per second, 16.7
+  ms (render 2.2, RSX 4 to 6 ms). a30: calm 54 to 60 (ticks 8 ms each,
+  render 9 to 13, RSX 7 to 13 ms); heavy combat 33 to 37 (ticks 11 to 16
+  ms each at 0.85 to 0.9 a frame; render 15 to 20, of it Direct3D draws 6
+  to 8 and sound 1.3 to 2.7; RSX 14 to 18 ms, once 25). No `screen:` line
+  and no 30 frames per second window: WIDESCREEN and FRAME RATE not seen
+  changed. `RSX_CHECKPOINTS` 0 (its names only with it): clean PKG of
+  01:14 in `build/ps3_g8/`, `check` 0 `r2off`, `.got` 0x7f98. Heavy scenes
+  miss 16.7 ms: Matt's condition for step 5 (the second hardware thread).

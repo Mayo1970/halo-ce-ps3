@@ -306,8 +306,8 @@ struct rendered_cluster *rendered_cluster_get(
 #ifdef HALO_PS3
 #include "ps3_timers.h"
 
-/* port: the timer build: each split adds the time since the last one to a part of the window; in a probe
-frame the game thread then waits for the RSX, which times the RSX's part (ps3_timers_rsx_wait) */
+/* port: the timer build: each split adds the time since the last one to a part of the window, and stamps the
+RSX's time there, which times the RSX's part (ps3_timers_rsx_wait) */
 static uint64_t ps3_timer_window;
 #define PS3_TIMER_WINDOW_BEGIN() (ps3_timer_window = ps3_timers_rsx_wait(_ps3_timer_rsx_before))
 #define PS3_TIMER_SPLIT(timer) \

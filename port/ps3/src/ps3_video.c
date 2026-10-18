@@ -23,6 +23,9 @@ comments give the hardware results behind each rule. */
 static gcmContextData *context;
 static void *host_buffer;
 static u32 width = 1280, height = 720, pitch;
+static int widescreen = 1;
+/* the display buffers in tiled regions 0 to 2 (rsxtest_tile's), which the RSX writes faster */
+#define TILED_DISPLAY_BUFFERS 1
 static void *color_buffer[BUFFER_COUNT];
 static u32 color_offset[BUFFER_COUNT];
 static void *depth_buffer;
@@ -35,6 +38,13 @@ static unsigned wait_timeouts;
 /* a flip handler, not gcmGetFlipStatus polling: polling read "done" at once on hardware */
 static volatile u32 flips_queued;
 static volatile u32 flips_completed;
+
+/* (the G8 diagnostic) labels at each frame's end: the front end took it, passed its flip, the back end finished it */
+#define FRAME_END_LABEL 69
+#define FRAME_FLIPPED_LABEL 70
+#define FRAME_FINISHED_LABEL 71
+static volatile u32 *frame_labels[3];
+static u32 frame_serial;
 
 static void flip_handler(const u32 head)
 {
@@ -95,6 +105,11 @@ int ps3_video_init(void)
 	ps3_log_printf("[vid] rsxInit=%d context=%p\n", (int)result, (void *)context);
 	if (result != 0 || !context)
 		return 0;
+	frame_labels[0] = (volatile u32 *)gcmGetLabelAddress(FRAME_END_LABEL);
+	frame_labels[1] = (volatile u32 *)gcmGetLabelAddress(FRAME_FLIPPED_LABEL);
+	frame_labels[2] = (volatile u32 *)gcmGetLabelAddress(FRAME_FINISHED_LABEL);
+	for (index = 0; index < 3; index++)
+		*frame_labels[index] = 0;
 
 	/* 720p for fill rate (1080p was fill-bound in xashPS3); else the TV's own mode */
 	if (!videoGetResolutionAvailability(VIDEO_PRIMARY, VIDEO_RESOLUTION_720, VIDEO_ASPECT_16_9, 0))
@@ -116,7 +131,14 @@ int ps3_video_init(void)
 	}
 	width = resolution.width;
 	height = resolution.height;
+	widescreen = aspect != VIDEO_ASPECT_4_3;
+#if TILED_DISPLAY_BUFFERS
+	pitch = gcmGetTiledPitchSize(width * 4);
+	if (!pitch)
+		pitch = width * 4;
+#else
 	pitch = width * 4;
+#endif
 
 	memset(&configuration, 0, sizeof(configuration));
 	configuration.resolution = resolution_id;
@@ -129,7 +151,15 @@ int ps3_video_init(void)
 
 	for (index = 0; index < BUFFER_COUNT; index++)
 	{
+#if TILED_DISPLAY_BUFFERS
+		/* a tiled region: 64 KB aligned, its size in 64 KB of 32-line rows */
+		u32 size = (pitch * ((height + GCM_TILE_LOCAL_ALIGN_HEIGHT - 1) & ~(GCM_TILE_LOCAL_ALIGN_HEIGHT - 1)) +
+			GCM_TILE_ALIGN_SIZE - 1) & ~(GCM_TILE_ALIGN_SIZE - 1);
+
+		color_buffer[index] = rsxMemalign(GCM_TILE_ALIGN_OFFSET, size);
+#else
 		color_buffer[index] = rsxMemalign(64, pitch * height);
+#endif
 		if (!color_buffer[index])
 		{
 			ps3_log_printf("[vid] rsxMemalign of color buffer %d failed\n", index);
@@ -139,6 +169,12 @@ int ps3_video_init(void)
 		result = gcmSetDisplayBuffer(index, color_offset[index], pitch, width, height);
 		ps3_log_printf("[vid] display buffer %d offset 0x%x gcmSetDisplayBuffer=%d\n",
 			index, (unsigned)color_offset[index], (int)result);
+#if TILED_DISPLAY_BUFFERS
+		result = gcmSetTileInfo((u8)index, GCM_LOCATION_RSX, color_offset[index], size, pitch, GCM_COMPMODE_DISABLED, 0, 0);
+		if (result == 0)
+			result = gcmBindTile((u8)index);
+		ps3_log_printf("[vid] display buffer %d tiled, pitch %u: %d\n", index, (unsigned)pitch, (int)result);
+#endif
 	}
 	depth_buffer = rsxMemalign(64, width * height * 4);
 	if (!depth_buffer)
@@ -170,6 +206,10 @@ void ps3_video_shutdown(void)
 		gcmSetFlipHandler(NULL);
 		for (index = 0; index < BUFFER_COUNT; index++)
 		{
+#if TILED_DISPLAY_BUFFERS
+			if (color_buffer[index])
+				gcmUnbindTile((u8)index);
+#endif
 			if (color_buffer[index])
 				rsxFree(color_buffer[index]);
 			color_buffer[index] = NULL;
@@ -196,6 +236,11 @@ void ps3_video_size(unsigned *out_width, unsigned *out_height)
 {
 	*out_width = width;
 	*out_height = height;
+}
+
+int ps3_video_widescreen(void)
+{
+	return widescreen;
 }
 
 void ps3_video_begin_frame(void)
@@ -234,9 +279,13 @@ void ps3_video_end_frame(void)
 {
 	if (!ready)
 		return;
+	frame_serial++;
+	rsxSetWriteCommandLabel(context, FRAME_END_LABEL, frame_serial);
+	rsxSetWriteBackendLabel(context, FRAME_FINISHED_LABEL, frame_serial);
 	/* WaitFlip before SetFlip: the order of the rsx.h comment gave a black screen on hardware */
 	gcmSetWaitFlip(context);
 	gcmSetFlip(context, (u8)current_buffer);
+	rsxSetWriteCommandLabel(context, FRAME_FLIPPED_LABEL, frame_serial);
 	rsxFlushBuffer(context);
 	flips_queued++;
 	current_buffer = (current_buffer + 1) % BUFFER_COUNT;
@@ -247,6 +296,15 @@ void ps3_video_stats(unsigned *out_queued, unsigned *out_completed, unsigned *ou
 	*out_queued = flips_queued;
 	*out_completed = flips_completed;
 	*out_timeouts = wait_timeouts;
+}
+
+void ps3_video_flip_report(void)
+{
+	if (!ready)
+		return;
+	ps3_log_printf("[vid] frames: %u ended, %u flips done (handler), %u waits given up; the front end took the end of %u "
+		"and passed the flip of %u, the back end finished %u\n", (unsigned)frame_serial, (unsigned)flips_completed,
+		wait_timeouts, (unsigned)*frame_labels[0], (unsigned)*frame_labels[1], (unsigned)*frame_labels[2]);
 }
 
 unsigned ps3_video_memory_bytes(void)

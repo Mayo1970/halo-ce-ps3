@@ -311,8 +311,19 @@ static void stage_dot(struct context *context, int stage)
 
 static void sample(struct context *context, int opcode, int stage, struct rsx_source coordinates)
 {
-	struct rsx_instruction *instruction = emit1(context, opcode, _register_t0 + stage, _rsx_xyzw, coordinates);
+	struct rsx_instruction *instruction;
 
+	/* a linear target drawn at the screen's scale: the game's texel coordinates (its units) to the target's pixels,
+	after a bump offset and before a projection's divide */
+	if (context->key->texture_scaled & (1 << stage))
+	{
+		instruction = emit2(context, _rsx_fp_mul, _register_coordinates, _rsx_x | _rsx_y, coordinates,
+			constant(0, 1, 2, 3));
+		instruction->uniform = (uint8_t)(_rsx_uniform_texture_scale + stage);
+		set_constant(instruction, 0.0f, 0.0f, 0.0f, 0.0f);
+		coordinates = temporary(_register_coordinates);
+	}
+	instruction = emit1(context, opcode, _register_t0 + stage, _rsx_xyzw, coordinates);
 	instruction->texture_unit = (uint8_t)stage;
 }
 
@@ -2299,6 +2310,200 @@ static uint32_t optimize(const struct rsx_fragment_key *key, struct rsx_instruct
 	return count;
 }
 
+/* ---------- half precision: the temporaries only the colour math reads, within half's range, as H registers, two
+in each R register, the colour in H0: fewer registers, so more fragments in flight. The ALU stays 32-bit; what a
+lookup, a test, a floor or a divide reads, and all that makes it, stays a 32-bit R register. Off: the PC check's
+3000 keys took 2.96 R registers on average against 3.07, and 13 missed the NV2A's colour by up to 7.5e-3. */
+
+#define HALF_PRECISION 0
+/* the largest magnitude a half temporary may hold: half's 11 bits keep 2^-12 near 1 */
+#define HALF_RANGE 1024.0f
+
+#if HALF_PRECISION
+static struct value bounded_value(float low, float high)
+{
+	struct value value = register_value(_rsx_register_temporary, 0, 0, 0);
+
+	value.low = low;
+	value.high = high;
+	return value;
+}
+
+/* a source's bounds in one lane: the registers' as the pass has them, inputs' and constants' as resolve's */
+static struct value source_bounds(const struct rsx_instruction *instruction, const struct rsx_source *source,
+	float low[TEMPORARIES][4], float high[TEMPORARIES][4], int lane)
+{
+	int component = source->swizzle[lane] & 3;
+	struct value value;
+
+	if (source->type == _rsx_register_temporary)
+		value = bounded_value(low[source->index & (TEMPORARIES - 1)][component],
+			high[source->index & (TEMPORARIES - 1)][component]);
+	else if (source->type == _rsx_register_constant && instruction->uniform == RSX_NO_UNIFORM)
+		value = number_value(instruction->constant[component]);
+	else if ((source->type == _rsx_register_input &&
+		(source->index == _rsx_fp_input_color0 || source->index == _rsx_fp_input_color1)) ||
+		(source->type == _rsx_register_constant && instruction->uniform < _rsx_uniform_fog))
+		value = bounded_value(0.0f, 1.0f);
+	else
+		value = bounded_value(-INFINITY, INFINITY);
+	return modified(value, source->negate, source->absolute);
+}
+
+static int reads_exactly(int opcode)
+{
+	switch (opcode)
+	{
+	case _rsx_fp_tex:
+	case _rsx_fp_txp:
+	case _rsx_fp_slt:
+	case _rsx_fp_sge:
+	case _rsx_fp_seq:
+	case _rsx_fp_frc:
+	case _rsx_fp_flr:
+	case _rsx_fp_rcp:
+	case _rsx_fp_ex2:
+	case _rsx_fp_lg2:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static void half_precision(const struct rsx_fragment_key *key, struct rsx_instruction *instructions, uint32_t count)
+{
+	float low[TEMPORARIES][4], high[TEMPORARIES][4];
+	uint8_t full[TEMPORARIES], used[TEMPORARIES], half_index[TEMPORARIES], changed = 1;
+	int lane, reg, position, next_r = 1, odd = -1;
+	uint32_t index;
+
+	memset(full, 0, sizeof(full));
+	memset(used, 0, sizeof(used));
+	for (reg = 0; reg < TEMPORARIES; reg++)
+	{
+		for (lane = 0; lane < 4; lane++)
+		{
+			low[reg][lane] = -INFINITY;
+			high[reg][lane] = INFINITY;
+		}
+	}
+	/* each written value's bounds, in program order: outside half's range, its register stays 32-bit */
+	for (index = 0; index < count; index++)
+	{
+		struct rsx_instruction *instruction = &instructions[index];
+		int sources = source_count(instruction->opcode), lanes = read_lanes(key, instruction);
+		int destination = instruction->destination & (TEMPORARIES - 1);
+		struct operand operands[3];
+
+		memset(operands, 0, sizeof(operands));
+		for (position = 0; position < sources; position++)
+		{
+			if (instruction->source[position].type == _rsx_register_temporary)
+				used[instruction->source[position].index & (TEMPORARIES - 1)] = 1;
+			for (lane = 0; lane < 4; lane++)
+			{
+				if (lanes & (1 << lane))
+					operands[position].values[lane] =
+						source_bounds(instruction, &instruction->source[position], low, high, lane);
+			}
+		}
+		if (instruction->destination_type != _rsx_register_temporary &&
+			instruction->destination_type != _rsx_register_output)
+			continue;
+		used[destination] = 1;
+		for (lane = 0; lane < 4; lane++)
+		{
+			float l, h;
+
+			if (!(instruction->mask & (1 << lane)))
+				continue;
+			bounds(instruction->opcode, operands, lane, &l, &h);
+			if (instruction->saturate)
+			{
+				l = clamp01(l);
+				h = clamp01(h);
+			}
+			low[destination][lane] = l;
+			high[destination][lane] = h;
+			if (!(l >= -HALF_RANGE && h <= HALF_RANGE))
+				full[destination] = 1;
+		}
+	}
+	/* what an exact reader reads, a condition comes from, and all that makes a 32-bit value, is 32-bit */
+	while (changed)
+	{
+		changed = 0;
+		for (index = 0; index < count; index++)
+		{
+			const struct rsx_instruction *instruction = &instructions[index];
+			int writes_full = (instruction->destination_type == _rsx_register_temporary ||
+				instruction->destination_type == _rsx_register_output) &&
+				full[instruction->destination & (TEMPORARIES - 1)];
+
+			for (position = 0; position < source_count(instruction->opcode); position++)
+			{
+				const struct rsx_source *source = &instruction->source[position];
+
+				reg = source->index & (TEMPORARIES - 1);
+				if (source->type == _rsx_register_temporary && !full[reg] &&
+					(writes_full || instruction->condition_update || reads_exactly(instruction->opcode)))
+				{
+					full[reg] = 1;
+					changed = 1;
+				}
+			}
+		}
+	}
+	/* R0 is the colour's: H0 and H1 when it is half; then the 32-bit registers; then the halves, two to an R */
+	for (reg = 1; reg < TEMPORARIES; reg++)
+	{
+		if (used[reg] && full[reg])
+			half_index[reg] = (uint8_t)next_r++;
+	}
+	if (!full[0])
+		odd = 1;
+	for (reg = 1; reg < TEMPORARIES; reg++)
+	{
+		if (!used[reg] || full[reg])
+			continue;
+		if (odd >= 0)
+		{
+			half_index[reg] = (uint8_t)odd;
+			odd = -1;
+		}
+		else
+		{
+			half_index[reg] = (uint8_t)(2 * next_r);
+			odd = 2 * next_r + 1;
+			next_r++;
+		}
+	}
+	half_index[0] = 0;
+	for (index = 0; index < count; index++)
+	{
+		struct rsx_instruction *instruction = &instructions[index];
+
+		if (instruction->destination_type == _rsx_register_temporary ||
+			instruction->destination_type == _rsx_register_output)
+		{
+			reg = instruction->destination & (TEMPORARIES - 1);
+			instruction->destination_half = (uint8_t)!full[reg];
+			instruction->destination = half_index[reg];
+		}
+		for (position = 0; position < source_count(instruction->opcode); position++)
+		{
+			struct rsx_source *source = &instruction->source[position];
+
+			if (source->type != _rsx_register_temporary)
+				continue;
+			reg = source->index & (TEMPORARIES - 1);
+			source->half = (uint8_t)!full[reg];
+			source->index = half_index[reg];
+		}
+	}
+}
+#endif
+
 int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 	struct rsx_instruction *instructions, uint32_t maximum, uint32_t *count)
 {
@@ -2335,7 +2540,12 @@ int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 	instruction = saturated(emit1(&context, _rsx_fp_mov, _register_color, _rsx_xyzw, temporary(result)));
 	instruction->destination_type = _rsx_register_output;
 	if (!context.overflow)
+	{
 		context.count = optimize(key, instructions, context.count);
+#if HALF_PRECISION
+		half_precision(key, instructions, context.count);
+#endif
+	}
 	*count = context.count;
 	return context.overflow ? -1 : (context.kill ? 1 : 0);
 }
@@ -2344,7 +2554,7 @@ int rsx_fragment_program_translate(const struct rsx_fragment_key *key, struct rs
 {
 	struct rsx_instruction *instructions = malloc(RSX_FP_MAXIMUM_INSTRUCTIONS * sizeof(*instructions));
 	uint32_t count = 0, index, word = 0;
-	int result;
+	int result, half_output = 0;
 
 	memset(program, 0, sizeof(*program));
 	if (!instructions)
@@ -2372,28 +2582,33 @@ int rsx_fragment_program_translate(const struct rsx_fragment_key *key, struct rs
 	}
 	for (index = 0; index < program->word_count; index++)
 		program->microcode[index] = (program->microcode[index] << 16) | (program->microcode[index] >> 16);
-	/* the texture coordinates read, as the interpolator set-up needs them; the temporaries, two at least
-	as cgcomp counts */
+	/* the texture coordinates read, as the interpolator set-up needs them; the temporaries in R registers (an H is
+	half of one), two at least as cgcomp counts; the colour as R0 or H0 */
 	program->register_count = 2;
 	for (index = 0; index < count; index++)
 	{
+		const struct rsx_instruction *instruction = &instructions[index];
+		uint32_t reg = instruction->destination_half ? instruction->destination / 2u : instruction->destination;
 		int position;
 
-		if (instructions[index].destination_type == _rsx_register_temporary &&
-			instructions[index].destination >= program->register_count)
-			program->register_count = instructions[index].destination + 1u;
+		if ((instruction->destination_type == _rsx_register_temporary ||
+			instruction->destination_type == _rsx_register_output) && reg >= program->register_count)
+			program->register_count = reg + 1u;
+		if (instruction->destination_type != _rsx_register_none && !instruction->destination && instruction->destination_half)
+			half_output = 1;
 		for (position = 0; position < 3; position++)
 		{
-			const struct rsx_source *source = &instructions[index].source[position];
+			const struct rsx_source *source = &instruction->source[position];
 
+			reg = source->half ? source->index / 2u : source->index;
 			if (source->type == _rsx_register_input && source->index >= _rsx_fp_input_texture0)
 				program->texcoord_mask |= 1u << (source->index - _rsx_fp_input_texture0);
-			if (source->type == _rsx_register_temporary && source->index >= program->register_count)
-				program->register_count = source->index + 1u;
+			if (source->type == _rsx_register_temporary && reg >= program->register_count)
+				program->register_count = reg + 1u;
 		}
 	}
-	/* 0x40: R0 is exported at 32 bits; 0x80: the program kills */
-	program->control = 0x40 | (result == 1 ? 0x80 : 0);
+	/* 0x40: R0 is exported (else H0); 0x80: the program kills */
+	program->control = (half_output ? 0 : 0x40) | (result == 1 ? 0x80 : 0);
 	free(instructions);
 	return 0;
 }
