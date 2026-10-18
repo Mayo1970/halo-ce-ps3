@@ -270,15 +270,28 @@ static rectangle2d keyboard_rect[NUMBER_OF_VIRTUAL_KEYS] =
 
 static struct virtual_keyboard_globals virtual_keyboard_globals= {0};
 
-/* port: the computer's keyboard types into the keyboard while it is up
-(port/linux/src/xinput_sdl.c), set as it opens and closes: it is processed
-only while it is up, so its processing cannot end the typing */
+/* port: a caption in place of the string list's, until the keyboard closes (virtual_keyboard_port_caption) */
+static wchar_t const *virtual_keyboard_port_caption_text = NULL;
+
+/* port: the computer's keyboard types into it while it is up (port/linux/src/xinput_sdl.c), set as it opens and closes:
+it is processed only while up, so its processing cannot end the typing */
 static void virtual_keyboard_set_active(boolean active)
 {
 	extern void platform_text_typing(int typing);
 
 	virtual_keyboard_globals.active = active;
+	if (!active)
+		virtual_keyboard_port_caption_text = NULL;
 	platform_text_typing(active);
+}
+
+/* port: the caption of the keyboard just launched, for text that is not a file's name, which Done takes as it is
+(port/linux/game/menu_functions.c's invite codes) */
+void virtual_keyboard_port_caption(
+	wchar_t const *caption)
+{
+	if (virtual_keyboard_globals.active)
+		virtual_keyboard_port_caption_text = caption;
 }
 
 /* ---------- public code */
@@ -607,6 +620,10 @@ static void virtual_keyboard_render_internal(
 			virtual_keyboard_globals.keyboard->special_key_labels_string_list_tag.index,
 			virtual_keyboard_globals.caption_index);
 
+		/* port: (virtual_keyboard_port_caption) */
+		if (virtual_keyboard_port_caption_text)
+			caption = (wchar_t *)virtual_keyboard_port_caption_text;
+
 		bounds.y0 = 78;
 		bounds.x0 = 114;
 		bounds.y1 = 110;
@@ -907,6 +924,15 @@ static boolean virtual_keyboard_select(
 	switch (keycode)
 	{
 	case _vkey_done:
+		/* port: text that is not a file's name taken as it is (virtual_keyboard_port_caption) */
+		if (virtual_keyboard_port_caption_text)
+		{
+			virtual_keyboard_globals.last_exit_saved_text = TRUE;
+			ui_play_audio_feedback_sound(_ui_audio_feedback_back);
+			virtual_keyboard_set_active(FALSE);
+			event_manager_flush();
+			break;
+		}
 		/* port: a name kept to one the host's ban command can name: its spaces before and after dropped, and one
 		without a character it can type (player_name_clean) empty, which is refused below */
 		if (!player_name_clean(virtual_keyboard_globals.text_buffer,
@@ -1303,9 +1329,8 @@ static void virtual_keyboard_process_internal(
 	return;
 }
 
-/* The "B =BACK" and "A =ENTER" legends are part of the keyboard's background
-bitmap, not widgets, so nothing else can hit-test them; measured on the
-rendered screen (icon and label, with a few pixels of margin). */
+/* The "B =BACK" and "A =ENTER" legends are in the keyboard's background bitmap, not widgets, so nothing else can
+hit-test them; measured on the rendered screen (icon and label, with a few pixels of margin). */
 static rectangle2d const keyboard_back_legend_rect= {412, 368, 438, 462};
 static rectangle2d const keyboard_enter_legend_rect= {412, 468, 438, 572};
 

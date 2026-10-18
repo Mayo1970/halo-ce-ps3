@@ -191,6 +191,27 @@ the pregame screen opens. Player 1's profile plays, as in LAN PLAY.
 - A game that the PS3 hosts is not in the server browser. Its invite link is
   in the log (`Internet play: hosting.`).
 - Discord does not operate: the PS3 has no Discord client.
+
+### Invite codes
+
+An invite code is 8 digits that stand for an invite link. The PS3 cannot
+paste a link, so it uses codes. A code is kept on the MQTT brokers of
+internet play for 30 minutes. The brokers do not see the link: it is
+encrypted with a key that comes from the code (`p2p_code_*` in
+`port/linux/src/p2p_crypto.c`).
+
+- To join a game with a code: in INTERNET PLAY, press Y (ENTER CODE), type
+  the 8 digits on the keyboard, and select Done. The PS3 finds the link on
+  the brokers and joins the game, as for a game in the list.
+- When the PS3 hosts a game, the pregame screen shows its code ("Code: 1234
+  5678", right of "Choose teams using D-pad"). The code stays on the brokers
+  while the PS3 hosts. The log has it too (`Internet play: this game's invite
+  code is`).
+- The converter page, `port/ps3/invite/index.html`, makes a code from a PC's
+  link, and finds the link of a PS3's code. It is one file with no other
+  files: publish it with GitHub Pages, or open it from the disk.
+
+Anyone who has a code can join the game while the code lasts.
 - The game does not run its `atexit` functions when it stops: a hosted
   game's listing stays at the brokers until it expires, and a UPnP forward
   until its hour ends.

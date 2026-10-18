@@ -1,9 +1,5 @@
-/*
-P2P_INTERNAL.H
-
-Shared internals of internet play (p2p.c, p2p_signal.c, p2p_crypto.c,
-p2p_discord.c; see p2p.c for the design).
-*/
+/* P2P_INTERNAL.H: shared internals of internet play (p2p.c, p2p_signal.c, p2p_crypto.c, p2p_discord.c; see p2p.c for
+the design) */
 
 #ifndef __HALO_LINUX_P2P_INTERNAL_H
 #define __HALO_LINUX_P2P_INTERNAL_H
@@ -17,9 +13,8 @@ enum
 	/* a machine's identifier: from the hash of its public key (which is new
 	each run), and also its XNADDR's abEnet */
 	P2P_IDENTIFIER_SIZE = 6,
-	/* what an invite holds of the host's public key: the first bytes of its
-	SHA-256 (of which the identifier is the first 6), so that no other key
-	can be found to pass for it */
+	/* what an invite holds of the host's public key: its SHA-256's first bytes (the identifier's are the first 6), so
+	that no other key can be found to pass for it */
 	P2P_KEY_HASH_SIZE = 16,
 	/* an invite's secret */
 	P2P_TOKEN_SIZE = 16,
@@ -38,10 +33,8 @@ enum
 
 typedef char p2p_player_key_hash_size_assert[P2P_PLAYER_KEY_HASH_SIZE == P2P_KEY_HASH_SIZE ? 1 : -1];
 
-/* who offered a session (p2p_peer_offered): a joiner (to this machine,
-hosting or answering its game's players), the invite's host, or another
-player of the host's game this machine asked for (p2p_reach_player), which
-answers as a host does */
+/* who offered a session (p2p_peer_offered): a joiner (hosting, or answering its game's players), the invite's host, or
+another player of the host's game asked for (p2p_reach_player), which answers as a host does */
 enum
 {
 	_p2p_offered_joiner,
@@ -74,10 +67,8 @@ unsigned long p2p_now(void);
 /* looks up a host name (posix_resolve_ipv4), letting go of the p2p lock
 while it waits; the p2p thread's */
 unsigned long p2p_resolve(const char *host);
-/* registers this executable for links of scheme (posix_register_url_scheme),
-unless it is an automated run (debug.exit_after, a hidden window, no
-renderer), which must not take the links over. The p2p thread's: it lets
-go of the p2p lock while it may wait for a program */
+/* registers this executable for links of scheme (posix_register_url_scheme), unless an automated run (debug.exit_after,
+a hidden window, no renderer); the p2p thread's: it lets go of the lock while it may wait for a program */
 void p2p_register_url_scheme(const char *scheme, const char *description);
 /* formats bytes as lower-case hexadecimal (text holds 2 * size + 1) */
 void p2p_hex(const unsigned char *bytes, int size, char *text);
@@ -96,37 +87,29 @@ void p2p_identifier_for(const unsigned char *public_key, unsigned char *identifi
 the identifier of the machine whose key has that hash */
 void p2p_key_hash(const unsigned char *public_key, unsigned char *hash);
 void p2p_identifier_from_hash(const unsigned char *hash, unsigned char *identifier);
-/* the X25519 secret this machine shares with the one with that public key;
-0 if the key is unusable (one giving a known secret). The p2p thread's: it
-lets go of the p2p lock while it works it out */
+/* the X25519 secret shared with the machine of that public key; 0 if the key is unusable (one giving a known secret).
+The p2p thread's: it lets go of the p2p lock while it works it out */
 int p2p_shared_secret(const unsigned char *public_key, unsigned char *shared);
-/* a joiner (on the host) or the host (on a joiner) offered its addresses and
-its WebRTC through signalling, with its public key and the secret of a
-session (P2P_SHA256_SIZE bytes) its tunnel's keys come from; the tunnel
-starts reaching it. offered is who it is (_p2p_offered_*). Returns 0 if it
-was turned away: another session with that machine lives (it must lapse
-first), this one has ended, or there is no room */
+/* a joiner (on the host) or the host offered its addresses, WebRTC, public key and session secret (its tunnel's keys'),
+and the tunnel reaches it; offered: _p2p_offered_*. 0: turned away (a session lives, this one ended, no room) */
 struct p2p_webrtc;
 int p2p_peer_offered(const unsigned char *identifier, const unsigned char *public_key, const unsigned char *secret,
 	const struct p2p_candidate *candidates, int count, const struct p2p_webrtc *webrtc, int offered);
-/* whether p2p_peer_offered would turn a new session with that machine away
-now (it is this machine, a session with it lives, there is no room, or, as
-a host, too many players are being reached): checked before its secret is
-worked out */
+/* whether p2p_peer_offered would turn that machine away now (this machine, a session lives, no room, or as a host too
+many players being reached): checked before its secret is worked out */
 int p2p_peer_turned_away(const unsigned char *identifier, int is_host);
-/* ... more addresses of a machine whose session (that secret's) lives, and
-its WebRTC (a browser host's credentials come once the request is proven):
-0 if none does (a session that has ended is never taken up again: its keys'
-packet numbers would start again) */
+/* ... more addresses and WebRTC of a machine whose session (that secret's) lives; 0 if none does (an ended session is
+never taken up again: its keys' packet numbers would start again) */
 int p2p_peer_reoffered(const unsigned char *identifier, const unsigned char *secret,
 	const struct p2p_candidate *candidates, int count, const struct p2p_webrtc *webrtc);
 /* an invite that arrived on the p2p thread (from Discord, or another copy
 of the game) */
 void p2p_invite_received(const char *text);
-/* a new invite (token) for the game hosted, if its invite was listed in the
-server browser (going private: those who saw it must not get in); under
-p2p_lock */
+/* a new invite (token) for the game hosted, if its invite was listed in the server browser (going private: those who
+saw it must not get in); under p2p_lock */
 void p2p_new_invite_if_listed(void);
+/* a message on the topic of the code looked up (p2p_look_up_code), which may be its invite; under p2p_lock */
+void p2p_code_heard(const unsigned char *payload, int size);
 
 /* ---------- p2p_signal.c: signalling through public MQTT brokers */
 
@@ -139,38 +122,35 @@ void p2p_signal_update(const int *read, int read_count, const int *write, int wr
 /* hosting: listen for joiners who hold this token */
 void p2p_signal_host(const unsigned char *token);
 void p2p_signal_stop_hosting(void);
-/* joining: ask the host whose public key has this hash (p2p_key_hash),
-holding this token, until it answers (or p2p_signal_stop_joining); each call
-asks anew, with a new nonce (as after the session with the host ended
-before the tunnel reached it: the host makes one session of a request) */
+/* joining: asks the host of the key with this hash (p2p_key_hash), holding this token, until it answers (or
+p2p_signal_stop_joining); each call asks anew with a new nonce (the host makes one session of a request) */
 void p2p_signal_join(const unsigned char *host_hash, const unsigned char *token);
 void p2p_signal_stop_joining(void);
-/* ... and another player of the host's game (whose key has this hash, as
-the host told), which answers holders of the token as its host does
-(p2p_signal_host with the token it joined with), alongside the request to
-the host; 0 if there is no room, or the request to the host is of another
-token. Stopped by its identifier */
+/* ... and another player of the host's game (its key's hash as the host told), which answers holders of the token as
+its host does; 0 if no room, or the request to the host is of another token. Stopped by its identifier */
 int p2p_signal_join_player(const unsigned char *player_hash, const unsigned char *token);
 void p2p_signal_stop_joining_player(const unsigned char *identifier);
 /* whether any broker is connected */
 int p2p_signal_connected(void);
-/* every broker's connection made anew at once: after the p2p thread was
-stopped (the process was suspended, or the machine slept), the old ones
-may carry nothing, and would be noticed only at their silence timeout */
+/* every broker's connection made anew at once: after the p2p thread was stopped (suspended, or the machine slept), the
+old ones may carry nothing and would be noticed only at their silence timeout */
 void p2p_signal_reconnect(void);
 /* the server browser's topics: the own slot and the queries (a listed
 game), and every slot (browsing) */
 void p2p_signal_lobby_topics(int listed, int browsing);
-/* publishes a listing to the own slot on every broker, retained, and again
-on each broker that connects later; closing: a tombstone, after which the
-slot is cleared and nothing is published again */
+/* publishes a listing to the own slot on every broker, retained, and on each broker that connects later; closing: a
+tombstone, after which the slot is cleared and nothing is published again */
 void p2p_signal_lobby_publish(const unsigned char *listing, int size, int closing);
 /* asks the hosts to publish again */
 void p2p_signal_lobby_query(void);
-/* the game is quitting: the tombstone published (p2p_signal_lobby_publish)
-and the slot cleared on every ready broker now, whatever their buckets, and
-the connections closed cleanly */
+/* the game is quitting: the tombstone published and the slot cleared on every ready broker now, whatever their buckets,
+and the connections closed cleanly */
 void p2p_signal_lobby_quit(void);
+/* this machine's invite code: its sealed invite retained on every broker under the topic (NULL: none, the last one
+cleared), published again now and then */
+void p2p_signal_code_host(const char *topic, const unsigned char *payload, int size);
+/* the topic of a code looked up (NULL: none): what the brokers hold there goes to p2p_code_heard */
+void p2p_signal_code_lookup(const char *topic);
 
 /* ---------- p2p_crypto.c */
 
@@ -188,9 +168,8 @@ enum
 
 void p2p_sha256(const void *data, int size, unsigned char *digest);
 void p2p_hmac_sha256(const unsigned char *key, int key_size, const void *data, int size, unsigned char *digest);
-/* ChaCha20-Poly1305: encrypts plaintext with a 32-byte key and a nonce used
-with that key once, and authenticates it and the additional data, into
-sealed (size + P2P_TAG_SIZE bytes); returns the sealed size */
+/* ChaCha20-Poly1305: encrypts plaintext with a 32-byte key and a nonce used once with it, and authenticates it and the
+additional data, into sealed (size + P2P_TAG_SIZE bytes); returns the sealed size */
 int p2p_aead_seal(const unsigned char *key, const unsigned char *nonce, const void *additional,
 	int additional_size, const void *plaintext, int size, unsigned char *sealed);
 /* the reverse: the plaintext size, or -1 if sealed (or the additional data)
@@ -216,9 +195,8 @@ enum
 };
 
 void p2p_sha512(const void *data, int size, unsigned char *digest);
-/* Ed25519 (with SHA-512): a seed's public key (P2P_KEY_SIZE bytes) and,
-unless NULL, its X25519 secret key (the scalar it signs with, whose X25519
-public key is p2p_ed25519_to_x25519 of the Ed25519 one) */
+/* Ed25519 (with SHA-512): a seed's public key (P2P_KEY_SIZE bytes) and, unless NULL, its X25519 secret key (the scalar
+it signs with, whose X25519 public key is p2p_ed25519_to_x25519 of the Ed25519 one) */
 void p2p_ed25519_public(const unsigned char *seed, unsigned char *public_key, unsigned char *x25519_secret);
 void p2p_ed25519_sign(const unsigned char *seed, const unsigned char *public_key, const void *message, int size,
 	unsigned char *signature);
@@ -237,34 +215,47 @@ enum
 	P2P_SEALED_TOKEN_SIZE = 24 + 16 + 16,
 };
 
-/* the key of a password (Argon2id: P2P_PASSWORD_KEY_SIZE bytes), for the
-host whose Ed25519 key salt is (P2P_KEY_SIZE bytes): it takes a few
+/* the key of a password (Argon2id: P2P_PASSWORD_KEY_SIZE bytes) for the host whose Ed25519 key salt is: a few
 milliseconds, so that guessing passwords at a listing takes long */
 void p2p_password_key(const char *password, const unsigned char *salt, unsigned char *key);
-/* a token (P2P_TOKEN_SIZE bytes) sealed with a password's key, bound to the
-host's Ed25519 key (P2P_SEALED_TOKEN_SIZE bytes); and opened: 0 if the key
-is not the one it was sealed with (a wrong password), or it was altered */
+/* a token sealed with a password's key, bound to the host's Ed25519 key (P2P_SEALED_TOKEN_SIZE bytes); and opened: 0 if
+the key is not the one it was sealed with (a wrong password), or it was altered */
 void p2p_seal_token(const unsigned char *key, const unsigned char *signing_key, const unsigned char *token,
 	unsigned char *sealed);
 int p2p_unseal_token(const unsigned char *key, const unsigned char *signing_key, const unsigned char *sealed,
 	unsigned char *token);
+
+enum
+{
+	/* an invite code's topic on the brokers (text with its end), and its sealed invite: a kind and version, a nonce,
+	the host's key hash and the token encrypted, a tag */
+	P2P_CODE_TOPIC_SIZE = 48,
+	P2P_CODE_INVITE_SIZE = P2P_KEY_HASH_SIZE + P2P_TOKEN_SIZE,
+	P2P_CODE_PAYLOAD_SIZE = 2 + 16 + P2P_CODE_INVITE_SIZE + 16,
+};
+
+/* an invite code's key from its digits (PBKDF2: a fraction of a second, so that trying every code on what the brokers
+hold takes long), its topic, and an invite (P2P_CODE_INVITE_SIZE bytes) sealed with it */
+void p2p_code_key(const char *digits, unsigned char *key);
+void p2p_code_topic(const unsigned char *key, char *topic);
+void p2p_code_seal(const unsigned char *key, const unsigned char *invite, unsigned char *payload);
+/* the reverse: 0 if the payload is not an invite sealed with that key */
+int p2p_code_open(const unsigned char *key, const unsigned char *payload, int size, unsigned char *invite);
 
 /* ---------- WebRTC: tunnels to and from browsers (p2p_webrtc.c in the
 native builds, port/web/src/web_p2p.c in the browser) */
 
 enum
 {
-	/* what a machine says of itself in signalling: nothing (no machine of
-	this version), a native build (which takes browsers' WebRTC on its
-	tunnel's socket), or a browser (which has WebRTC alone) */
+	/* what a machine says of itself in signalling: nothing (no machine of this version), a native build (which takes
+	browsers' WebRTC on its tunnel's socket), or a browser (which has WebRTC alone) */
 	_p2p_webrtc_none = 0,
 	_p2p_webrtc_native,
 	_p2p_webrtc_browser,
 	/* the SHA-256 of a DTLS certificate */
 	P2P_FINGERPRINT_SIZE = 32,
-	/* a browser's own addresses, which it hides behind mDNS names (another
-	browser on its network can look them up), and a name's text with its
-	end */
+	/* a browser's own addresses, which it hides behind mDNS names (another browser on its network can look them up),
+	and a name's text with its end */
 	P2P_MAXIMUM_WEBRTC_NAMES = 2,
 	P2P_WEBRTC_NAME_SIZE = 64,
 	/* ICE's username fragment and password, as text with their end */
@@ -277,9 +268,8 @@ struct p2p_webrtc
 {
 	int kind;
 	unsigned char fingerprint[P2P_FINGERPRINT_SIZE];
-	/* a browser's ICE credentials (empty until it has a connection for the
-	other machine: a host's, once the joiner proved its request). A native
-	build's come from the session's secret (p2p_webrtc_credentials) */
+	/* a browser's ICE credentials (empty until it has a connection for the other machine: a host's, once the joiner
+	proved its request); a native build's come from the session's secret (p2p_webrtc_credentials) */
 	char ufrag[P2P_ICE_UFRAG_SIZE];
 	char password[P2P_ICE_PASSWORD_SIZE];
 	/* a browser's addresses on its own network, as mDNS names
@@ -292,19 +282,15 @@ struct p2p_webrtc
 /* whether this machine's WebRTC can be told yet (a browser's: its
 certificate and a connection ready; a native build's at once) */
 int p2p_webrtc_ready(void);
-/* this machine's WebRTC for a message to the machine with this identifier
-(the host joined, or a joiner answered: proven, or not yet), and the
-addresses it offers it; returns their count */
+/* this machine's WebRTC for a message to the machine with this identifier (the host joined, or a joiner answered:
+proven, or not yet), and the addresses it offers it; returns their count */
 int p2p_webrtc_describe(const unsigned char *identifier, int proven, struct p2p_webrtc *local,
 	struct p2p_candidate *candidates, int maximum_count);
 /* a new request to join (p2p_signal_join): a browser's connection for the
 last one, not taken up by a session, goes */
 void p2p_webrtc_new_request(void);
-/* a session with the peer (p2p.c's index) whose machine has this WebRTC
-was offered, or offered again (more addresses, a browser's credentials):
-the WebRTC connection that carries its tunnel (an index, kept by p2p.c), or
--1 if none does (two native builds: their UDP tunnel). connection is the one
-returned before (-1 the first time) */
+/* a session with the peer (p2p.c's index) of this WebRTC offered, or again: the WebRTC connection that carries its
+tunnel, or -1 (two native builds: their UDP tunnel). connection: the one returned before (-1 the first time) */
 int p2p_webrtc_offered(int connection, int peer, const unsigned char *secret, const struct p2p_webrtc *remote,
 	const struct p2p_candidate *candidates, int count, int is_host);
 void p2p_webrtc_close(int connection);
@@ -320,9 +306,8 @@ int p2p_webrtc_update(void);
 them out: they do not travel); p2p_crypto.c's */
 void p2p_webrtc_credentials(const unsigned char *secret, char *ufrag, char *password);
 
-/* p2p.c's, which WebRTC calls: a tunnel packet a connection carried, a
-datagram it sends on the tunnel's socket, and a peer's name as logged (its
-identifier in hex: 2 * P2P_IDENTIFIER_SIZE + 1 characters) */
+/* p2p.c's, which WebRTC calls: a tunnel packet a connection carried, a datagram it sends on the tunnel's socket, and a
+peer's name as logged (its identifier in hex: 2 * P2P_IDENTIFIER_SIZE + 1 characters) */
 void p2p_tunnel_packet(const unsigned char *packet, int size, unsigned long address, unsigned short port);
 void p2p_tunnel_send(unsigned long address, unsigned short port, const void *data, int size);
 void p2p_peer_name(int peer, char *name);

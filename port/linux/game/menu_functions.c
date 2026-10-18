@@ -7,6 +7,7 @@ ui_widget_event_handler_function_invoke calls them); the PC's rest do nothing ye
 #include "interface/player_ui.h"
 #include "interface/ui_widget.h"
 #include "interface/ui_widget_event_handler_functions.h"
+#include "interface/virtual_keyboard.h"
 #include "main/main.h"
 #include "networking/network_game_manager.h"
 #include "saved games/player_profile.h"
@@ -55,6 +56,7 @@ char const *ui_widget_event_handler_function_name(long function_index);
 short main_get_solo_level_from_name(char const *name);
 boolean player_name_clean(wchar_t *name, long count);
 short players_port_local_player_count(void);
+void virtual_keyboard_port_caption(wchar_t const *caption);
 
 boolean pc_menu_event_function_invoke(struct widget_instance *widget, struct event_record *event,
 	long function_index, boolean *widget_deleted);
@@ -3616,6 +3618,24 @@ static struct
 	short selected, shown;
 } xbox_internet;
 
+/* how long INTERNET PLAY shows what went wrong with a code or a join, in place of the rows */
+#define XBOX_MESSAGE_TIME 5000
+
+/* INTERNET PLAY's invite codes (p2p.c) */
+static struct
+{
+	/* the keyboard's text, while it is up for it */
+	wchar_t text[16];
+	boolean typing;
+	/* the code looked up (as "1234 5678"), for the controller that typed it */
+	boolean looking;
+	char code[P2P_CODE_DIGITS + 2];
+	short controller;
+	/* what went wrong last, and when (0: nothing to show) */
+	wchar_t message[64];
+	unsigned long message_time;
+} xbox_code;
+
 static struct
 {
 	/* the rows' games, the open ones first, as System Link's */
@@ -3682,7 +3702,7 @@ static void xbox_describe(struct widget_instance *description, struct xbox_game_
 	text_set(named(description, "score_limit", 0), text);
 }
 
-/* ---- INTERNET PLAY: the server browser's games; A joins one as the server browser does */
+/* ---- INTERNET PLAY: the server browser's games; A joins one as the server browser does, Y a game's invite code */
 
 /* "xbox internet begin" (the list's created): only the controller that joins plays; the found games' client */
 static boolean xbox_internet_begin(struct widget_instance *list, struct event_record *event, boolean *widget_deleted)
@@ -3690,6 +3710,8 @@ static boolean xbox_internet_begin(struct widget_instance *list, struct event_re
 	player_ui_clear_multiplayer_joins();
 	lobby_browser_begin();
 	xbox_internet.selected = xbox_internet.shown = 0;
+	xbox_code.typing = xbox_code.looking = FALSE;
+	xbox_code.message_time = 0;
 	return ui_widget_port_browse(list, event, widget_deleted);
 }
 
@@ -3697,7 +3719,105 @@ static boolean xbox_internet_begin(struct widget_instance *list, struct event_re
 static void xbox_internet_end(struct widget_instance *list)
 {
 	lobby_browser_end();
+	p2p_stop_code_lookup();
+	xbox_code.looking = FALSE;
 	xbox_list_end(list);
+}
+
+/* what went wrong (a format of the name, if any), shown for XBOX_MESSAGE_TIME */
+static void xbox_message(unsigned long now, wchar_t const *format, char const *name)
+{
+	wchar_t wide[P2P_LISTING_NAME_SIZE + 1];
+
+	text_to_wide(name ? name : "", wide, NUMBEROF(wide));
+	usnprintf(xbox_code.message, NUMBEROF(xbox_code.message) - 1, format, wide);
+	xbox_code.message[NUMBEROF(xbox_code.message) - 1] = 0;
+	xbox_code.message_time = now ? now : 1;
+	ui_play_audio_feedback_sound(SOUND_ERROR);
+}
+
+static boolean xbox_message_shown(unsigned long now)
+{
+	return xbox_code.message_time && now - xbox_code.message_time < XBOX_MESSAGE_TIME;
+}
+
+/* a code's digits as shown: "1234 5678" */
+static void xbox_code_spaced(char const *text, char *spaced)
+{
+	short length = 0, digits = 0;
+
+	for (; *text && digits < P2P_CODE_DIGITS; text++)
+	{
+		if (*text < '0' || *text > '9')
+			continue;
+		if (digits++ == P2P_CODE_DIGITS / 2)
+			spaced[length++] = ' ';
+		spaced[length++] = *text;
+	}
+	spaced[length] = 0;
+}
+
+/* "xbox internet code" (Y): the keyboard, for a game's invite code */
+static boolean xbox_internet_code(short controller)
+{
+	if (xbox_code.typing || xbox_code.looking || lobby_browser.joining)
+		return TRUE;
+	if (!config_boolean("network.online"))
+		return campaign_fail();
+	xbox_code.text[0] = 0;
+	if (!virtual_keyboard_launch(xbox_code.text, sizeof(xbox_code.text), 8))
+		return campaign_fail();
+	virtual_keyboard_port_caption(L"Enter the game's invite code");
+	xbox_code.typing = TRUE;
+	xbox_code.controller = controller;
+	return TRUE;
+}
+
+/* the code typed (once the keyboard closes) looked up; its game, once found, joined as a listed one is */
+static void xbox_code_update(unsigned long now)
+{
+	char text[NUMBEROF(xbox_code.text)], link[P2P_LISTING_INVITE_SIZE];
+	unsigned char identifier[6];
+	short index;
+	int found;
+
+	if (xbox_code.typing && !virtual_keyboard_active())
+	{
+		xbox_code.typing = FALSE;
+		if (!virtual_keyboard_last_exit_saved_text())
+			return;
+		for (index = 0; xbox_code.text[index] && index < NUMBEROF(text) - 1; index++)
+			text[index] = xbox_code.text[index] < 128 ? (char)xbox_code.text[index] : '?';
+		text[index] = 0;
+		if (!p2p_look_up_code(text))
+		{
+			xbox_message(now, L"That is not an invite code\r\n(8 digits).", NULL);
+			return;
+		}
+		xbox_code_spaced(text, xbox_code.code);
+		xbox_code.looking = TRUE;
+		xbox_code.message_time = 0;
+		ui_play_audio_feedback_sound(SOUND_FORWARD);
+	}
+	if (!xbox_code.looking)
+		return;
+	found = p2p_code_found(link, sizeof(link), identifier);
+	if (found)
+		xbox_code.looking = FALSE;
+	if (found < 0)
+		xbox_message(now, L"No game has the code\r\n%s.", xbox_code.code);
+	else if (found > 0 && !p2p_join_invite(link))
+		xbox_message(now, L"Could not join the code\r\n%s.", xbox_code.code);
+	else if (found > 0)
+	{
+		csmemcpy(lobby_browser.identifier, identifier, sizeof(lobby_browser.identifier));
+		snprintf(lobby_browser.name, sizeof(lobby_browser.name), "code %s", xbox_code.code);
+		lobby_browser.joining = TRUE;
+		lobby_browser.ready = FALSE;
+		lobby_browser.join_time = now;
+		lobby_browser.controller = xbox_code.controller;
+		ui_play_audio_feedback_sound(SOUND_FORWARD);
+	}
 }
 
 /* the server browser's join (lobby_browser_update's): its host reached, an A press posted joins its game */
@@ -3727,12 +3847,12 @@ static void xbox_internet_join_update(unsigned long now)
 		p2p_lobby_mark_failed(lobby_browser.identifier);
 		lobby_browser.joining = FALSE;
 		platform_log("menus: could not reach the server browser's game %s", lobby_browser.name);
-		ui_play_audio_feedback_sound(SOUND_ERROR);
+		xbox_message(now, L"Could not reach\r\n%s.", lobby_browser.name);
 	}
 }
 
 /* "xbox internet update": the rows (scrolled on past their ends), the focused game's description, and in place of
-the rows a status (looking, none found, joining) */
+the rows a status (looking, none found, a code looked up, joining, what went wrong) */
 static void xbox_internet_update(struct widget_instance *list)
 {
 	struct widget_instance *description = list->parameters.list.extended_description;
@@ -3747,6 +3867,7 @@ static void xbox_internet_update(struct widget_instance *list)
 	lobby_browser.count = lobby_browser_valid_games(lobby_browser.games,
 		(short)p2p_lobby_games(lobby_browser.games, LOBBY_BROWSER_GAMES));
 	xbox_internet_join_update(now);
+	xbox_code_update(now);
 	/* (the engine wraps a press past the last row to the first, and before the first to the last: with more games
 	than rows, the rows scroll instead) */
 	if (xbox_internet.shown == XBOX_INTERNET_ROWS && lobby_browser.count > XBOX_INTERNET_ROWS)
@@ -3773,7 +3894,7 @@ static void xbox_internet_update(struct widget_instance *list)
 		}
 	}
 	lobby_browser.first = (short)PIN(lobby_browser.first, 0, MAX(0, lobby_browser.count - XBOX_INTERNET_ROWS));
-	shown = online && !lobby_browser.joining ?
+	shown = online && !lobby_browser.joining && !xbox_code.looking && !xbox_message_shown(now) ?
 		(short)MIN(lobby_browser.count - lobby_browser.first, XBOX_INTERNET_ROWS) : 0;
 	selected = shown ? (short)PIN(selected, 0, shown - 1) : 0;
 	list->parameters.list.list_items = lobby_browser.games;
@@ -3817,13 +3938,20 @@ static void xbox_internet_update(struct widget_instance *list)
 	status->visible = !shown;
 	if (!config_boolean("network.online"))
 		usnprintf(text, NUMBEROF(text) - 1, L"Internet play is off.");
-	else if (!config_boolean("network.public_lobby"))
-		usnprintf(text, NUMBEROF(text) - 1, L"The server browser is off.");
+	else if (xbox_code.looking)
+	{
+		text_to_wide(xbox_code.code, name, NUMBEROF(name));
+		usnprintf(text, NUMBEROF(text) - 1, L"Looking for the code\r\n%s...", name);
+	}
 	else if (lobby_browser.joining)
 	{
 		text_to_wide(lobby_browser.name, name, NUMBEROF(name));
 		usnprintf(text, NUMBEROF(text) - 1, L"Connecting to\r\n%s...", name);
 	}
+	else if (xbox_message_shown(now))
+		usnprintf(text, NUMBEROF(text) - 1, L"%s", xbox_code.message);
+	else if (!config_boolean("network.public_lobby"))
+		usnprintf(text, NUMBEROF(text) - 1, L"The server browser is off.");
 	else
 	{
 		usnprintf(text, NUMBEROF(text) - 1, L"%s", now - lobby_browser.begin_time < LOBBY_BROWSER_LOOK_TIME ?
@@ -3850,7 +3978,7 @@ static boolean xbox_internet_select(struct widget_instance *list, short controll
 			return FALSE;
 		return ui_widget_port_join(list, found, XBOX_PREGAME_NAME, widget_deleted);
 	}
-	if (lobby_browser.joining)
+	if (lobby_browser.joining || xbox_code.looking)
 		return TRUE;
 	if (!xbox_internet.shown || lobby_browser.chosen >= lobby_browser.count)
 		return campaign_fail();
@@ -3988,6 +4116,24 @@ static void xbox_multiplayer_type_description(struct widget_instance *list)
 		description->child->animation.current_frame_index = frames[index];
 		description->child->next->parameters.text_box.string_list_index = strings[index];
 	}
+}
+
+/* "xbox invite code" (the pregame screen's text, menu_tags.c): the code of the game this machine hosts for the internet
+(p2p.c), else nothing */
+static void xbox_invite_code_update(struct widget_instance *text_box)
+{
+	char code[P2P_CODE_DIGITS + 1], spaced[P2P_CODE_DIGITS + 2];
+	wchar_t wide[P2P_CODE_DIGITS + 2], text[32];
+
+	text[0] = 0;
+	if (global_network_game_server_get() && p2p_invite_code(code, sizeof(code)))
+	{
+		xbox_code_spaced(code, spaced);
+		text_to_wide(spaced, wide, NUMBEROF(wide));
+		usnprintf(text, NUMBEROF(text) - 1, L"Code: %s", wide);
+		text[NUMBEROF(text) - 1] = 0;
+	}
+	text_set_length(text_box, text, NUMBEROF(text));
 }
 #endif
 
@@ -5960,6 +6106,10 @@ boolean pc_menu_event_function_invoke(
 		{
 			return xbox_internet_select(widget, controller, widget_deleted);
 		}
+		else if (!strcmp(name, "xbox internet code"))
+		{
+			return xbox_internet_code(controller);
+		}
 		else if (!strcmp(name, "xbox lan begin"))
 		{
 			return xbox_lan_begin(widget, event, widget_deleted);
@@ -6046,5 +6196,7 @@ void pc_menu_game_data_function_invoke(
 		xbox_multiplayer_type_description(widget);
 	else if (!strcmp(name, "xbox lan update"))
 		xbox_lan_update(widget);
+	else if (!strcmp(name, "xbox invite code"))
+		xbox_invite_code_update(widget);
 #endif
 }

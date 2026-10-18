@@ -51,6 +51,12 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-06)
 
+- 2026-10-18: Invite codes (Matt: "Yes. Let's go with this."): built, not
+  tested. 8 digits that stand for an invite link, sealed on the MQTT brokers
+  for 30 minutes. INTERNET PLAY: Y (ENTER CODE) types one; the PS3 host's
+  pregame screen shows its own. `port/ps3/invite/index.html` (for GitHub
+  Pages) converts a link to a code and back. PKG of 22:02 in
+  `build/ps3_code/`. See "Log".
 - 2026-10-16: OpenCE upstream merged (620 commits, to `8102e711`): hardware
   SUCCESS (Matt: "We're in again! Perfect."). Menu, a level, saves written
   and loaded. New upstream features that report "none" on the PS3: voice
@@ -1315,3 +1321,34 @@ then `./build.sh pkg LOG_IP=<address>`.
   (`xbox_describe`, with the score limit for LAN games). The changed units
   compile with GCC's warnings (none); `check` passes (0 `r2off`, `.got`
   0x7ee8). PKG of 03:41 in `build/ps3_p2p/`. Not tested on hardware.
+- 2026-10-18: Invite codes (Matt: "what if we made a shortener (tied to
+  Github pages) ... convert the URL into a few digits", then "Yes. Let's go
+  with this."). A stateless conversion cannot be short (an invite is 256
+  random bits), so a code names a retained message on the MQTT brokers:
+  topic `hceu/3/code/<HMAC of the code's key>`, the invite sealed with the
+  key (HMAC-SHA256 stream and tag), the key PBKDF2-HMAC-SHA256 of the 8
+  digits (100000 rounds, salt "hceu invite code 1"), MQTT 5 expiry 30
+  minutes. `p2p_crypto.c` (`p2p_code_*`), `p2p.c` (`p2p_invite_code`: the
+  host's code, made on the first call while it hosts and kept for the
+  token; `p2p_look_up_code`, `p2p_code_found`, `p2p_stop_code_lookup`),
+  `p2p_signal.c` (the code retained on each broker, published again on
+  each connection and every 10 minutes, cleared when it changes; the
+  looked-up topic subscribed). Menus (`HALO_PS3`): INTERNET PLAY's Y runs
+  "xbox internet code" (the Xbox keyboard, its caption the port's:
+  `virtual_keyboard_port_caption`, a `port:` change in
+  `source/interface/virtual_keyboard.c`; Done takes the text without the
+  file name checks); the code found is joined as a listing is; the status
+  shows the lookup and what went wrong for 5 s. CREATE GAME's key copy says
+  "= ENTER CODE" on INTERNET PLAY. The pregame screen has a new text child
+  ("xbox invite code": "Code: 1234 5678", at 82/376, right-aligned). The
+  page `port/ps3/invite/index.html` (one file, its own MQTT 5 client over
+  WebSockets, as `port/web/site/net.js`): link to code and code to link.
+  Checks: the C key, topic and payload equal a Python reference and the
+  page's (node, 3 codes); the page made a code and found it on EMQX, HiveMQ
+  and Mosquitto, then cleared it (HiveMQ answers in about 8 s, the others in
+  under 1 s); a host x86 PBKDF2 takes 54 ms. The changed units compile with
+  GCC's warnings (none new); `check` passes (0 `r2off`, `.got` 0x7ee8). The
+  network version is unchanged (no message between machines changed). The
+  comments over 2 lines in `p2p.h`, `p2p_internal.h` and
+  `virtual_keyboard.c` are shortened. PKG of 22:02 in `build/ps3_code/`.
+  Not tested on hardware.

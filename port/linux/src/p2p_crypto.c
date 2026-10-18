@@ -1,5 +1,5 @@
-/* P2P_CRYPTO.C: internet play's privacy (p2p.c), with SHA-256 (FIPS 180-4) and HMAC (RFC 2104) for topics and keys,
-ChaCha20-Poly1305 sealing packets and messages, X25519 for keys never sent, Ed25519 signing public games' listings */
+/* P2P_CRYPTO.C: internet play's privacy (p2p.c), with SHA-256 (FIPS 180-4) and HMAC (RFC 2104) for topics, keys and
+invite codes, ChaCha20-Poly1305 sealing packets and messages, X25519 for keys never sent, Ed25519 signing listings */
 
 #include "posix.h"
 #include "p2p_internal.h"
@@ -8,6 +8,7 @@ ChaCha20-Poly1305 sealing packets and messages, X25519 for keys never sent, Ed25
 #include "monocypher-ed25519.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -159,6 +160,129 @@ void p2p_hmac_sha256(const unsigned char *key, int key_size, const void *data, i
 	sha256_add(&context, block, 64);
 	sha256_add(&context, inner, sizeof(inner));
 	sha256_end(&context, digest);
+}
+
+/* ---------- invite codes (p2p.c; port/ps3/invite/index.html does the same) */
+
+#define CODE_KEY_SALT "hceu invite code 1"
+#define CODE_KEY_ROUNDS 100000
+#define CODE_NONCE_SIZE 16
+#define CODE_TAG_SIZE 16
+#define CODE_VERSION 1
+
+/* SHA-256 of a 64-byte key block (its state in start) and a 32-byte message: one block, its length 768 bits */
+static void sha256_after_key(const struct sha256 *start, const unsigned char *message, unsigned char *digest)
+{
+	struct sha256 context = *start;
+	unsigned char block[64];
+	int index;
+
+	memcpy(block, message, P2P_SHA256_SIZE);
+	memset(block + P2P_SHA256_SIZE, 0, sizeof(block) - P2P_SHA256_SIZE);
+	block[P2P_SHA256_SIZE] = 0x80;
+	block[62] = 0x03;
+	sha256_block(&context, block);
+	for (index = 0; index < 8; index++)
+	{
+		digest[index * 4] = (unsigned char)(context.state[index] >> 24);
+		digest[index * 4 + 1] = (unsigned char)(context.state[index] >> 16);
+		digest[index * 4 + 2] = (unsigned char)(context.state[index] >> 8);
+		digest[index * 4 + 3] = (unsigned char)context.state[index];
+	}
+}
+
+/* PBKDF2-HMAC-SHA256 (RFC 8018) of the digits, one block: each round after the first is two SHA-256 blocks */
+void p2p_code_key(const char *digits, unsigned char *key)
+{
+	static const unsigned char block_number[4] = { 0, 0, 0, 1 };
+	struct sha256 inner, outer, context;
+	unsigned char block[64], round[P2P_SHA256_SIZE];
+	size_t length = strlen(digits);
+	long count;
+	int index;
+
+	memset(block, 0, sizeof(block));
+	memcpy(block, digits, length < sizeof(block) ? length : sizeof(block));
+	for (index = 0; index < 64; index++)
+		block[index] ^= 0x36;
+	sha256_begin(&inner);
+	sha256_add(&inner, block, 64);
+	for (index = 0; index < 64; index++)
+		block[index] ^= 0x36 ^ 0x5c;
+	sha256_begin(&outer);
+	sha256_add(&outer, block, 64);
+	context = inner;
+	sha256_add(&context, CODE_KEY_SALT, (int)strlen(CODE_KEY_SALT));
+	sha256_add(&context, block_number, sizeof(block_number));
+	sha256_end(&context, round);
+	context = outer;
+	sha256_add(&context, round, P2P_SHA256_SIZE);
+	sha256_end(&context, round);
+	memcpy(key, round, P2P_SHA256_SIZE);
+	for (count = 1; count < CODE_KEY_ROUNDS; count++)
+	{
+		sha256_after_key(&inner, round, round);
+		sha256_after_key(&outer, round, round);
+		for (index = 0; index < P2P_SHA256_SIZE; index++)
+			key[index] ^= round[index];
+	}
+}
+
+/* HMAC of a label and the data after it, with a code's key */
+static void code_hash(const unsigned char *key, const char *label, const unsigned char *data, int size,
+	unsigned char *digest)
+{
+	unsigned char message[16 + P2P_CODE_PAYLOAD_SIZE];
+	int length = (int)strlen(label);
+
+	memcpy(message, label, (size_t)length);
+	if (size)
+		memcpy(message + length, data, (size_t)size);
+	p2p_hmac_sha256(key, P2P_SHA256_SIZE, message, length + size, digest);
+}
+
+void p2p_code_topic(const unsigned char *key, char *topic)
+{
+	unsigned char digest[P2P_SHA256_SIZE];
+	char text[2 * 16 + 1];
+
+	code_hash(key, "topic", NULL, 0, digest);
+	p2p_hex(digest, 16, text);
+	snprintf(topic, P2P_CODE_TOPIC_SIZE, "hceu/3/code/%s", text);
+}
+
+/* (a kind and version; a random nonce; the invite XORed with the HMAC of the nonce; the HMAC of both, cut short) */
+void p2p_code_seal(const unsigned char *key, const unsigned char *invite, unsigned char *payload)
+{
+	unsigned char stream[P2P_SHA256_SIZE], tag[P2P_SHA256_SIZE];
+	unsigned char *nonce = payload + 2, *sealed = nonce + CODE_NONCE_SIZE;
+	int index;
+
+	payload[0] = 'C';
+	payload[1] = CODE_VERSION;
+	posix_random_bytes(nonce, CODE_NONCE_SIZE);
+	code_hash(key, "stream", nonce, CODE_NONCE_SIZE, stream);
+	for (index = 0; index < P2P_CODE_INVITE_SIZE; index++)
+		sealed[index] = (unsigned char)(invite[index] ^ stream[index]);
+	code_hash(key, "tag", nonce, CODE_NONCE_SIZE + P2P_CODE_INVITE_SIZE, tag);
+	memcpy(sealed + P2P_CODE_INVITE_SIZE, tag, CODE_TAG_SIZE);
+}
+
+int p2p_code_open(const unsigned char *key, const unsigned char *payload, int size, unsigned char *invite)
+{
+	unsigned char stream[P2P_SHA256_SIZE], tag[P2P_SHA256_SIZE];
+	const unsigned char *nonce = payload + 2, *sealed = nonce + CODE_NONCE_SIZE;
+	int index;
+
+	if (size != P2P_CODE_PAYLOAD_SIZE || payload[0] != 'C' || payload[1] != CODE_VERSION)
+		return 0;
+	code_hash(key, "tag", nonce, CODE_NONCE_SIZE + P2P_CODE_INVITE_SIZE, tag);
+	if (!p2p_equal(tag, sealed + P2P_CODE_INVITE_SIZE, CODE_TAG_SIZE))
+		return 0;
+	code_hash(key, "stream", nonce, CODE_NONCE_SIZE, stream);
+	for (index = 0; index < P2P_CODE_INVITE_SIZE; index++)
+		invite[index] = (unsigned char)(sealed[index] ^ stream[index]);
+	return 1;
 }
 
 /* ---------- ChaCha20 and Poly1305 (RFC 8439) */
