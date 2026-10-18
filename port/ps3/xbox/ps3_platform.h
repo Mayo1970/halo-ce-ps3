@@ -123,8 +123,10 @@ unsigned long xgpu_texture_face_size(const struct xgpu_texture_description *desc
 unsigned long xgpu_texture_level_offset(const struct xgpu_texture_description *description, unsigned long level);
 unsigned long xgpu_texture_level_pitch(const struct xgpu_texture_description *description, unsigned long level);
 
-/* the RSX's copy of a level (d3d8_rsx.c): DXT blocks as they are, other texels as A8R8G8B8 in the
-same order, linear rows xgpu_texture_rsx_pitch apart; palette: 256 ARGB values */
+/* the RSX's copy of a level (d3d8_rsx.c): DXT blocks as they are, 8- and 16-bit texels at their size where the RSX
+has the format (xgpu_texture_rsx_format), the rest as A8R8G8B8, in the same order; linear rows
+xgpu_texture_rsx_pitch apart; palette: 256 ARGB values */
+unsigned char xgpu_texture_rsx_format(const struct xgpu_texture_description *description, unsigned long *remap);
 unsigned long xgpu_texture_rsx_pitch(const struct xgpu_texture_description *description, unsigned long level);
 unsigned long xgpu_texture_rsx_level_bytes(const struct xgpu_texture_description *description, unsigned long level);
 void xgpu_texture_rsx_convert_level(const struct xgpu_texture_description *description, unsigned long level,

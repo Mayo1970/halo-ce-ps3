@@ -5,11 +5,17 @@ as runtime microcode (ps3_rsx_*.c) and the RSX through ps3_gpu.c. Resources: d3d
 #include <stdlib.h>
 
 #include "halo_ui_pointer.h"
+#include "port_config.h"
 #include "ps3_gpu.h"
 #include "ps3_timers.h"
 
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 480
+/* the widest screen the game draws (16:9 is 852 columns): the back buffer's memory holds it */
+#define SCREEN_MAXIMUM_WIDTH 864
+/* rasterizer_xbox.c's secondary target (reflections, active camouflage), drawn at the screen's scale */
+#define SECONDARY_TARGET_WIDTH 320
+#define SECONDARY_TARGET_HEIGHT 240
 #define VERTICAL_BLANK_MICROSECONDS (1000000 / 60)
 #define VERTEX_SHADER_SIGNATURE 0x76736864UL /* 'vshd' */
 #define VERTEX_PROGRAM_SLOTS 136
@@ -57,6 +63,8 @@ as runtime microcode (ps3_rsx_*.c) and the RSX through ps3_gpu.c. Resources: d3d
 #define GCM_TEXTURE_BORDER 4
 
 void d3d8_surface_initialize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
+/* port_stubs.c: display.interpolation */
+int halo_interpolation_enabled(void);
 
 /* ---------- state the XDK header's inline functions read and write */
 
@@ -132,9 +140,14 @@ static struct
 	unsigned long immediate_count;
 	unsigned long immediate_capacity;
 
-	/* the bound targets' size (bind_targets) */
+	/* the bound targets' size in the game's units, their pixels a unit and their size in pixels (bind_targets) */
 	unsigned long target_width;
 	unsigned long target_height;
+	float target_scale[2];
+	unsigned long target_pixel_width;
+	unsigned long target_pixel_height;
+	/* a stage's linear render target drawn at the screen's scale: its texel coordinates times this (bind_textures) */
+	float texture_scale[TEXTURE_STAGES][2];
 
 	BOOL visibility_test_active;
 	unsigned long frame;
@@ -157,29 +170,98 @@ static float dword_to_float(DWORD value)
 	return u.f;
 }
 
+/* b / 255 for each byte (Direct3D_CreateDevice): an int-to-float conversion goes through memory on the PPE */
+static float byte_floats[256];
+
 static void color_to_vec4(D3DCOLOR color, float *out)
 {
-	out[0] = ((color >> 16) & 0xff) / 255.0f;
-	out[1] = ((color >> 8) & 0xff) / 255.0f;
-	out[2] = (color & 0xff) / 255.0f;
-	out[3] = ((color >> 24) & 0xff) / 255.0f;
+	out[0] = byte_floats[(color >> 16) & 0xff];
+	out[1] = byte_floats[(color >> 8) & 0xff];
+	out[2] = byte_floats[color & 0xff];
+	out[3] = byte_floats[(color >> 24) & 0xff];
 }
 
-/* ---------- the screen: the Xbox's 640x480, 4:3 in the middle of the display */
+/* ---------- the screen: 480 lines of the game, 640 columns (4:3) or the display's shape (display.screen_width),
+drawn at the display's resolution: the targets the size of the screen get screen_scale pixels a unit (d3d8_gl.c's) */
+
+static long screen_width;
+static float screen_scale[2] = { 1.0f, 1.0f };
+static unsigned long screen_read_at = (unsigned long)-1;
+static long ui_offset;
+
+static void render_targets_evict(void);
+
+static void screen_mode_choose(long *width, float scale[2])
+{
+	uint32_t display_width = 0, display_height = 0;
+	long requested = config_integer("display.screen_width"), wide;
+	int widescreen = 0;
+	float pixel_aspect;
+
+	*width = SCREEN_WIDTH;
+	scale[0] = scale[1] = 1.0f;
+	ps3_gpu_display(&display_width, &display_height, &widescreen);
+	if (!display_width || !display_height)
+		return;
+	/* a pixel's width over its height: 1 at 720p, more on a 16:9 picture of 720x480 */
+	pixel_aspect = (widescreen ? 16.0f / 9.0f : 4.0f / 3.0f) * (float)display_height / (float)display_width;
+	wide = widescreen ? (SCREEN_HEIGHT * 16 / 9) & ~1L : SCREEN_WIDTH;
+	*width = requested <= 0 || requested > wide ? wide : requested < SCREEN_WIDTH ? SCREEN_WIDTH : requested & ~1L;
+	scale[1] = (float)display_height / (float)SCREEN_HEIGHT;
+	/* the display's shape fills it; narrower keeps square units, in the middle */
+	scale[0] = *width == wide && widescreen ? (float)display_width / (float)*width : scale[1] / pixel_aspect;
+}
 
 long halo_screen_width(void)
 {
-	return SCREEN_WIDTH;
+	if (!screen_width)
+	{
+		screen_read_at = config_changes();
+		screen_mode_choose(&screen_width, screen_scale);
+		platform_log("screen: %ldx%d drawn at %.0fx%.0f", screen_width, SCREEN_HEIGHT, screen_width * screen_scale[0],
+			SCREEN_HEIGHT * screen_scale[1]);
+	}
+	return screen_width;
 }
 
+/* the menus and full-screen overlays are laid out for 640 columns: centred while they draw */
 void halo_screen_ui_offset(unsigned char centered)
 {
-	(void)centered;
+	ui_offset = centered ? (halo_screen_width() - SCREEN_WIDTH) / 2 : 0;
 }
 
+void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
+
+/* VIDEO SETTINGS' WIDESCREEN (display.screen_width), between frames: the game's layout and the targets must agree
+for a whole frame (rasterizer_xbox.c). Returns the width the game draws. */
 long halo_screen_commit(void)
 {
-	return SCREEN_WIDTH;
+	long width;
+	float scale[2];
+
+	if (!screen_width)
+		return halo_screen_width();
+	if (screen_read_at == config_changes())
+		return screen_width;
+	screen_read_at = config_changes();
+	screen_mode_choose(&width, scale);
+	if (width != screen_width || scale[0] != screen_scale[0] || scale[1] != screen_scale[1])
+	{
+		platform_log("screen: %ldx%d drawn at %.0fx%.0f", width, SCREEN_HEIGHT, width * scale[0],
+			SCREEN_HEIGHT * scale[1]);
+		screen_width = width;
+		screen_scale[0] = scale[0];
+		screen_scale[1] = scale[1];
+		if (device.created)
+		{
+			device.presentation.BackBufferWidth = (UINT)width;
+			d3d8_surface_resize(&device.back_buffer, D3DFMT_LIN_A8R8G8B8, (unsigned long)width, SCREEN_HEIGHT);
+			d3d8_surface_resize(&device.depth_buffer, D3DFMT_LIN_D24S8, (unsigned long)width, SCREEN_HEIGHT);
+		}
+		/* (the targets of the old size, which nothing finds now) */
+		render_targets_evict();
+	}
+	return screen_width;
 }
 
 int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
@@ -197,9 +279,11 @@ int halo_scoreboard_pointer_update(int offered, struct halo_ui_pointer *pointer)
 	return -1;
 }
 
+/* the screen's targets' pixels to the Xbox's one, the larger way (the screen effects' convolutions) */
 float halo_screen_scale(void)
 {
-	return 1.0f;
+	halo_screen_width();
+	return screen_scale[0] > screen_scale[1] ? screen_scale[0] : screen_scale[1];
 }
 
 /* the shadow maps at the Xbox's 128x128 */
@@ -382,8 +466,8 @@ static void viewport_update_constants(void)
 	}
 }
 
-/* the NV2A's screen space to the RSX's clip space for the bound target, its pixel centres at
-integers (Direct3D's) moved to halves (the RSX's); ps3_rsx_vp.c's epilogue reads them */
+/* the NV2A's screen space (the game's units) to the RSX's clip space for the bound target, its pixel centres at
+integers (Direct3D's) moved to halves (the RSX's), the menus centred; ps3_rsx_vp.c's epilogue reads them */
 static void screen_constants_update(void)
 {
 	float zscale = depth_scale();
@@ -395,7 +479,7 @@ static void screen_constants_update(void)
 	values[0][1] = -2.0f / height;
 	values[0][2] = range > 1.0e-6f ? 2.0f / (zscale * range) : 0.0f;
 	values[0][3] = 0.0f;
-	values[1][0] = 1.0f / width - 1.0f;
+	values[1][0] = (2.0f * (float)ui_offset + 1.0f) / width - 1.0f;
 	values[1][1] = 1.0f - 1.0f / height;
 	values[1][2] = range > 1.0e-6f ? -2.0f * device.viewport.MinZ / range - 1.0f : 0.0f;
 	values[1][3] = 0.0f;
@@ -423,18 +507,25 @@ struct render_target
 {
 	struct render_target *next;
 	DWORD data;
+	/* in pixels: the game's units (units_*) times scale */
 	unsigned long width;
 	unsigned long height;
+	unsigned long units_width;
+	unsigned long units_height;
+	float scale[2];
 	BOOL depth;
 	void *memory;
 	uint32_t offset;
 	uint32_t pitch;
+	uint32_t bytes;
 	unsigned long last_rendered;
 };
 
 #define RENDER_TARGET_BUCKET_COUNT 256
 
 static struct render_target *render_target_buckets[RENDER_TARGET_BUCKET_COUNT];
+/* moves when targets go (render_targets_evict): bind_targets looks them up again */
+static unsigned long render_target_generation;
 
 static struct render_target **render_target_bucket(DWORD data)
 {
@@ -447,12 +538,35 @@ static BOOL format_is_depth(DWORD format)
 		format == D3DFMT_LIN_D24S8 || format == D3DFMT_LIN_F24S8 || format == D3DFMT_LIN_D16 || format == D3DFMT_LIN_F16;
 }
 
-/* data 0: the device's own targets, for a draw without a colour or depth surface */
-static struct render_target *render_target_lookup(DWORD data, unsigned long width, unsigned long height, BOOL depth)
+/* the pixel edge of a coordinate in the game's units (d3d8_gl.c's scaled_pixel) */
+static long scaled_pixel(float coordinate, float scale)
+{
+	float value = coordinate * scale + 0.5f;
+	long pixel = (long)value;
+
+	/* (toward zero: a negative value with a fraction rounds down one more) */
+	if ((float)pixel > value)
+		pixel--;
+	return pixel;
+}
+
+/* data 0: the device's own targets, for a draw without a colour or depth surface. The screen's targets and the
+secondary target get the screen's scale (d3d8_gl.c's render_target_get); the screen's are tiled, its depth culled. */
+static struct render_target *render_target_lookup(DWORD data, unsigned long units_width, unsigned long units_height,
+	BOOL depth)
 {
 	struct render_target *target;
-	uint32_t pitch = (uint32_t)((width * 4 + 63) & ~63UL);
+	BOOL screen = units_width == (unsigned long)halo_screen_width() && units_height == SCREEN_HEIGHT;
+	float scale[2] = { 1.0f, 1.0f };
+	unsigned long width, height;
 
+	if (screen || (!depth && units_width == SECONDARY_TARGET_WIDTH && units_height == SECONDARY_TARGET_HEIGHT))
+	{
+		scale[0] = screen_scale[0];
+		scale[1] = screen_scale[1];
+	}
+	width = (unsigned long)scaled_pixel((float)units_width, scale[0]);
+	height = (unsigned long)scaled_pixel((float)units_height, scale[1]);
 	for (target = *render_target_bucket(data); target; target = target->next)
 	{
 		if (target->data == data && target->width == width && target->height == height && target->depth == depth)
@@ -461,7 +575,8 @@ static struct render_target *render_target_lookup(DWORD data, unsigned long widt
 	target = calloc(1, sizeof(*target));
 	if (!target)
 		return NULL;
-	target->memory = ps3_gpu_memory_allocate(pitch * (uint32_t)height, 128, _ps3_gpu_memory_target, &target->offset);
+	target->memory = ps3_gpu_target_allocate((uint32_t)width, (uint32_t)height, depth != FALSE, screen && data,
+		screen && depth && data, &target->offset, &target->pitch, &target->bytes);
 	if (!target->memory)
 	{
 		platform_log("Direct3D: no RSX memory for a %lux%lu target", width, height);
@@ -471,8 +586,11 @@ static struct render_target *render_target_lookup(DWORD data, unsigned long widt
 	target->data = data;
 	target->width = width;
 	target->height = height;
+	target->units_width = units_width;
+	target->units_height = units_height;
+	target->scale[0] = scale[0];
+	target->scale[1] = scale[1];
 	target->depth = depth;
-	target->pitch = pitch;
 	target->next = *render_target_bucket(data);
 	*render_target_bucket(data) = target;
 	return target;
@@ -490,6 +608,25 @@ static struct render_target *render_target_get(const D3DSurface *surface, BOOL d
 	return render_target_lookup(surface->Data, description.width, description.height, depth);
 }
 
+/* every target (the screen's size changed), freed once the frames in flight are done with them */
+static void render_targets_evict(void)
+{
+	unsigned long index;
+
+	for (index = 0; index < RENDER_TARGET_BUCKET_COUNT; index++)
+	{
+		while (render_target_buckets[index])
+		{
+			struct render_target *target = render_target_buckets[index];
+
+			render_target_buckets[index] = target->next;
+			ps3_gpu_target_free(target->memory, target->bytes);
+			free(target);
+		}
+	}
+	render_target_generation++;
+}
+
 /* the colour target last drawn with this data, for a texture over it */
 static struct render_target *render_target_find(DWORD data)
 {
@@ -503,22 +640,71 @@ static struct render_target *render_target_find(DWORD data)
 	return best;
 }
 
-/* the RSX surface for the current targets; FALSE if there is nothing to draw into */
+/* the RSX surface for the current targets; FALSE if there is nothing to draw into. The lookups are kept while the
+surfaces and their descriptions stay: every draw binds. */
 static BOOL bind_targets(BOOL *has_depth)
 {
-	struct render_target *color = render_target_get(device.render_target, FALSE);
-	struct render_target *depth = render_target_get(device.depth_stencil, TRUE);
+	static struct
+	{
+		const D3DSurface *surfaces[2];
+		DWORD words[2][3];
+		unsigned long generation;
+		struct render_target *color, *depth;
+		BOOL has_depth, valid;
+	} last;
+	const D3DSurface *surfaces[2];
+	struct render_target *color, *depth;
 	struct ps3_gpu_surface surface;
+	int which;
 
+	surfaces[0] = device.render_target;
+	surfaces[1] = device.depth_stencil;
+	if (last.valid && last.generation == render_target_generation && last.surfaces[0] == surfaces[0] &&
+		last.surfaces[1] == surfaces[1])
+	{
+		for (which = 0; which < 2; which++)
+		{
+			if (surfaces[which] && (surfaces[which]->Data != last.words[which][0] ||
+				surfaces[which]->Format != last.words[which][1] || surfaces[which]->Size != last.words[which][2]))
+				break;
+		}
+		if (which == 2)
+		{
+			color = last.color;
+			depth = last.depth;
+			*has_depth = last.has_depth;
+			goto bind;
+		}
+	}
+	last.valid = FALSE;
+	color = render_target_get(device.render_target, FALSE);
+	depth = render_target_get(device.depth_stencil, TRUE);
 	if (!color && !depth)
 		return FALSE;
 	if (!color)
-		color = render_target_lookup(0, depth->width, depth->height, FALSE);
+		color = render_target_lookup(0, depth->units_width, depth->units_height, FALSE);
 	*has_depth = depth && color && depth->width >= color->width && depth->height >= color->height;
 	if (!*has_depth && color)
-		depth = render_target_lookup(0, color->width, color->height, TRUE);
+		depth = render_target_lookup(0, color->units_width, color->units_height, TRUE);
 	if (!color || !depth)
 		return FALSE;
+	for (which = 0; which < 2; which++)
+	{
+		last.surfaces[which] = surfaces[which];
+		if (surfaces[which])
+		{
+			last.words[which][0] = surfaces[which]->Data;
+			last.words[which][1] = surfaces[which]->Format;
+			last.words[which][2] = surfaces[which]->Size;
+		}
+	}
+	last.generation = render_target_generation;
+	last.color = color;
+	last.depth = depth;
+	last.has_depth = *has_depth;
+	last.valid = TRUE;
+
+bind:
 	color->last_rendered = device.frame + 1;
 	surface.color_offset = color->offset;
 	surface.color_pitch = color->pitch;
@@ -527,8 +713,12 @@ static BOOL bind_targets(BOOL *has_depth)
 	surface.width = (uint16_t)color->width;
 	surface.height = (uint16_t)color->height;
 	ps3_gpu_set_surface(&surface);
-	device.target_width = color->width;
-	device.target_height = color->height;
+	device.target_width = color->units_width;
+	device.target_height = color->units_height;
+	device.target_scale[0] = color->scale[0];
+	device.target_scale[1] = color->scale[1];
+	device.target_pixel_width = color->width;
+	device.target_pixel_height = color->height;
 	return TRUE;
 }
 
@@ -584,23 +774,13 @@ static __uint64 hash_bytes(const unsigned char *bytes, unsigned long size)
 	return lanes[0] ^ (lanes[1] * 3) ^ (lanes[2] * 5) ^ (lanes[3] * 7);
 }
 
-static unsigned char rsx_compressed_format(DWORD format)
-{
-	switch (format)
-	{
-	case 0x0c: return GCM_TEXTURE_FORMAT_DXT1;
-	case 0x0e: return GCM_TEXTURE_FORMAT_DXT23;
-	default: return GCM_TEXTURE_FORMAT_DXT45;
-	}
-}
-
 static void texture_upload(struct texture_entry *entry, const unsigned char *source, const DWORD *palette)
 {
 	const struct xgpu_texture_description *description = &entry->description;
 	unsigned long faces = description->cube_map ? 6 : 1;
 	unsigned long levels = description->linear ? 1 : description->levels;
 	unsigned long source_face = xgpu_texture_face_size(description);
-	unsigned long face_bytes = 0, face, level, offset;
+	unsigned long face_bytes = 0, face, level, offset, remap;
 	unsigned char *memory;
 	uint32_t memory_offset;
 
@@ -641,23 +821,17 @@ static void texture_upload(struct texture_entry *entry, const unsigned char *sou
 	entry->gpu.levels = (uint8_t)levels;
 	entry->gpu.dimension = description->depth > 1 ? GCM_TEXTURE_DIMS_3D : GCM_TEXTURE_DIMS_2D;
 	entry->gpu.cube = description->cube_map != FALSE;
-	if (description->compressed)
-	{
-		/* DXT blocks lie in order, swizzled or not, as on the Xbox */
-		entry->gpu.format = rsx_compressed_format(description->format);
-		entry->gpu.pitch = (uint32_t)xgpu_texture_rsx_pitch(description, 0);
-	}
-	else if (description->linear)
-	{
-		/* Xbox linear textures take texel coordinates */
-		entry->gpu.format = GCM_TEXTURE_FORMAT_A8R8G8B8 | GCM_TEXTURE_FORMAT_LIN | GCM_TEXTURE_FORMAT_UNRM;
-		entry->gpu.pitch = (uint32_t)xgpu_texture_rsx_pitch(description, 0);
-	}
-	else
-	{
-		entry->gpu.format = GCM_TEXTURE_FORMAT_A8R8G8B8;
-		entry->gpu.pitch = (uint32_t)(description->width * 4);
-	}
+	/* DXT blocks lie in order, swizzled or not, as on the Xbox; 8- and 16-bit texels where the RSX has their
+	format, with a remap to the Xbox's channels; the rest as A8R8G8B8 */
+	entry->gpu.format = xgpu_texture_rsx_format(description, &remap);
+	entry->gpu.remap = (uint32_t)remap;
+	entry->gpu.pitch = (uint32_t)xgpu_texture_rsx_pitch(description, 0);
+	/* Xbox linear textures take texel coordinates; a swizzled one's pitch is a row's bytes */
+	if (description->linear && !description->compressed)
+		entry->gpu.format |= GCM_TEXTURE_FORMAT_LIN | GCM_TEXTURE_FORMAT_UNRM;
+	else if (!description->compressed)
+		entry->gpu.pitch = (uint32_t)(xgpu_texture_rsx_level_bytes(description, 0) /
+			(description->height * description->depth));
 }
 
 /* the texture cache's memory, which only the cache's disk reads fill */
@@ -866,6 +1040,7 @@ static void bind_textures(struct rsx_fragment_key *key)
 		struct ps3_gpu_texture bound;
 
 		key->sampler_type[stage] = mode == 0x11 ? _rsx_sampler_2d : _rsx_sampler_none;
+		device.texture_scale[stage][0] = device.texture_scale[stage][1] = 1.0f;
 		if (!texture || !texture->Data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
 		{
 			ps3_gpu_set_texture(stage, NULL);
@@ -888,6 +1063,13 @@ static void bind_textures(struct rsx_fragment_key *key)
 				(description.linear ? GCM_TEXTURE_FORMAT_UNRM : 0);
 			bound.levels = 1;
 			bound.dimension = GCM_TEXTURE_DIMS_2D;
+			/* the game's texel coordinates are in its units; the pixels are the screen's scale (ps3_rsx_fp.c) */
+			if (description.linear && (target->scale[0] != 1.0f || target->scale[1] != 1.0f))
+			{
+				key->texture_scaled |= (uint8_t)(1 << stage);
+				device.texture_scale[stage][0] = target->scale[0];
+				device.texture_scale[stage][1] = target->scale[1];
+			}
 		}
 		else
 		{
@@ -1006,36 +1188,76 @@ static void fragment_key_build(struct rsx_fragment_key *key)
 	key->fog_table_mode = (unsigned char)rs[D3DRS_FOGTABLEMODE];
 }
 
-/* the per-draw constants (ps3_rsx_program.h's _rsx_uniform_*) */
+/* the per-draw constants (ps3_rsx_program.h's _rsx_uniform_*), converted again only when the states they come from
+change: most draws keep them, and each float from a state word goes through memory on the PPE */
 static void fragment_uniforms_build(float uniforms[_rsx_uniform_count][4])
 {
+	static DWORD sources[22 + TEXTURE_STAGES * 6];
+	static float converted[_rsx_uniform_texture_scale][4];
+	static BOOL valid;
+	DWORD now[22 + TEXTURE_STAGES * 6];
 	DWORD *rs = D3D__RenderState;
-	int stage;
+	int stage, count = 0;
 
 	for (stage = 0; stage < 8; stage++)
 	{
-		color_to_vec4(rs[D3DRS_PSCONSTANT0_0 + stage], uniforms[_rsx_uniform_c0 + stage]);
-		color_to_vec4(rs[D3DRS_PSCONSTANT1_0 + stage], uniforms[_rsx_uniform_c1 + stage]);
+		now[count++] = rs[D3DRS_PSCONSTANT0_0 + stage];
+		now[count++] = rs[D3DRS_PSCONSTANT1_0 + stage];
 	}
-	color_to_vec4(rs[D3DRS_PSFINALCOMBINERCONSTANT0], uniforms[_rsx_uniform_final_c0]);
-	color_to_vec4(rs[D3DRS_PSFINALCOMBINERCONSTANT1], uniforms[_rsx_uniform_final_c1]);
-	color_to_vec4(rs[D3DRS_FOGCOLOR], uniforms[_rsx_uniform_fog_color]);
-	uniforms[_rsx_uniform_fog][0] = dword_to_float(rs[D3DRS_FOGSTART]);
-	uniforms[_rsx_uniform_fog][1] = dword_to_float(rs[D3DRS_FOGEND]);
-	uniforms[_rsx_uniform_fog][2] = dword_to_float(rs[D3DRS_FOGDENSITY]);
-	uniforms[_rsx_uniform_fog][3] = 0.0f;
+	now[count++] = rs[D3DRS_PSFINALCOMBINERCONSTANT0];
+	now[count++] = rs[D3DRS_PSFINALCOMBINERCONSTANT1];
+	now[count++] = rs[D3DRS_FOGCOLOR];
+	now[count++] = rs[D3DRS_FOGSTART];
+	now[count++] = rs[D3DRS_FOGEND];
+	now[count++] = rs[D3DRS_FOGDENSITY];
 	for (stage = 0; stage < TEXTURE_STAGES; stage++)
 	{
 		DWORD *state = D3D__TextureState[stage];
 
-		uniforms[_rsx_uniform_bump_matrix + stage][0] = dword_to_float(state[D3DTSS_BUMPENVMAT00]);
-		uniforms[_rsx_uniform_bump_matrix + stage][1] = dword_to_float(state[D3DTSS_BUMPENVMAT01]);
-		uniforms[_rsx_uniform_bump_matrix + stage][2] = dword_to_float(state[D3DTSS_BUMPENVMAT10]);
-		uniforms[_rsx_uniform_bump_matrix + stage][3] = dword_to_float(state[D3DTSS_BUMPENVMAT11]);
-		uniforms[_rsx_uniform_bump_luminance + stage][0] = dword_to_float(state[D3DTSS_BUMPENVLSCALE]);
-		uniforms[_rsx_uniform_bump_luminance + stage][1] = dword_to_float(state[D3DTSS_BUMPENVLOFFSET]);
-		uniforms[_rsx_uniform_bump_luminance + stage][2] = 0.0f;
-		uniforms[_rsx_uniform_bump_luminance + stage][3] = 0.0f;
+		now[count++] = state[D3DTSS_BUMPENVMAT00];
+		now[count++] = state[D3DTSS_BUMPENVMAT01];
+		now[count++] = state[D3DTSS_BUMPENVMAT10];
+		now[count++] = state[D3DTSS_BUMPENVMAT11];
+		now[count++] = state[D3DTSS_BUMPENVLSCALE];
+		now[count++] = state[D3DTSS_BUMPENVLOFFSET];
+	}
+	if (!valid || memcmp(now, sources, sizeof(now)))
+	{
+		memcpy(sources, now, sizeof(now));
+		valid = TRUE;
+		for (stage = 0; stage < 8; stage++)
+		{
+			color_to_vec4(rs[D3DRS_PSCONSTANT0_0 + stage], converted[_rsx_uniform_c0 + stage]);
+			color_to_vec4(rs[D3DRS_PSCONSTANT1_0 + stage], converted[_rsx_uniform_c1 + stage]);
+		}
+		color_to_vec4(rs[D3DRS_PSFINALCOMBINERCONSTANT0], converted[_rsx_uniform_final_c0]);
+		color_to_vec4(rs[D3DRS_PSFINALCOMBINERCONSTANT1], converted[_rsx_uniform_final_c1]);
+		color_to_vec4(rs[D3DRS_FOGCOLOR], converted[_rsx_uniform_fog_color]);
+		converted[_rsx_uniform_fog][0] = dword_to_float(rs[D3DRS_FOGSTART]);
+		converted[_rsx_uniform_fog][1] = dword_to_float(rs[D3DRS_FOGEND]);
+		converted[_rsx_uniform_fog][2] = dword_to_float(rs[D3DRS_FOGDENSITY]);
+		converted[_rsx_uniform_fog][3] = 0.0f;
+		for (stage = 0; stage < TEXTURE_STAGES; stage++)
+		{
+			DWORD *state = D3D__TextureState[stage];
+
+			converted[_rsx_uniform_bump_matrix + stage][0] = dword_to_float(state[D3DTSS_BUMPENVMAT00]);
+			converted[_rsx_uniform_bump_matrix + stage][1] = dword_to_float(state[D3DTSS_BUMPENVMAT01]);
+			converted[_rsx_uniform_bump_matrix + stage][2] = dword_to_float(state[D3DTSS_BUMPENVMAT10]);
+			converted[_rsx_uniform_bump_matrix + stage][3] = dword_to_float(state[D3DTSS_BUMPENVMAT11]);
+			converted[_rsx_uniform_bump_luminance + stage][0] = dword_to_float(state[D3DTSS_BUMPENVLSCALE]);
+			converted[_rsx_uniform_bump_luminance + stage][1] = dword_to_float(state[D3DTSS_BUMPENVLOFFSET]);
+			converted[_rsx_uniform_bump_luminance + stage][2] = 0.0f;
+			converted[_rsx_uniform_bump_luminance + stage][3] = 0.0f;
+		}
+	}
+	memcpy(uniforms, converted, sizeof(converted));
+	for (stage = 0; stage < TEXTURE_STAGES; stage++)
+	{
+		uniforms[_rsx_uniform_texture_scale + stage][0] = device.texture_scale[stage][0];
+		uniforms[_rsx_uniform_texture_scale + stage][1] = device.texture_scale[stage][1];
+		uniforms[_rsx_uniform_texture_scale + stage][2] = 1.0f;
+		uniforms[_rsx_uniform_texture_scale + stage][3] = 1.0f;
 	}
 }
 
@@ -1063,19 +1285,19 @@ static BOOL apply_raster_state(BOOL has_depth)
 	struct ps3_gpu_state state;
 	long left, top, right, bottom;
 
-	/* the NV2A's scissor follows the viewport, which keeps split screens apart (d3d8_gl.c) */
-	left = (long)device.viewport.X;
-	top = (long)device.viewport.Y;
-	right = left + (long)device.viewport.Width;
-	bottom = top + (long)device.viewport.Height;
+	/* the NV2A's scissor follows the viewport, which keeps split screens apart (d3d8_gl.c); in the target's pixels */
+	left = scaled_pixel((float)device.viewport.X, device.target_scale[0]);
+	top = scaled_pixel((float)device.viewport.Y, device.target_scale[1]);
+	right = scaled_pixel((float)(device.viewport.X + device.viewport.Width), device.target_scale[0]);
+	bottom = scaled_pixel((float)(device.viewport.Y + device.viewport.Height), device.target_scale[1]);
 	if (left < 0)
 		left = 0;
 	if (top < 0)
 		top = 0;
-	if (right > (long)device.target_width)
-		right = (long)device.target_width;
-	if (bottom > (long)device.target_height)
-		bottom = (long)device.target_height;
+	if (right > (long)device.target_pixel_width)
+		right = (long)device.target_pixel_width;
+	if (bottom > (long)device.target_pixel_height)
+		bottom = (long)device.target_pixel_height;
 	if (left >= right || top >= bottom)
 		return FALSE;
 
@@ -1390,8 +1612,6 @@ static short vertex_short(const unsigned char *source)
 	return (short)(((unsigned short)source[0] << 8) | source[1]);
 }
 
-static float byte_floats[256];
-
 /* one element as four floats, as the NV2A reads it; vertex data is big-endian (the map swap) */
 static void vertex_element_convert(unsigned char type, const unsigned char *source, float *out)
 {
@@ -1516,7 +1736,21 @@ struct vertex_cache_entry
 every element the shaders read) is 24.3 MB */
 #define VERTEX_ARENA_BYTES (48UL * 1024 * 1024)
 
+/* the models' index buffers, in the tag cache as their vertices: each copied once into the arena, its largest index
+checked against its buffer's vertex count */
+struct index_cache_entry
+{
+	struct index_cache_entry *next;
+	const WORD *source;
+	unsigned long count;
+	unsigned long vertices;
+	uint32_t offset;
+};
+
+#define INDEX_CACHE_BUCKET_COUNT 2048
+
 static struct vertex_cache_entry *vertex_cache_buckets[VERTEX_CACHE_BUCKET_COUNT];
+static struct index_cache_entry *index_cache_buckets[INDEX_CACHE_BUCKET_COUNT];
 static unsigned long vertex_cache_arrays;
 /* the tag cache, as its loads give it (d3d8_tag_cache_loaded) */
 static const unsigned char *static_vertices_begin;
@@ -1571,6 +1805,16 @@ void d3d8_tag_cache_loaded(void const *address, unsigned long size)
 			struct vertex_cache_entry *entry = vertex_cache_buckets[index];
 
 			vertex_cache_buckets[index] = entry->next;
+			free(entry);
+		}
+	}
+	for (index = 0; index < INDEX_CACHE_BUCKET_COUNT; index++)
+	{
+		while (index_cache_buckets[index])
+		{
+			struct index_cache_entry *entry = index_cache_buckets[index];
+
+			index_cache_buckets[index] = entry->next;
 			free(entry);
 		}
 	}
@@ -1730,6 +1974,112 @@ static BOOL setup_vertices(const struct rsx_vertex_program *program, unsigned lo
 	return TRUE;
 }
 
+/* a map buffer's vertices [0, extent) whole from the vertex cache, each element read from the base vertex: TRUE when
+the cache holds every element the program reads, so the indices need no rebasing */
+static BOOL setup_cached_vertices(const struct rsx_vertex_program *program, unsigned long base, unsigned long extent)
+{
+	const struct vertex_shader_object *declaration = device.vertex_shader;
+	const struct vertex_cache_entry *cached[VERTEX_ATTRIBUTE_COUNT];
+	DWORD placed = 0;
+	unsigned long index;
+
+	for (index = 0; index < declaration->element_count; index++)
+	{
+		const struct vertex_element *element = &declaration->elements[index];
+		DWORD data = device.streams[element->stream].data;
+
+		if (element->reg >= VERTEX_ATTRIBUTE_COUNT || !(program->input_mask & (1u << element->reg)) ||
+			(placed & (1u << element->reg)) || !data || element->type == D3DVSDT_NONE)
+			continue;
+		cached[element->reg] = vertex_cache_get((const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(data) +
+			element->offset, device.streams[element->stream].stride, element->type, element->bytes, 0, extent, extent);
+		if (!cached[element->reg])
+			return FALSE;
+		placed |= 1u << element->reg;
+	}
+	for (index = 0; index < VERTEX_ATTRIBUTE_COUNT; index++)
+	{
+		if (placed & (1u << index))
+			ps3_gpu_set_attribute((uint32_t)index, cached[index]->offset + (uint32_t)(base * 16), 16, 4);
+		else if (!(program->input_mask & (1u << index)))
+			ps3_gpu_set_attribute((uint32_t)index, 0, 0, 0);
+		else if (!attribute_constant(index, device.attributes[index]))
+			return FALSE;
+	}
+	return TRUE;
+}
+
+static unsigned short largest_index(const WORD *source, unsigned long count)
+{
+	unsigned short largest = 0;
+	unsigned long index;
+
+	for (index = 0; index < count; index++)
+	{
+		if (source[index] > largest)
+			largest = source[index];
+	}
+	return largest;
+}
+
+/* a model's indices in the tag cache: the arena's copy, made at their first draw if each reads one of the buffer's
+vertices (fewer than vertices) */
+static BOOL index_cache_offset(const WORD *source, unsigned long count, unsigned long vertices, uint32_t *offset)
+{
+	const unsigned char *bytes = (const unsigned char *)source;
+	struct index_cache_entry **bucket, *entry;
+	WORD *copy;
+
+	if (!static_vertices_end || bytes < static_vertices_begin || bytes + count * sizeof(WORD) > static_vertices_end)
+		return FALSE;
+	bucket = &index_cache_buckets[(unsigned long)((((__uint64)source >> 1) ^ ((__uint64)source >> 13) ^ count) %
+		INDEX_CACHE_BUCKET_COUNT)];
+	for (entry = *bucket; entry; entry = entry->next)
+	{
+		if (entry->source == source && entry->count == count && entry->vertices == vertices)
+		{
+			*offset = entry->offset;
+			return TRUE;
+		}
+	}
+	if (largest_index(source, count) >= vertices || !(entry = calloc(1, sizeof(*entry))))
+		return FALSE;
+	copy = (WORD *)vertex_arena_allocate(count * sizeof(WORD), &entry->offset);
+	if (!copy)
+	{
+		free(entry);
+		return FALSE;
+	}
+	memcpy(copy, source, count * sizeof(WORD));
+	entry->source = source;
+	entry->count = count;
+	entry->vertices = vertices;
+	entry->next = *bucket;
+	*bucket = entry;
+	*offset = entry->offset;
+	return TRUE;
+}
+
+/* the indices into the scratch as they are, in one pass; FALSE if one reads past the buffer's vertices */
+static BOOL index_copy(const WORD *source, unsigned long count, unsigned long vertices, uint32_t *offset)
+{
+	unsigned short *indices = ps3_gpu_scratch((uint32_t)(count * sizeof(unsigned short)), 128, offset);
+	unsigned long index;
+	unsigned int bits = 0;
+
+	if (!indices)
+		return FALSE;
+	for (index = 0; index < count; index++)
+	{
+		unsigned short value = source[index];
+
+		indices[index] = value;
+		bits |= value;
+	}
+	/* (their OR is at least the largest, without a branch an index; past the buffer: a closer look) */
+	return bits < vertices || largest_index(source, count) < vertices;
+}
+
 static uint32_t primitive_type(D3DPRIMITIVETYPE type)
 {
 	/* D3DPT's values are GCM's; ps3gl draws polygons as fans */
@@ -1785,6 +2135,23 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type_value,
 	if (!vertex_count || !index_data || !(program = prepare_draw()))
 		return;
 	span = ps3_timer_now();
+	/* a map buffer the vertex cache holds whole: its indices as they are, a model's from the index cache */
+	if (extent && setup_cached_vertices(program, device.base_vertex_index, extent))
+	{
+		unsigned long vertices = extent - device.base_vertex_index;
+
+		span = ps3_timer_add(_ps3_timer_draw_vertices, span);
+		ready = index_cache_offset(index_data, vertex_count, vertices, &offset) ||
+			index_copy(index_data, vertex_count, vertices, &offset);
+		ps3_timer_add(_ps3_timer_draw_indices, span);
+		if (ready)
+		{
+			ps3_gpu_draw_indexed(primitive_type(primitive_type_value), offset, vertex_count);
+			statistics.draws++;
+			return;
+		}
+		span = ps3_timer_now();
+	}
 	for (index = 0; index < vertex_count; index++)
 	{
 		if (index_data[index] < minimum)
@@ -1943,9 +2310,12 @@ void WINAPI D3DDevice_Clear(DWORD count, CONST D3DRECT *rectangles, DWORD flags,
 	if (depth > 0xffffffUL)
 		depth = 0xffffffUL;
 	depth = (depth << 8) | (stencil & 0xff);
-	/* the NV2A clips a clear to the viewport, which keeps split-screen windows apart */
+	/* the NV2A clips a clear to the viewport, which keeps split-screen windows apart; a rectangle moves with the
+	menus' centring (d3d8_gl.c); in the target's pixels */
 	for (index = 0; index < (count && rectangles ? count : 1); index++)
 	{
+		long offset = 0;
+
 		left = (long)device.viewport.X;
 		top = (long)device.viewport.Y;
 		right = left + (long)device.viewport.Width;
@@ -1956,11 +2326,16 @@ void WINAPI D3DDevice_Clear(DWORD count, CONST D3DRECT *rectangles, DWORD flags,
 			if (rectangles[index].y1 > top) top = rectangles[index].y1;
 			if (rectangles[index].x2 < right) right = rectangles[index].x2;
 			if (rectangles[index].y2 < bottom) bottom = rectangles[index].y2;
+			offset = ui_offset;
 		}
+		left = scaled_pixel((float)(left + offset), device.target_scale[0]);
+		top = scaled_pixel((float)top, device.target_scale[1]);
+		right = scaled_pixel((float)(right + offset), device.target_scale[0]);
+		bottom = scaled_pixel((float)bottom, device.target_scale[1]);
 		if (left < 0) left = 0;
 		if (top < 0) top = 0;
-		if (right > (long)device.target_width) right = (long)device.target_width;
-		if (bottom > (long)device.target_height) bottom = (long)device.target_height;
+		if (right > (long)device.target_pixel_width) right = (long)device.target_pixel_width;
+		if (bottom > (long)device.target_pixel_height) bottom = (long)device.target_pixel_height;
 		if (left < right && top < bottom)
 			ps3_gpu_clear(gpu_flags, color, depth, (uint32_t)left, (uint32_t)top, (uint32_t)(right - left),
 				(uint32_t)(bottom - top));
@@ -1998,8 +2373,11 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 			device.presentation = *presentation_parameters;
 		width = device.presentation.BackBufferWidth ? device.presentation.BackBufferWidth : SCREEN_WIDTH;
 		height = device.presentation.BackBufferHeight ? device.presentation.BackBufferHeight : SCREEN_HEIGHT;
-		d3d8_surface_initialize(&device.back_buffer, D3DFMT_LIN_A8R8G8B8, width, height);
-		d3d8_surface_initialize(&device.depth_buffer, D3DFMT_LIN_D24S8, width, height);
+		/* room for the widest screen, which WIDESCREEN can switch to (halo_screen_commit) */
+		d3d8_surface_initialize(&device.back_buffer, D3DFMT_LIN_A8R8G8B8, SCREEN_MAXIMUM_WIDTH, height);
+		d3d8_surface_initialize(&device.depth_buffer, D3DFMT_LIN_D24S8, SCREEN_MAXIMUM_WIDTH, height);
+		d3d8_surface_resize(&device.back_buffer, D3DFMT_LIN_A8R8G8B8, width, height);
+		d3d8_surface_resize(&device.depth_buffer, D3DFMT_LIN_D24S8, width, height);
 		device.render_target = &device.back_buffer;
 		device.depth_stencil = &device.depth_buffer;
 		for (index = 0; index < D3DTS_MAX; index++)
@@ -2387,9 +2765,17 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		return;
 	span = ps3_timer_now();
 	ps3_host_lock_enter(vertical_blank_lock);
-	while (pending_flips >= 2)
-		ps3_host_condition_wait(vertical_blank_condition, 0);
-	pending_flips++;
+	/* with interpolation, frames come at the display's rate, paced by the flips (ps3_video.c), as d3d8_gl.c's */
+	if (halo_interpolation_enabled())
+	{
+		flip_count++;
+	}
+	else
+	{
+		while (pending_flips >= 2)
+			ps3_host_condition_wait(vertical_blank_condition, 0);
+		pending_flips++;
+	}
 	ps3_host_lock_leave(vertical_blank_lock);
 	ps3_timer_add(_ps3_timer_vblank_wait, span);
 }

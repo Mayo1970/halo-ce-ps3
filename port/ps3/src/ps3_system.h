@@ -15,6 +15,8 @@ int ps3_log_vprintf(const char *format, va_list ap);
 
 /* nonzero once the XMB asked the game to quit */
 int ps3_exit_requested(void);
+/* moves at each start and end of the system's drawing over the game (the XMB in the game, a dialog) */
+unsigned ps3_system_overlay_events(void);
 
 /* largest lv2 memory container that fits, in MB: the free user memory */
 unsigned ps3_memory_free_mb(void);

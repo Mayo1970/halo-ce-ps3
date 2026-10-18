@@ -36,7 +36,7 @@ enum
 	_ps3_timer_vblank_wait,
 	_ps3_timer_flip_wait,
 	_ps3_timer_rsx_wait,
-	/* RSX parts only (ps3_rsx_timers): earlier frames' work, the work before each window and after the last */
+	/* RSX splits only (ps3_rsx_timers): the frame's start, before each window, after the render */
 	_ps3_timer_rsx_previous,
 	_ps3_timer_rsx_before,
 	_ps3_timer_rsx_after,
@@ -47,10 +47,10 @@ enum
 extern uint64_t ps3_timers[_ps3_timer_count];
 /* the game ticks run, for the time of one */
 extern uint32_t ps3_timer_game_ticks;
-/* a probe frame (TIMER_PROBE_FRAMES, now off): at each split the game thread waits for the RSX, and
-ps3_rsx_timers gets the waits */
-extern int ps3_timer_probe;
+/* the RSX's nanoseconds from each split to the next, from its timestamps (ps3_gpu.c), and per frame */
 extern uint64_t ps3_rsx_timers[_ps3_timer_count];
+extern uint64_t ps3_rsx_frame_nanoseconds;
+extern uint32_t ps3_rsx_frames;
 
 /* the timebase, read again while its low word is 0 (PSL1GHT's __gettime: a Cell erratum) */
 static inline uint64_t ps3_timer_now(void)
@@ -72,8 +72,8 @@ static inline uint64_t ps3_timer_add(int timer, uint64_t start)
 
 /* the main loop's top: one call a frame; every 300 frames it logs the times and starts again */
 void ps3_timers_frame(void);
-/* in a probe frame, waits until the RSX has done all commands so far and adds the wait to the part's RSX
-time (ps3_gpu.c); returns the time after it, the start of a next span */
+/* a split of the RSX's frame: a timestamp report, which ps3_gpu.c reads two frames on (no stall); returns the
+time now, the start of a next span */
 uint64_t ps3_timers_rsx_wait(int part);
 
 #endif

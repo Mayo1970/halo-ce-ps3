@@ -162,6 +162,9 @@ static void fragment_source(const struct rsx_instruction *instruction, int posit
 		break;
 	case _rsx_register_temporary:
 		bits = (uint32_t)(source->index & 0x3f) << 2;
+		/* cgcomp's NVFX_FP_REG_SRC_HALF */
+		if (source->half)
+			bits |= 1 << 8;
 		break;
 	case _rsx_register_constant:
 		bits = 2;
@@ -203,6 +206,9 @@ uint32_t rsx_fragment_encode(const struct rsx_instruction *instructions, uint32_
 			hw[0] |= (1u << 30) | (0x3f << 1);
 		else
 			hw[0] |= (uint32_t)(instruction->destination & 0x3f) << 1;
+		/* cgcomp's NVFX_FP_OP_OUT_REG_HALF: an H register (the ALU stays 32-bit: precision 0) */
+		if (instruction->destination_type != _rsx_register_none && instruction->destination_half)
+			hw[0] |= 1 << 7;
 		if (instruction->opcode == _rsx_fp_tex || instruction->opcode == _rsx_fp_txp)
 			hw[0] |= (uint32_t)(instruction->texture_unit & 0xf) << 17;
 		for (position = 0; position < 3; position++)

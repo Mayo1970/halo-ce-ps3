@@ -126,6 +126,8 @@ struct rsx_source
 	uint8_t relative;
 	uint16_t index;
 	uint8_t swizzle[4];
+	/* fragment programs: a temporary read as the half-precision register H index */
+	uint8_t half;
 };
 
 struct rsx_instruction
@@ -133,6 +135,8 @@ struct rsx_instruction
 	uint8_t opcode;
 	uint8_t destination_type;
 	uint8_t destination;
+	/* fragment programs: the destination is the half-precision register H destination (the colour: H0) */
+	uint8_t destination_half;
 	uint8_t mask;
 	uint8_t saturate;
 	/* fragment programs: the condition register update, the test, and the texture unit */
@@ -223,11 +227,14 @@ struct rsx_fragment_key
 	uint8_t fog_enable;
 	/* D3DFOG_*: 0 none (the vertex's fog), 1 exp, 2 exp2, 3 linear */
 	uint8_t fog_table_mode;
-	uint8_t padding[2];
+	/* the stages (bit n) whose texel coordinates are scaled before the lookup: a linear target drawn at the
+	screen's scale */
+	uint8_t texture_scaled;
+	uint8_t padding;
 };
 
-/* the per-draw constants: colours as 0..1 floats, the fog's start, end and density, and per stage
-the bump matrix (00 01 10 11) and its luminance scale and offset */
+/* the per-draw constants: colours as 0..1 floats, the fog's start, end and density, per stage the bump
+matrix (00 01 10 11) and its luminance scale and offset, and the texel coordinates' scale (s t 1 1) */
 enum
 {
 	_rsx_uniform_c0 = 0,
@@ -238,7 +245,8 @@ enum
 	_rsx_uniform_fog = 19,
 	_rsx_uniform_bump_matrix = 20,
 	_rsx_uniform_bump_luminance = 24,
-	_rsx_uniform_count = 28,
+	_rsx_uniform_texture_scale = 28,
+	_rsx_uniform_count = 32,
 };
 
 #define RSX_FP_MAXIMUM_UNIFORMS 32

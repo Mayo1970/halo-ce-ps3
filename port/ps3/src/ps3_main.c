@@ -146,6 +146,7 @@ static void display_main(void *argument)
 		if (ps3_time_seconds() >= next_heartbeat)
 		{
 			ps3_log_printf("[hb] t=%.0fs display frames %u\n", ps3_time_seconds(), frame);
+			ps3_video_flip_report();
 			if (platform_heartbeat())
 				main_thread_report();
 			ps3_host_report_blocked();

@@ -137,6 +137,8 @@ static void log_init(void)
 
 /* ---------- XMB exit */
 
+static volatile unsigned overlay_events;
+
 static void sysutil_callback(u64 status, u64 parameter, void *user_data)
 {
 	(void)parameter;
@@ -144,11 +146,20 @@ static void sysutil_callback(u64 status, u64 parameter, void *user_data)
 	/* only latch it: the main loop shuts down at a normal call depth */
 	if (status == SYSUTIL_EXIT_GAME)
 		exit_flag = 1;
+	/* the system draws over the game (the XMB in the game, a dialog) */
+	if (status == SYSUTIL_DRAW_BEGIN || status == SYSUTIL_DRAW_END || status == SYSUTIL_MENU_OPEN ||
+		status == SYSUTIL_MENU_CLOSE)
+		overlay_events++;
 }
 
 int ps3_exit_requested(void)
 {
 	return exit_flag;
+}
+
+unsigned ps3_system_overlay_events(void)
+{
+	return overlay_events;
 }
 
 /* Pumps the sysutil events while the main thread is busy (map loads). An exit

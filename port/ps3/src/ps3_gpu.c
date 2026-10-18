@@ -6,6 +6,7 @@ ps3gl. Only the game's thread calls it, once it has taken the RSX from the displ
 #include "ps3_timers.h"
 #include "ps3_video.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -23,6 +24,78 @@ ps3gl. Only the game's thread calls it, once it has taken the RSX from the displ
 #define ATTRIBUTE_COUNT 16
 #define REMAP_IDENTITY 0xaae4
 #define STATISTICS_FRAMES 600
+
+/* the screen's targets in tiled regions, the depth Z-compressed and ZCull-ed (PSL1GHT's rsxtest_tile sample);
+0 keeps every target linear */
+#define RSX_TILED_TARGETS 1
+/* regions 0 to 2 are the display buffers' (ps3_video.c) */
+#define FIRST_TARGET_TILE 3
+#define TILE_COUNT 15
+#define ZCULL_INDEX 0
+/* each region's compression tags, apart: a region of size bytes takes size / 64 KB of them */
+#define TILE_TAG_SPACING 0x80
+
+/* vertex programs kept in the RSX's 512 slots, switched without an upload; 0 loads each at slot 0 */
+#define RSX_RESIDENT_PROGRAMS 1
+#define PROGRAM_SLOTS 512
+#define RESIDENT_PROGRAM_COUNT 32
+
+/* the RSX's time at each split of the frame (ps3_timers_rsx_wait): report slots, three frames' worth (the
+reports of the frame before last are read) */
+#define TIMESTAMP_REPORT_BASE 256
+#define TIMESTAMP_PARTS 32
+/* each report holds the RSX's time; the Z-pass type as nouveau's NV40 timestamps (rsxSetTimeStamp's type 0x10 and
+misplaced word stopped the RSX on hardware) */
+#define REPORT_TIMESTAMP GCM_ZPASS_PIXEL_CNT
+
+/* the G8 diagnostic: a command label and a back-end label after each kind of command, so a hung RSX shows the last
+one its front end took and its back end finished */
+#define RSX_CHECKPOINTS 0
+#define CHECKPOINT_LABEL 67
+#define CHECKPOINT_BACKEND_LABEL 68
+#define CHECKPOINT_RING 65536
+
+enum
+{
+	_checkpoint_surface,
+	_checkpoint_surface_zcull,
+	_checkpoint_clear,
+	_checkpoint_zcull_clear,
+	_checkpoint_zcull_invalidate,
+	_checkpoint_zcull_control,
+	_checkpoint_state,
+	_checkpoint_vertex_upload,
+	_checkpoint_vertex_switch,
+	_checkpoint_vertex_constants,
+	_checkpoint_fragment,
+	_checkpoint_texture,
+	_checkpoint_texture_remap,
+	_checkpoint_texture_off,
+	_checkpoint_attribute,
+	_checkpoint_draw,
+	_checkpoint_draw_indexed,
+	_checkpoint_timestamp,
+	_checkpoint_blit,
+	_checkpoint_frame_label,
+	_checkpoint_flip,
+	_checkpoint_start,
+	_checkpoint_count
+};
+
+#if RSX_CHECKPOINTS
+static const char *const checkpoint_names[_checkpoint_count] =
+{
+	"surface", "surface with ZCull", "clear", "ZCull clear", "ZCull invalidate", "ZCull control", "state",
+	"vertex program upload", "vertex program switch", "vertex constants", "fragment program", "texture",
+	"texture with a remap", "texture off", "vertex attribute", "draw", "indexed draw", "timestamp report",
+	"present blit", "frame label", "flip", "game's first command",
+};
+
+static uint32_t checkpoint_serial;
+static uint8_t checkpoint_kinds[CHECKPOINT_RING];
+static volatile uint32_t *checkpoint_label;
+static volatile uint32_t *checkpoint_backend_label;
+#endif
 
 static gcmContextData *context;
 static int ready;
@@ -88,6 +161,107 @@ static uint8_t attribute_enabled[ATTRIBUTE_COUNT];
 
 static uint32_t fragment_staging[RSX_FP_MAXIMUM_INSTRUCTIONS * 8];
 
+/* the tiled regions of the targets (ps3_gpu_target_allocate) */
+static struct
+{
+	void *memory;
+	uint32_t bytes;
+	int zcull;
+} tiles[TILE_COUNT];
+/* the depth surface ZCull covers and its size, while bound; and whether its data is good until the next full clear */
+static uint32_t zcull_offset;
+static uint32_t zcull_width;
+static uint32_t zcull_height;
+static int zcull_bound;
+static int zcull_valid;
+
+static struct
+{
+	const struct rsx_vertex_program *program;
+	uint32_t start;
+	uint32_t count;
+	uint32_t used;
+} resident_programs[RESIDENT_PROGRAM_COUNT];
+static uint32_t program_clock;
+static unsigned overlay_events;
+
+/* the parts stamped in each of three frames, in order */
+static struct
+{
+	uint8_t parts[TIMESTAMP_PARTS];
+	uint32_t count;
+} stamps[3];
+
+static void timestamps_read(void);
+
+/* (the G8 diagnostic) the RSX writes the checkpoint's number once it has taken the commands before it (the command
+label) and once it has finished them (the back-end label) */
+static void checkpoint(int kind)
+{
+#if RSX_CHECKPOINTS
+	if (!checkpoint_label)
+		return;
+	checkpoint_serial++;
+	checkpoint_kinds[checkpoint_serial % CHECKPOINT_RING] = (uint8_t)kind;
+	rsxSetWriteCommandLabel(context, CHECKPOINT_LABEL, checkpoint_serial);
+	rsxSetWriteBackendLabel(context, CHECKPOINT_BACKEND_LABEL, checkpoint_serial);
+#else
+	(void)kind;
+#endif
+}
+
+#if RSX_CHECKPOINTS
+static const char *checkpoint_name(uint32_t serial)
+{
+	if (!serial)
+		return "start";
+	if (serial > checkpoint_serial)
+		return "none";
+	if (checkpoint_serial - serial >= CHECKPOINT_RING)
+		return "overwritten";
+	return checkpoint_names[checkpoint_kinds[serial % CHECKPOINT_RING]];
+}
+#endif
+
+/* the last checkpoints the RSX took and finished, the ones around them, its FIFO's pointers and the flips */
+static void checkpoint_report(void)
+{
+#if RSX_CHECKPOINTS
+	gcmControlRegister *control = gcmGetControlRegister();
+	uint32_t front = checkpoint_label ? *checkpoint_label : 0;
+	uint32_t back = checkpoint_backend_label ? *checkpoint_backend_label : 0;
+	uint32_t serial, first = back > 3 ? back - 3 : 1, last = front + 2;
+	char line[640];
+	size_t used = 0;
+	int tile;
+
+	ps3_log_printf("[gpu] checkpoints: %u written; the front end took %u (the %s; next the %s), the back end finished %u "
+		"(the %s; next the %s)\n", (unsigned)checkpoint_serial, (unsigned)front, checkpoint_name(front),
+		checkpoint_name(front + 1), (unsigned)back, checkpoint_name(back), checkpoint_name(back + 1));
+	if (last > checkpoint_serial)
+		last = checkpoint_serial;
+	if (last > first + 15)
+		last = first + 15;
+	line[0] = 0;
+	for (serial = first; serial <= last && used < sizeof(line) - 80; serial++)
+		used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%u %s%s", serial == first ? "" : ", ",
+			(unsigned)serial, checkpoint_name(serial), serial == back && serial == front ? " (both ends)" :
+			serial == back ? " (back end)" : serial == front ? " (front end)" : "");
+	ps3_log_printf("[gpu] checkpoints around them: %s\n", line);
+	ps3_log_printf("[gpu] FIFO get 0x%x, put 0x%x, ref 0x%x; frame %u; ZCull %s at 0x%x (%ux%u)\n",
+		control ? (unsigned)control->get : 0, control ? (unsigned)control->put : 0, control ? (unsigned)control->ref : 0,
+		(unsigned)frame_index, zcull_bound ? "bound" : "not bound", (unsigned)zcull_offset, (unsigned)zcull_width,
+		(unsigned)zcull_height);
+	for (tile = FIRST_TARGET_TILE; tile < TILE_COUNT; tile++)
+	{
+		if (tiles[tile].memory)
+			ps3_log_printf("[gpu] tiled region %d: %u bytes%s\n", tile, (unsigned)tiles[tile].bytes,
+				tiles[tile].zcull ? ", ZCull" : "");
+	}
+	ps3_video_flip_report();
+#endif
+}
+
 static struct
 {
 	struct rsx_vertex_program vertex;
@@ -100,6 +274,7 @@ static struct
 {
 	uint32_t draws;
 	uint32_t vertex_uploads;
+	uint32_t vertex_switches;
 	uint32_t fragment_copies;
 	uint32_t texture_loads;
 } statistics;
@@ -198,6 +373,98 @@ void ps3_gpu_memory_free(void *memory, uint32_t size, int kind)
 	deferred_free_count++;
 }
 
+/* a target: tiled where asked and a region is free (64 KB aligned, a tiled pitch, 32-line rows), the depth with Z
+compression and, once, ZCull; else linear */
+void *ps3_gpu_target_allocate(uint32_t width, uint32_t height, int depth, int tiled, int zcull, uint32_t *offset,
+	uint32_t *pitch, uint32_t *bytes)
+{
+	void *memory;
+
+#if RSX_TILED_TARGETS
+	if (tiled && ready)
+	{
+		uint32_t tiled_pitch = gcmGetTiledPitchSize(width * 4);
+		uint32_t size = (tiled_pitch * ((height + GCM_TILE_LOCAL_ALIGN_HEIGHT - 1) & ~(GCM_TILE_LOCAL_ALIGN_HEIGHT - 1)) +
+			GCM_TILE_ALIGN_SIZE - 1) & ~(GCM_TILE_ALIGN_SIZE - 1);
+		int tile;
+
+		for (tile = FIRST_TARGET_TILE; tile < TILE_COUNT && tiles[tile].memory; tile++)
+			;
+		if (tile < TILE_COUNT && tiled_pitch &&
+			(memory = ps3_gpu_memory_allocate(size, GCM_TILE_ALIGN_OFFSET, _ps3_gpu_memory_target, offset)) != NULL)
+		{
+			if (gcmSetTileInfo((u8)tile, GCM_LOCATION_RSX, *offset, size, tiled_pitch,
+				depth ? GCM_COMPMODE_Z32_SEPSTENCIL : GCM_COMPMODE_DISABLED,
+				(u16)((tile - FIRST_TARGET_TILE) * TILE_TAG_SPACING), depth ? 2 : 0) == 0 && gcmBindTile((u8)tile) == 0)
+			{
+				tiles[tile].memory = memory;
+				tiles[tile].bytes = size;
+				tiles[tile].zcull = 0;
+				if (zcull && depth && !zcull_bound &&
+					gcmBindZcull(ZCULL_INDEX, *offset, (width + GCM_ZCULL_ALIGN_WIDTH - 1) & ~(GCM_ZCULL_ALIGN_WIDTH - 1),
+					(height + GCM_ZCULL_ALIGN_HEIGHT - 1) & ~(GCM_ZCULL_ALIGN_HEIGHT - 1), 0, GCM_ZCULL_Z24S8,
+					GCM_SURFACE_CENTER_1, GCM_ZCULL_LESS, GCM_ZCULL_LONES, GCM_SCULL_SFUNC_LESS, 1, 0xff) == 0)
+				{
+					tiles[tile].zcull = 1;
+					zcull_bound = 1;
+					zcull_offset = *offset;
+					zcull_width = width;
+					zcull_height = height;
+					zcull_valid = 0;
+				}
+				ps3_log_printf("[gpu] target %ux%u%s tiled (region %d, pitch %u)%s\n", (unsigned)width, (unsigned)height,
+					depth ? " depth" : "", tile, (unsigned)tiled_pitch, tiles[tile].zcull ? ", ZCull" : "");
+				*pitch = tiled_pitch;
+				*bytes = size;
+				return memory;
+			}
+			memory_release(memory, size, _ps3_gpu_memory_target);
+		}
+	}
+#endif
+	*pitch = (width * 4 + 63) & ~63u;
+	*bytes = *pitch * height;
+	return ps3_gpu_memory_allocate(*bytes, 128, _ps3_gpu_memory_target, offset);
+}
+
+/* a tiled target's region goes when the RSX is idle (a screen change: rare), others as frees do */
+void ps3_gpu_target_free(void *memory, uint32_t bytes)
+{
+	int tile;
+
+	if (!memory)
+		return;
+	for (tile = FIRST_TARGET_TILE; tile < TILE_COUNT && tiles[tile].memory != memory; tile++)
+		;
+	if (tile == TILE_COUNT)
+	{
+		ps3_gpu_memory_free(memory, bytes, _ps3_gpu_memory_target);
+		return;
+	}
+	ps3_gpu_wait_idle();
+	if (tiles[tile].zcull)
+	{
+		gcmUnbindZcull(ZCULL_INDEX);
+		zcull_bound = 0;
+		zcull_offset = 0;
+	}
+	gcmUnbindTile((u8)tile);
+	memory_release(memory, tiles[tile].bytes, _ps3_gpu_memory_target);
+	memset(&tiles[tile], 0, sizeof(tiles[tile]));
+	/* (the surface bound is unknown now) */
+	surface_valid = 0;
+}
+
+void ps3_gpu_display(uint32_t *width, uint32_t *height, int *widescreen)
+{
+	unsigned display_width, display_height;
+
+	ps3_video_size(&display_width, &display_height);
+	*width = display_width;
+	*height = display_height;
+	*widescreen = ps3_video_widescreen();
+}
+
 void *ps3_gpu_scratch(uint32_t size, uint32_t alignment, uint32_t *offset)
 {
 	uint32_t half = (frame_index & 1) * SCRATCH_HALF_SIZE;
@@ -260,9 +527,29 @@ void ps3_gpu_set_surface(const struct ps3_gpu_surface *target)
 	description.width = target->width;
 	description.height = target->height;
 	rsxSetSurface(context, &description);
+	/* ZCull for the depth it covers only; stencil culling stays off */
+	if (zcull_bound)
+		rsxSetZCullEnable(context, target->depth_offset == zcull_offset ? GCM_TRUE : GCM_FALSE, GCM_FALSE);
+	checkpoint(zcull_bound && target->depth_offset == zcull_offset ? _checkpoint_surface_zcull : _checkpoint_surface);
 	viewport_valid = 0;
 	/* the targets before can be sampled next */
 	texture_cache_dirty = 1;
+}
+
+/* the ZCull data is good from a full depth clear until a draw writes depth that is not nearer (its direction) */
+static int zcull_surface(void)
+{
+	return zcull_bound && surface_valid && surface.depth_offset == zcull_offset;
+}
+
+static void zcull_invalidate(void)
+{
+	if (zcull_valid)
+	{
+		rsxSetZCullInvalidate(context);
+		zcull_valid = 0;
+		checkpoint(_checkpoint_zcull_invalidate);
+	}
 }
 
 static void viewport_set(uint32_t width, uint32_t height, float minimum, float maximum)
@@ -316,6 +603,22 @@ void ps3_gpu_clear(uint32_t flags, uint32_t argb, uint32_t depth_stencil, uint32
 		rsxSetStencilMask(context, 0xff);
 	rsxSetClearDepthStencil(context, depth_stencil);
 	rsxClearSurface(context, mask);
+	checkpoint(_checkpoint_clear);
+	if ((mask & GCM_CLEAR_Z) && zcull_surface())
+	{
+		/* the whole depth surface: ZCull starts again from it; a part (a split-screen window, a smaller colour
+		target's) leaves its data stale */
+		if (!x && !y && width >= zcull_width && height >= zcull_height)
+		{
+			rsxSetClearZCullSurface(context, GCM_TRUE, GCM_FALSE);
+			zcull_valid = 1;
+			checkpoint(_checkpoint_zcull_clear);
+		}
+		else
+		{
+			zcull_invalidate();
+		}
+	}
 	/* the masks and the scissor are the draws' again at the next state */
 	state_valid = 0;
 }
@@ -339,6 +642,9 @@ void ps3_gpu_set_state(const struct ps3_gpu_state *next)
 	}
 	if (all || next->depth_write != old->depth_write)
 		rsxSetDepthWriteEnable(context, next->depth_write != 0);
+	/* a depth write that need not be nearer (GREATER, NOTEQUAL, GEQUAL, ALWAYS) breaks ZCull's farthest depths */
+	if (next->depth_write && next->depth_function > GCM_LEQUAL && zcull_surface())
+		zcull_invalidate();
 	if (all || next->stencil_function != old->stencil_function || next->stencil_reference != old->stencil_reference ||
 		next->stencil_mask != old->stencil_mask)
 	{
@@ -393,30 +699,119 @@ void ps3_gpu_set_state(const struct ps3_gpu_state *next)
 	state = *next;
 	state_valid = 1;
 	viewport_set(surface.width, surface.height, next->depth_minimum, next->depth_maximum);
+	checkpoint(_checkpoint_state);
 }
 
 /* ---------- programs */
 
+/* a resident program's slots, or -1; with none free, the programs that ran longest ago go */
+static int program_slots_find(const struct rsx_vertex_program *program, int *uploaded)
+{
+	uint32_t count = program->instruction_count;
+	int index, slot = -1;
+
+	*uploaded = 0;
+	for (index = 0; index < RESIDENT_PROGRAM_COUNT; index++)
+	{
+		if (resident_programs[index].program == program)
+		{
+			resident_programs[index].used = ++program_clock;
+			return (int)resident_programs[index].start;
+		}
+	}
+	if (!count || count > PROGRAM_SLOTS)
+		return -1;
+	for (;;)
+	{
+		uint32_t start = 0;
+		int free_entry = -1, oldest = -1, blocked = 0;
+
+		/* the lowest start past every resident range it would overlap */
+		do
+		{
+			blocked = 0;
+			for (index = 0; index < RESIDENT_PROGRAM_COUNT; index++)
+			{
+				const struct rsx_vertex_program *other = resident_programs[index].program;
+
+				if (other && start < resident_programs[index].start + resident_programs[index].count &&
+					resident_programs[index].start < start + count)
+				{
+					start = resident_programs[index].start + resident_programs[index].count;
+					blocked = 1;
+				}
+			}
+		} while (blocked && start + count <= PROGRAM_SLOTS);
+		for (index = 0; index < RESIDENT_PROGRAM_COUNT; index++)
+		{
+			if (!resident_programs[index].program)
+			{
+				if (free_entry < 0)
+					free_entry = index;
+			}
+			else if (oldest < 0 || resident_programs[index].used < resident_programs[oldest].used)
+			{
+				oldest = index;
+			}
+		}
+		if (start + count <= PROGRAM_SLOTS && free_entry >= 0)
+		{
+			resident_programs[free_entry].program = program;
+			resident_programs[free_entry].start = start;
+			resident_programs[free_entry].count = count;
+			resident_programs[free_entry].used = ++program_clock;
+			slot = (int)start;
+			*uploaded = 1;
+			break;
+		}
+		if (oldest < 0)
+			break;
+		resident_programs[oldest].program = NULL;
+	}
+	return slot;
+}
+
+/* uploads the program to free slots once, then starts it there; the system's overlays drop them (frame_begin) */
 void ps3_gpu_set_vertex_program(const struct rsx_vertex_program *program)
 {
 	rsxVertexProgram header;
+	int uploaded = 1, slot = 0;
 
 	if (!ready || program == vertex_program)
 		return;
+#if RSX_RESIDENT_PROGRAMS
+	slot = program_slots_find(program, &uploaded);
+	if (slot < 0)
+	{
+		/* (larger than the slots: at slot 0, over the others) */
+		memset(resident_programs, 0, sizeof(resident_programs));
+		slot = 0;
+		uploaded = 1;
+	}
+#endif
 	memset(&header, 0, sizeof(header));
 	header.num_regs = (u16)program->register_count;
-	header.num_insn = (u16)program->instruction_count;
+	/* no instructions: the start, the masks and the timeout only */
+	header.num_insn = (u16)(uploaded ? program->instruction_count : 0);
 	header.input_mask = program->input_mask;
 	header.output_mask = program->output_mask;
+	header.insn_start = (u16)slot;
 	rsxLoadVertexProgramBlock(context, &header, program->microcode);
+	checkpoint(uploaded ? _checkpoint_vertex_upload : _checkpoint_vertex_switch);
 	vertex_program = program;
-	statistics.vertex_uploads++;
+	if (uploaded)
+		statistics.vertex_uploads++;
+	else
+		statistics.vertex_switches++;
 }
 
 void ps3_gpu_set_vertex_constants(uint32_t first, uint32_t count, const float *values)
 {
 	if (ready && count)
+	{
 		rsxLoadVertexProgramParameterBlock(context, first, count, values);
+		checkpoint(_checkpoint_vertex_constants);
+	}
 }
 
 static void fragment_program_load(uint32_t offset, uint32_t control, uint32_t register_count, uint32_t texcoords,
@@ -432,6 +827,7 @@ static void fragment_program_load(uint32_t offset, uint32_t control, uint32_t re
 	header.texcoord2D = (u16)texcoords_2d;
 	header.texcoord3D = (u16)(texcoords & ~texcoords_2d);
 	rsxLoadFragmentProgramLocation(context, &header, offset, GCM_LOCATION_RSX);
+	checkpoint(_checkpoint_fragment);
 }
 
 int ps3_gpu_set_fragment_program(const struct rsx_fragment_program *program, const float uniforms[][4])
@@ -478,6 +874,7 @@ static void texture_unit_off(uint32_t unit)
 	{
 		rsxTextureControl(context, (u8)unit, GCM_FALSE, 0, 0, 0);
 		texture_states[unit] = 1;
+		checkpoint(_checkpoint_texture_off);
 	}
 }
 
@@ -502,7 +899,8 @@ void ps3_gpu_set_texture(uint32_t unit, const struct ps3_gpu_texture *texture)
 	description.mipmap = texture->levels ? texture->levels : 1;
 	description.dimension = texture->dimension;
 	description.cubemap = texture->cube ? GCM_TRUE : GCM_FALSE;
-	description.remap = REMAP_IDENTITY;
+	/* an 8- or 16-bit format's channels as the Xbox's (xbox_texture_layout.c) */
+	description.remap = texture->remap ? texture->remap : REMAP_IDENTITY;
 	description.width = texture->width;
 	description.height = texture->height;
 	description.depth = texture->depth ? texture->depth : 1;
@@ -516,6 +914,7 @@ void ps3_gpu_set_texture(uint32_t unit, const struct ps3_gpu_texture *texture)
 	rsxTextureWrapMode(context, (u8)unit, texture->wrap_s, texture->wrap_t, texture->wrap_r,
 		GCM_TEXTURE_UNSIGNED_REMAP_NORMAL, GCM_TEXTURE_ZFUNC_NEVER, 0);
 	rsxTextureBorderColor(context, (u8)unit, texture->border);
+	checkpoint(texture->remap ? _checkpoint_texture_remap : _checkpoint_texture);
 	statistics.texture_loads++;
 }
 
@@ -543,6 +942,7 @@ void ps3_gpu_set_attribute(uint32_t index, uint32_t offset, uint32_t stride, uin
 	rsxBindVertexArrayAttrib(context, (u8)index, 0, offset, (u8)stride, (u8)elements, GCM_VERTEX_DATA_TYPE_F32,
 		GCM_LOCATION_RSX);
 	attribute_enabled[index] = 1;
+	checkpoint(_checkpoint_attribute);
 }
 
 void ps3_gpu_vertices_written(void)
@@ -571,6 +971,7 @@ void ps3_gpu_draw(uint32_t primitive, uint32_t first, uint32_t count)
 		return;
 	draw_begin();
 	rsxDrawVertexArray(context, primitive, first, count);
+	checkpoint(_checkpoint_draw);
 }
 
 void ps3_gpu_draw_indexed(uint32_t primitive, uint32_t offset, uint32_t count)
@@ -579,6 +980,7 @@ void ps3_gpu_draw_indexed(uint32_t primitive, uint32_t offset, uint32_t count)
 		return;
 	draw_begin();
 	rsxDrawIndexArray(context, (u8)primitive, offset, count, GCM_INDEX_TYPE_16B, GCM_LOCATION_RSX);
+	checkpoint(_checkpoint_draw_indexed);
 }
 
 /* ---------- presentation */
@@ -682,11 +1084,17 @@ static void blit_draw(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t 
 	uint32_t unit;
 
 	ps3_video_size(&display_width, &display_height);
-	/* 4:3 in the middle of the display */
-	picture_width = display_height * 4 <= display_width * 3 ? display_height * 4 / 3 : display_width;
-	picture_height = display_height * 4 <= display_width * 3 ? display_height : display_width * 3 / 4;
-	left = (float)(display_width - picture_width) * 0.5f;
-	top = (float)(display_height - picture_height) * 0.5f;
+	/* the back buffer is drawn at the display's lines (d3d8_rsx.c's screen scale): pixel for pixel in the middle,
+	else scaled to fit */
+	picture_width = width;
+	picture_height = height;
+	if (picture_width > display_width || picture_height > display_height)
+	{
+		picture_width = display_height * width <= display_width * height ? display_height * width / height : display_width;
+		picture_height = display_height * width <= display_width * height ? display_height : display_width * height / width;
+	}
+	left = (float)((display_width - picture_width) / 2);
+	top = (float)((display_height - picture_height) / 2);
 
 	rsxSetColorMask(context, GCM_COLOR_MASK_R | GCM_COLOR_MASK_G | GCM_COLOR_MASK_B | GCM_COLOR_MASK_A);
 	rsxSetDepthTestEnable(context, GCM_FALSE);
@@ -709,8 +1117,12 @@ static void blit_draw(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t 
 	viewport_offset[3] = 0.0f;
 	rsxSetViewport(context, 0, 0, (u16)display_width, (u16)display_height, 0.0f, 1.0f, scale, viewport_offset);
 	rsxSetViewportClip(context, 0, (u16)display_width, (u16)display_height);
-	rsxSetClearColor(context, 0xff000000u);
-	rsxClearSurface(context, GCM_CLEAR_R | GCM_CLEAR_G | GCM_CLEAR_B | GCM_CLEAR_A);
+	/* black bars where the picture does not cover the display (4:3) */
+	if (picture_width < display_width || picture_height < display_height)
+	{
+		rsxSetClearColor(context, 0xff000000u);
+		rsxClearSurface(context, GCM_CLEAR_R | GCM_CLEAR_G | GCM_CLEAR_B | GCM_CLEAR_A);
+	}
 
 	ps3_gpu_set_vertex_program(&blit.vertex);
 	fragment_program_load(blit.fragment_offset, 0x40, 2, 1, 1);
@@ -755,16 +1167,33 @@ static void frame_begin(void)
 			if (ps3_time_seconds() - start > FENCE_TIMEOUT_SECONDS)
 			{
 				if (fence_timeouts++ < 10)
+				{
 					ps3_log_printf("[gpu] frame %u: the RSX did not finish frame %u (label %u)\n",
 						(unsigned)frame_index, (unsigned)(frame_index - 2), (unsigned)*frame_label);
+					checkpoint_report();
+				}
 				break;
 			}
 			usleep(20);
 		}
 		ps3_timer_add(_ps3_timer_rsx_wait, span);
 	}
+	timestamps_read();
 	deferred_frees_run(0);
 	caches_invalidate();
+	/* an overlay of the system's (the XMB in the game) may use the vertex program slots */
+	if (overlay_events != ps3_system_overlay_events())
+	{
+		overlay_events = ps3_system_overlay_events();
+		memset(resident_programs, 0, sizeof(resident_programs));
+	}
+	/* ZCull's state, as rsxtest_tile's, at each frame as the rest of the state */
+	if (zcull_bound)
+	{
+		rsxSetZCullControl(context, GCM_ZCULL_LESS, GCM_ZCULL_LONES);
+		rsxSetSCullControl(context, GCM_SCULL_SFUNC_LESS, 1, 0xff);
+		checkpoint(_checkpoint_zcull_control);
+	}
 }
 
 void ps3_gpu_wait_idle(void)
@@ -788,16 +1217,43 @@ void ps3_gpu_wait_idle(void)
 	}
 }
 
+/* the RSX's time at this split of the frame, without a stall: a timestamp report, read two frames on */
 uint64_t ps3_timers_rsx_wait(int part)
 {
-	uint64_t start = ps3_timer_now(), now;
+	uint32_t set = frame_index % 3;
 
-	if (!ps3_timer_probe || !ready)
-		return start;
-	ps3_gpu_wait_idle();
-	now = ps3_timer_now();
-	ps3_rsx_timers[part] += now - start;
-	return now;
+	if (ready && stamps[set].count < TIMESTAMP_PARTS)
+	{
+		rsxSetReport(context, REPORT_TIMESTAMP, TIMESTAMP_REPORT_BASE + set * TIMESTAMP_PARTS + stamps[set].count);
+		stamps[set].parts[stamps[set].count++] = (uint8_t)part;
+		checkpoint(_checkpoint_timestamp);
+	}
+	return ps3_timer_now();
+}
+
+/* the frame before last's timestamps (the RSX has finished it): each part ends at its split, from the split before;
+and the frame's time */
+static void timestamps_read(void)
+{
+	uint32_t set = (frame_index + 1) % 3, index;
+	uint64_t previous = 0, first = 0;
+
+	for (index = 0; index < stamps[set].count; index++)
+	{
+		uint64_t now = gcmGetTimeStamp(TIMESTAMP_REPORT_BASE + set * TIMESTAMP_PARTS + index);
+
+		if (index)
+			ps3_rsx_timers[stamps[set].parts[index]] += now > previous ? now - previous : 0;
+		else
+			first = now;
+		previous = now;
+	}
+	if (stamps[set].count > 1)
+	{
+		ps3_rsx_frame_nanoseconds += previous > first ? previous - first : 0;
+		ps3_rsx_frames++;
+	}
+	stamps[set].count = 0;
 }
 
 void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height)
@@ -811,16 +1267,22 @@ void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t h
 	ps3_timer_add(_ps3_timer_flip_wait, span);
 	if (width && height)
 		blit_draw(offset, pitch, width, height);
+	checkpoint(_checkpoint_blit);
+	/* the frame's last timestamp (_ps3_timer_present: the time after the render's) */
+	ps3_timers_rsx_wait(_ps3_timer_present);
 	/* the RSX writes it once this frame's draws are done (a command label can come early: ioq3) */
 	rsxSetWriteBackendLabel(context, FRAME_LABEL, frame_index);
+	checkpoint(_checkpoint_frame_label);
 	ps3_video_end_frame();
+	checkpoint(_checkpoint_flip);
 	if (frame_index % STATISTICS_FRAMES == 0)
 	{
-		ps3_log_printf("[gpu] frame %u: %u draws, %u vertex programs, %u fragment programs, %u textures a frame; "
-			"scratch peak %u KB of %u, %u dropped\n", (unsigned)frame_index, (unsigned)(statistics.draws / STATISTICS_FRAMES),
-			(unsigned)(statistics.vertex_uploads / STATISTICS_FRAMES), (unsigned)(statistics.fragment_copies / STATISTICS_FRAMES),
-			(unsigned)(statistics.texture_loads / STATISTICS_FRAMES), (unsigned)(scratch.peak / 1024),
-			(unsigned)(SCRATCH_HALF_SIZE / 1024), (unsigned)scratch.drops);
+		ps3_log_printf("[gpu] frame %u: %u draws, %u vertex programs uploaded and %u switched, %u fragment programs, "
+			"%u textures a frame; scratch peak %u KB of %u, %u dropped\n", (unsigned)frame_index,
+			(unsigned)(statistics.draws / STATISTICS_FRAMES), (unsigned)(statistics.vertex_uploads / STATISTICS_FRAMES),
+			(unsigned)(statistics.vertex_switches / STATISTICS_FRAMES),
+			(unsigned)(statistics.fragment_copies / STATISTICS_FRAMES), (unsigned)(statistics.texture_loads / STATISTICS_FRAMES),
+			(unsigned)(scratch.peak / 1024), (unsigned)(SCRATCH_HALF_SIZE / 1024), (unsigned)scratch.drops);
 		memset(&statistics, 0, sizeof(statistics));
 	}
 	frame_begin();
@@ -858,6 +1320,13 @@ int ps3_gpu_initialize(void)
 	idle_label = (volatile uint32_t *)gcmGetLabelAddress(IDLE_LABEL);
 	*idle_label = 0;
 	idle_reference = 0;
+#if RSX_CHECKPOINTS
+	checkpoint_label = (volatile uint32_t *)gcmGetLabelAddress(CHECKPOINT_LABEL);
+	*checkpoint_label = 0;
+	checkpoint_backend_label = (volatile uint32_t *)gcmGetLabelAddress(CHECKPOINT_BACKEND_LABEL);
+	*checkpoint_backend_label = 0;
+	checkpoint(_checkpoint_start);
+#endif
 	caches_invalidate();
 	ready = 1;
 	ps3_log_printf("[gpu] ready: scratch 2 x %u KB at 0x%08x\n", (unsigned)(SCRATCH_HALF_SIZE / 1024),
