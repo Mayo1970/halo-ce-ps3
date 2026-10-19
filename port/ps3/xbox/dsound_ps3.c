@@ -1,7 +1,8 @@
-/* DirectSound on the PS3 audio port (src/ps3_audio.c), after port/linux/src/dsound_sdl.c: a mixer thread keeps
-the port's ring 43 ms ahead; packets complete on the game's thread (DirectSoundDoWork, Flush), never the mixer's. */
+/* DirectSound on the PS3 audio port (src/ps3_audio.c), after port/linux/src/dsound_sdl.c: a mixer thread decodes
+the packets and keeps the port's ring 43 ms ahead; packets complete on the game's thread (DoWork, Flush). */
 
 #include "ps3_audio.h"
+#include "ps3_timers.h"
 #include "port_config.h"
 
 #include <math.h>
@@ -11,6 +12,10 @@ the port's ring 43 ms ahead; packets complete on the game's thread (DirectSoundD
 #define OUTPUT_RATE PS3_AUDIO_RATE
 #define OUTPUT_CHANNELS 2
 #define MAXIMUM_STREAM_PACKETS 64
+/* the packets a pass takes from a stream: a chunk spans a few at most (the game queues 4) */
+#define MIX_PACKETS 8
+/* buffers a flush takes from the mixer's pass: the game's 256 channels of 4 packets */
+#define RETIRED_MAXIMUM 1024
 /* one audio port block */
 #define MIX_CHUNK_FRAMES 256
 #define MIX_CHUNK_MICROSECONDS (MIX_CHUNK_FRAMES * 1000000 / OUTPUT_RATE)
@@ -51,10 +56,26 @@ struct mixer_voice
 struct voice_packet
 {
 	XMEDIAPACKET packet;
-	/* decoded at Process: interleaved floats, the source's channel count */
+	/* the game's data, which stays until the packet completes, as the Xbox's hardware reads it in place */
+	const unsigned char *source;
+	unsigned long size;
+	/* allocated at Process, decoded by the mixer: interleaved floats, the source's channel count */
 	float *samples;
 	unsigned long frames;
-	/* played out by the mixer, not yet completed */
+	/* the mixer's, set with the lock held: decoded; played out, not yet completed */
+	BOOL decoded;
+	BOOL finished;
+};
+
+/* a packet as a mixer pass took it: a copy, as a flush during the pass can empty and refill the slot */
+struct mix_packet
+{
+	struct voice_packet *slot;
+	const unsigned char *source;
+	unsigned long size;
+	float *samples;
+	unsigned long frames;
+	BOOL decoded;
 	BOOL finished;
 };
 
@@ -66,10 +87,19 @@ struct ps3_stream
 	ULONG reference_count;
 	LPFNXMEDIAOBJECTCALLBACK callback;
 	LPVOID context;
+	/* the play state (index, fraction, gains) is the mixer's: the game's thread asks for a restart */
 	struct mixer_voice voice;
 	struct voice_packet packets[MAXIMUM_STREAM_PACKETS];
 	unsigned long packet_head;
 	unsigned long packet_count;
+	/* with the lock: the flushes, which void a pass's results; a start from the first frame */
+	unsigned long generation;
+	BOOL restart;
+	/* the mixer's pass: the next stream, the generation and the packets it took */
+	struct ps3_stream *mix_next;
+	unsigned long mix_generation;
+	unsigned long mix_count;
+	struct mix_packet mix_packets[MIX_PACKETS];
 };
 
 /* the inanity buffer (dsound_fix_rear_speakers) and the loading screen's tones (progress_bar.c) */
@@ -116,21 +146,127 @@ static int audio_port;
 static volatile unsigned long mixer_chunks;
 static volatile unsigned long mixer_microseconds;
 static volatile unsigned long mixer_maximum_microseconds;
-static unsigned long packets_decoded;
+static volatile unsigned long mixer_decode_microseconds;
+static volatile unsigned long mixer_hold_microseconds;
+static volatile unsigned long mixer_hold_maximum_microseconds;
+static volatile unsigned long packets_decoded;
+static uint64_t mixer_hold_start;
 
-/* (DirectSoundCreate comes first, on the main thread) */
+/* odd while a pass mixes without the lock, between its two holds; the mixer counts it with the lock held */
+static volatile unsigned long mixer_pass;
+/* the packets the mixer finished (with the lock), and that count when the game's thread last completed them */
+static volatile unsigned long packets_finished;
+static unsigned long packets_completed;
+
+/* buffers a flush took from a pass, freed once that pass is over (game thread, with the lock) */
+static struct
+{
+	float *samples;
+	unsigned long pass;
+} retired[RETIRED_MAXIMUM];
+static unsigned long retired_count;
+
+/* the game's thread (DirectSoundCreate comes first, on the main thread); its waits are timed */
 static void mixer_enter(void)
 {
+	uint64_t start;
+
 	if (!mixer_lock)
 		mixer_lock = ps3_host_lock_create(FALSE);
-	/* uncontended, without the wait records of ps3_host_lock_enter: the game sets voices hundreds of times a frame */
-	if (!ps3_host_lock_try_enter(mixer_lock))
-		ps3_host_lock_enter(mixer_lock);
+	/* uncontended, without the wait records of ps3_host_lock_enter */
+	if (ps3_host_lock_try_enter(mixer_lock))
+		return;
+	start = ps3_timer_now();
+	ps3_host_lock_enter(mixer_lock);
+	ps3_timer_add(_ps3_timer_sound_lock_wait, start);
 }
 
 static void mixer_leave(void)
 {
 	ps3_host_lock_leave(mixer_lock);
+}
+
+/* the mixer thread's holds of the lock, timed */
+static void mixer_hold_begin(void)
+{
+	if (!ps3_host_lock_try_enter(mixer_lock))
+		ps3_host_lock_enter(mixer_lock);
+	mixer_hold_start = ps3_host_microseconds();
+}
+
+static void mixer_hold_end(void)
+{
+	unsigned long held = (unsigned long)(ps3_host_microseconds() - mixer_hold_start);
+
+	ps3_host_lock_leave(mixer_lock);
+	mixer_hold_microseconds += held;
+	if (held > mixer_hold_maximum_microseconds)
+		mixer_hold_maximum_microseconds = held;
+}
+
+/* (game thread, without the lock) waits up to 100 ms for the end of pass, an odd count; the count is read with
+the lock, so the pass's reads come before what the caller frees */
+static void mixer_wait_pass(unsigned long pass)
+{
+	int tries;
+
+	for (tries = 0; tries < 200; tries++)
+	{
+		unsigned long now;
+
+		mixer_enter();
+		now = mixer_pass;
+		mixer_leave();
+		if (now != pass)
+			return;
+		ps3_host_sleep_microseconds(500);
+	}
+}
+
+/* (game thread, with the lock) frees the retired buffers whose pass is over */
+static void retired_free(void)
+{
+	unsigned long index, kept = 0;
+
+	for (index = 0; index < retired_count; index++)
+	{
+		if (retired[index].pass == mixer_pass)
+			retired[kept++] = retired[index];
+		else
+			free(retired[index].samples);
+	}
+	retired_count = kept;
+}
+
+/* (game thread, with the lock) a completed packet's buffer; the mixer's pass may read an unfinished one */
+static void samples_release(float *samples, BOOL finished)
+{
+	if (!samples)
+		return;
+	retired_free();
+	if (finished || !(mixer_pass & 1))
+	{
+		free(samples);
+		return;
+	}
+	if (retired_count == RETIRED_MAXIMUM)
+	{
+		unsigned long pass = mixer_pass;
+
+		/* (full: the pass's end, which needs the lock; a later pass cannot take this completed packet) */
+		mixer_leave();
+		mixer_wait_pass(pass);
+		mixer_enter();
+		retired_free();
+		if (mixer_pass != pass)
+			free(samples);
+		else
+			platform_log("DirectSound: a flushed packet's buffer kept (the mixer's pass did not end)");
+		return;
+	}
+	retired[retired_count].samples = samples;
+	retired[retired_count].pass = mixer_pass;
+	retired_count++;
 }
 
 static float gain_from_millibels(LONG millibels)
@@ -220,21 +356,22 @@ static float adpcm_expand(int nibble, float *predictor, int *index)
 	return value * (1.0f / 32768.0f);
 }
 
+/* the frames that size bytes of the voice's format decode to */
+static unsigned long decoded_frames(const struct mixer_voice *voice, unsigned long size)
+{
+	if (voice->adpcm)
+		return size / (XBOX_ADPCM_BLOCK_BYTES * voice->channels) * XBOX_ADPCM_BLOCK_SAMPLES;
+	return size / (2 * voice->channels);
+}
+
 /* Xbox ADPCM, as dsound_sdl.c reads it: per block a 4-byte header per channel (little-endian predictor, step
 index), then 4-byte groups of eight nibbles, low nibble first, alternating between channels; 64 samples */
-static float *decode_adpcm(const unsigned char *source, unsigned long size, unsigned long channels,
-	unsigned long *frame_count)
+static void decode_adpcm(const unsigned char *source, unsigned long size, unsigned long channels, float *samples)
 {
 	unsigned long block_bytes = XBOX_ADPCM_BLOCK_BYTES * channels;
 	unsigned long blocks = size / block_bytes;
-	float *samples = malloc((blocks ? blocks : 1) * XBOX_ADPCM_BLOCK_SAMPLES * channels * sizeof(float));
 	unsigned long block, channel;
 
-	if (!samples)
-	{
-		*frame_count = 0;
-		return NULL;
-	}
 	for (block = 0; block < blocks; block++)
 	{
 		const unsigned char *data = source + block * block_bytes;
@@ -261,40 +398,38 @@ static float *decode_adpcm(const unsigned char *source, unsigned long size, unsi
 			}
 		}
 	}
-	*frame_count = blocks * XBOX_ADPCM_BLOCK_SAMPLES;
-	return samples;
 }
 
 /* 16-bit PCM keeps the Xbox's little-endian order in memory */
-static float *decode_pcm(const unsigned char *source, unsigned long size, unsigned long channels,
-	unsigned long *frame_count)
+static void decode_pcm(const unsigned char *source, unsigned long size, unsigned long channels, float *samples)
 {
 	unsigned long frames = size / (2 * channels);
-	float *samples = malloc((frames ? frames : 1) * channels * sizeof(float));
 	unsigned long sample;
 
-	if (!samples)
-	{
-		*frame_count = 0;
-		return NULL;
-	}
 	for (sample = 0; sample < frames * channels; sample++)
 		samples[sample] = (float)(short)(source[sample * 2] | source[sample * 2 + 1] << 8) * (1.0f / 32768.0f);
-	*frame_count = frames;
-	return samples;
 }
 
+/* decoded_frames(voice, size) frames into samples */
+static void decode_into(const struct mixer_voice *voice, const void *source, unsigned long size, float *samples)
+{
+	if (voice->adpcm)
+		decode_adpcm(source, size, voice->channels, samples);
+	else
+		decode_pcm(source, size, voice->channels, samples);
+}
+
+/* a buffer's data, decoded at once (SetBufferData) */
 static float *decode(const struct mixer_voice *voice, const void *source, unsigned long size,
 	unsigned long *frame_count)
 {
-	if (!source || !size)
-	{
-		*frame_count = 0;
-		return NULL;
-	}
-	return voice->adpcm ?
-		decode_adpcm(source, size, voice->channels, frame_count) :
-		decode_pcm(source, size, voice->channels, frame_count);
+	unsigned long frames = source ? decoded_frames(voice, size) : 0;
+	float *samples = frames ? malloc(frames * voice->channels * sizeof(float)) : NULL;
+
+	*frame_count = samples ? frames : 0;
+	if (samples)
+		decode_into(voice, source, size, samples);
+	return samples;
 }
 
 /* ---------- 3D */
@@ -371,7 +506,7 @@ static void voice_gains(const struct mixer_voice *voice, float *left, float *rig
 	*right *= voice->volume * master_volume;
 }
 
-/* ---------- mixing (the mixer thread, with the lock held) */
+/* ---------- mixing (the mixer thread: the streams without the lock, the buffers with it) */
 
 static void mix_begin(struct mixer_voice *voice, unsigned long count, struct mix_state *state)
 {
@@ -455,38 +590,94 @@ static unsigned long mix_run(struct mixer_voice *voice, const float *samples, un
 	return done;
 }
 
-static struct voice_packet *stream_first_unfinished(struct ps3_stream *stream)
+/* (with the lock) a pass takes the stream's unfinished packets; 0 when it has none */
+static unsigned long stream_take_packets(struct ps3_stream *stream)
 {
 	unsigned long position;
 
-	for (position = 0; position < stream->packet_count; position++)
+	if (stream->restart)
 	{
-		struct voice_packet *packet = &stream->packets[(stream->packet_head + position) % MAXIMUM_STREAM_PACKETS];
-
-		if (!packet->finished)
-			return packet;
+		stream->voice.index = 0;
+		stream->voice.fraction = 0.0f;
+		stream->voice.gains_valid = FALSE;
+		stream->restart = FALSE;
 	}
-	return NULL;
+	stream->mix_count = 0;
+	stream->mix_generation = stream->generation;
+	if (!stream->voice.sample_rate)
+		return 0;
+	for (position = 0; position < stream->packet_count && stream->mix_count < MIX_PACKETS; position++)
+	{
+		struct voice_packet *slot = &stream->packets[(stream->packet_head + position) % MAXIMUM_STREAM_PACKETS];
+		struct mix_packet *entry;
+
+		if (slot->finished)
+			continue;
+		entry = &stream->mix_packets[stream->mix_count++];
+		entry->slot = slot;
+		entry->source = slot->source;
+		entry->size = slot->size;
+		entry->samples = slot->samples;
+		entry->frames = slot->frames;
+		entry->decoded = slot->decoded;
+		entry->finished = FALSE;
+	}
+	return stream->mix_count;
 }
 
+/* (with the lock) gives the pass's decodes and finished packets back, unless a flush voided them */
+static unsigned long stream_give_packets(struct ps3_stream *stream)
+{
+	unsigned long index, finished = 0;
+
+	if (stream->mix_generation != stream->generation)
+		return 0;
+	for (index = 0; index < stream->mix_count; index++)
+	{
+		struct mix_packet *entry = &stream->mix_packets[index];
+
+		entry->slot->decoded = entry->decoded;
+		if (entry->finished)
+		{
+			entry->slot->finished = TRUE;
+			finished++;
+		}
+	}
+	return finished;
+}
+
+/* (without the lock) the packet's buffer stays until the pass ends (samples_release) */
+static void packet_decode(const struct mixer_voice *voice, struct mix_packet *entry)
+{
+	uint64_t start = ps3_host_microseconds();
+
+	if (entry->samples)
+		decode_into(voice, entry->source, entry->size, entry->samples);
+	entry->decoded = TRUE;
+	packets_decoded++;
+	mixer_decode_microseconds += (unsigned long)(ps3_host_microseconds() - start);
+}
+
+/* (without the lock) the packets the pass took */
 static void mix_stream(struct ps3_stream *stream, float *output, unsigned long count)
 {
 	struct mixer_voice *voice = &stream->voice;
-	struct voice_packet *packet = stream_first_unfinished(stream);
 	struct mix_state state;
-	unsigned long done = 0;
+	unsigned long packet = 0, done = 0;
 
-	if (!packet || !voice->sample_rate)
-		return;
 	mix_begin(voice, count, &state);
-	while (packet && done < count)
+	while (packet < stream->mix_count && done < count)
 	{
-		done += mix_run(voice, packet->samples, packet->frames, &state, output + done * OUTPUT_CHANNELS, count - done);
-		if (voice->index >= packet->frames)
+		struct mix_packet *entry = &stream->mix_packets[packet];
+
+		if (!entry->decoded)
+			packet_decode(voice, entry);
+		done += mix_run(voice, entry->samples, entry->frames, &state, output + done * OUTPUT_CHANNELS, count - done);
+		if (voice->index >= entry->frames)
 		{
-			voice->index -= packet->frames;
-			packet->finished = TRUE;
-			packet = stream_first_unfinished(stream);
+			voice->index -= entry->frames;
+			entry->finished = TRUE;
+			packet++;
 		}
 	}
 }
@@ -520,19 +711,36 @@ static void mix_buffer(struct ps3_buffer *buffer, float *output, unsigned long c
 	}
 }
 
+/* a pass: the packets taken with the lock, decoded and mixed without it, their results given back with it */
 static void mix(float *output, unsigned long count)
 {
-	struct ps3_stream *stream;
+	struct ps3_stream *stream, *taken = NULL, **tail = &taken;
 	struct ps3_buffer *buffer;
-	unsigned long sample;
+	unsigned long sample, finished = 0;
 
 	memset(output, 0, count * OUTPUT_CHANNELS * sizeof(float));
-	mixer_enter();
+	mixer_hold_begin();
+	mixer_pass++;
 	for (stream = streams; stream; stream = stream->next)
+	{
+		if (stream_take_packets(stream))
+		{
+			*tail = stream;
+			tail = &stream->mix_next;
+		}
+	}
+	*tail = NULL;
+	mixer_hold_end();
+	for (stream = taken; stream; stream = stream->mix_next)
 		mix_stream(stream, output, count);
+	mixer_hold_begin();
+	for (stream = taken; stream; stream = stream->mix_next)
+		finished += stream_give_packets(stream);
+	packets_finished += finished;
 	for (buffer = buffers; buffer; buffer = buffer->next)
 		mix_buffer(buffer, output, count);
-	mixer_leave();
+	mixer_pass++;
+	mixer_hold_end();
 	/* soft limit rather than hard clip when many voices pile up */
 	for (sample = 0; sample < count * OUTPUT_CHANNELS; sample++)
 	{
@@ -625,7 +833,8 @@ static void statistics_log(void)
 	static uint64_t next;
 	static unsigned last_silent, last_partial;
 	uint64_t now = ps3_host_microseconds();
-	unsigned long chunks, microseconds, maximum, playing_streams = 0, playing_buffers = 0;
+	unsigned long chunks, microseconds, maximum, decode, held, held_maximum, decoded;
+	unsigned long playing_streams = 0, playing_buffers = 0;
 	unsigned silent = 0, partial = 0;
 	struct ps3_stream *stream;
 	struct ps3_buffer *buffer;
@@ -638,20 +847,29 @@ static void statistics_log(void)
 		playing_streams += stream->packet_count != 0;
 	for (buffer = buffers; buffer; buffer = buffer->next)
 		playing_buffers += buffer->playing && buffer->voice.current_left + buffer->voice.current_right > 0.0f;
-	mixer_leave();
 	chunks = mixer_chunks;
 	microseconds = mixer_microseconds;
 	maximum = mixer_maximum_microseconds;
+	decode = mixer_decode_microseconds;
+	held = mixer_hold_microseconds;
+	held_maximum = mixer_hold_maximum_microseconds;
+	decoded = packets_decoded;
 	mixer_chunks = 0;
 	mixer_microseconds = 0;
 	mixer_maximum_microseconds = 0;
+	mixer_decode_microseconds = 0;
+	mixer_hold_microseconds = 0;
+	mixer_hold_maximum_microseconds = 0;
+	packets_decoded = 0;
+	mixer_leave();
 	if (audio_port)
 		ps3_audio_stats(&silent, &partial);
+	/* the mixer's lock: held twice a chunk (a pass) */
 	platform_log("DirectSound: %lu streams and %lu buffers playing, %lu packets decoded; mixer %lu us a chunk "
-		"(max %lu) of %d; port blocks %u silent, %u partial", playing_streams, playing_buffers, packets_decoded,
-		chunks ? microseconds / chunks : 0, maximum, MIX_CHUNK_MICROSECONDS, silent - last_silent,
+		"(max %lu) of %d, decoding %lu, the lock held %lu (max %lu); port blocks %u silent, %u partial",
+		playing_streams, playing_buffers, decoded, chunks ? microseconds / chunks : 0, maximum, MIX_CHUNK_MICROSECONDS,
+		chunks ? decode / chunks : 0, chunks ? held / chunks : 0, held_maximum, silent - last_silent,
 		partial - last_partial);
-	packets_decoded = 0;
 	last_silent = silent;
 	last_partial = partial;
 }
@@ -663,12 +881,15 @@ static void stream_complete_head(struct ps3_stream *stream, DWORD status, DWORD 
 {
 	struct voice_packet *entry = &stream->packets[stream->packet_head];
 	XMEDIAPACKET packet = entry->packet;
+	float *samples = entry->samples;
+	BOOL finished = entry->finished;
 
-	free(entry->samples);
 	entry->samples = NULL;
+	entry->decoded = FALSE;
 	entry->finished = FALSE;
 	stream->packet_head = (stream->packet_head + 1) % MAXIMUM_STREAM_PACKETS;
 	stream->packet_count--;
+	samples_release(samples, finished);
 	if (packet.pdwCompletedSize)
 		*packet.pdwCompletedSize = completed_size;
 	if (packet.pdwStatus)
@@ -689,7 +910,11 @@ static void streams_complete_finished(void)
 {
 	struct ps3_stream *stream;
 
+	/* nothing finished since the last time: no lock */
+	if (packets_finished == packets_completed)
+		return;
 	mixer_enter();
+	packets_completed = packets_finished;
 	for (stream = streams; stream; stream = stream->next)
 	{
 		while (stream->packet_count && stream->packets[stream->packet_head].finished)
@@ -698,17 +923,13 @@ static void streams_complete_finished(void)
 	mixer_leave();
 }
 
-/* ---------- the stream interface */
+/* ---------- the stream interface (the game's thread; the count and the packet ring's ends are its own) */
 
 static ULONG STDMETHODCALLTYPE stream_add_reference(IDirectSoundStream *object)
 {
 	struct ps3_stream *stream = (struct ps3_stream *)object;
-	ULONG count;
 
-	mixer_enter();
-	count = ++stream->reference_count;
-	mixer_leave();
-	return count;
+	return ++stream->reference_count;
 }
 
 static HRESULT STDMETHODCALLTYPE stream_flush(IDirectSoundStream *object)
@@ -720,11 +941,12 @@ static HRESULT STDMETHODCALLTYPE stream_flush(IDirectSoundStream *object)
 	{
 		struct voice_packet *head = &stream->packets[stream->packet_head];
 
+		/* (each time: a pass can start while a callback runs without the lock) */
+		stream->generation++;
 		stream_complete_head(stream, head->finished ? XMEDIAPACKET_STATUS_SUCCESS : XMEDIAPACKET_STATUS_FLUSHED,
 			head->finished ? head->packet.dwMaxSize : 0);
 	}
-	stream->voice.index = 0;
-	stream->voice.fraction = 0.0f;
+	stream->restart = TRUE;
 	mixer_leave();
 	return S_OK;
 }
@@ -733,13 +955,10 @@ static ULONG STDMETHODCALLTYPE stream_release(IDirectSoundStream *object)
 {
 	struct ps3_stream *stream = (struct ps3_stream *)object;
 	struct ps3_stream **link;
-	ULONG count;
+	unsigned long pass;
 
-	mixer_enter();
-	count = --stream->reference_count;
-	mixer_leave();
-	if (count)
-		return count;
+	if (--stream->reference_count)
+		return stream->reference_count;
 	stream_flush(object);
 	mixer_enter();
 	for (link = &streams; *link; link = &(*link)->next)
@@ -750,7 +969,11 @@ static ULONG STDMETHODCALLTYPE stream_release(IDirectSoundStream *object)
 			break;
 		}
 	}
+	pass = mixer_pass;
 	mixer_leave();
+	/* a pass that took it reads it until its end */
+	if (pass & 1)
+		mixer_wait_pass(pass);
 	free(stream);
 	return 0;
 }
@@ -770,9 +993,7 @@ static HRESULT STDMETHODCALLTYPE stream_get_status(IDirectSoundStream *object, L
 {
 	struct ps3_stream *stream = (struct ps3_stream *)object;
 
-	mixer_enter();
 	*status = stream->packet_count < MAXIMUM_STREAM_PACKETS ? XMO_STATUSF_ACCEPT_INPUT_DATA : 0;
-	mixer_leave();
 	return S_OK;
 }
 
@@ -780,39 +1001,35 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 {
 	struct ps3_stream *stream = (struct ps3_stream *)object;
 	struct voice_packet *entry;
-	unsigned long frames = 0;
-	float *samples;
+	unsigned long frames;
+	float *samples = NULL;
 
 	(void)output;
 	if (!input)
 		return E_INVALIDARG;
-	/* outside the lock, on the game's thread */
-	samples = decode(&stream->voice, input->pvBuffer, input->dwMaxSize, &frames);
-	mixer_enter();
 	if (stream->packet_count == MAXIMUM_STREAM_PACKETS)
-	{
-		mixer_leave();
-		free(samples);
 		return E_OUTOFMEMORY;
-	}
+	/* only the buffer here: the mixer decodes it (packet_decode) */
+	frames = input->pvBuffer ? decoded_frames(&stream->voice, input->dwMaxSize) : 0;
+	if (frames)
+		samples = malloc(frames * stream->voice.channels * sizeof(float));
+	mixer_enter();
 	entry = &stream->packets[(stream->packet_head + stream->packet_count) % MAXIMUM_STREAM_PACKETS];
 	entry->packet = *input;
+	entry->source = input->pvBuffer;
+	entry->size = input->dwMaxSize;
 	entry->samples = samples;
 	entry->frames = samples ? frames : 0;
+	entry->decoded = FALSE;
 	entry->finished = FALSE;
 	if (input->pdwStatus)
 		*input->pdwStatus = XMEDIAPACKET_STATUS_PENDING;
 	if (input->pdwCompletedSize)
 		*input->pdwCompletedSize = 0;
+	/* a stream that ran dry starts over */
 	if (!stream->packet_count)
-	{
-		/* a stream that ran dry starts over */
-		stream->voice.index = 0;
-		stream->voice.fraction = 0.0f;
-		stream->voice.gains_valid = FALSE;
-	}
+		stream->restart = TRUE;
 	stream->packet_count++;
-	packets_decoded++;
 	mixer_leave();
 	return S_OK;
 }
@@ -889,6 +1106,12 @@ VOID WINAPI DirectSoundDoWork(void)
 		mixer_leave();
 	}
 	streams_complete_finished();
+	if (retired_count)
+	{
+		mixer_enter();
+		retired_free();
+		mixer_leave();
+	}
 	statistics_log();
 }
 
@@ -930,13 +1153,12 @@ HRESULT WINAPI IDirectSound_SetMixBinHeadroom(LPDIRECTSOUND sound, DWORD mix_bin
 HRESULT WINAPI IDirectSound_SetI3DL2Listener(LPDIRECTSOUND sound, LPCDSI3DL2LISTENER listener_properties, DWORD apply) { (void)sound; (void)listener_properties; (void)apply; return DS_OK; }
 HRESULT WINAPI IDirectSound_SetVelocity(LPDIRECTSOUND sound, FLOAT x, FLOAT y, FLOAT z, DWORD apply) { (void)sound; (void)x; (void)y; (void)z; (void)apply; return DS_OK; }
 
+/* the listener's settings, as a voice's (STREAM_SETTER) */
 HRESULT WINAPI IDirectSound_SetDistanceFactor(LPDIRECTSOUND sound, FLOAT factor, DWORD apply)
 {
 	(void)sound;
 	(void)apply;
-	mixer_enter();
 	listener.distance_factor = factor > 0.0f ? factor : 1.0f;
-	mixer_leave();
 	return DS_OK;
 }
 
@@ -944,9 +1166,7 @@ HRESULT WINAPI IDirectSound_SetRolloffFactor(LPDIRECTSOUND sound, FLOAT factor, 
 {
 	(void)sound;
 	(void)apply;
-	mixer_enter();
 	listener.rolloff_factor = factor >= 0.0f ? factor : 1.0f;
-	mixer_leave();
 	return DS_OK;
 }
 
@@ -954,11 +1174,9 @@ HRESULT WINAPI IDirectSound_SetPosition(LPDIRECTSOUND sound, FLOAT x, FLOAT y, F
 {
 	(void)sound;
 	(void)apply;
-	mixer_enter();
 	listener.position[0] = x;
 	listener.position[1] = y;
 	listener.position[2] = z;
-	mixer_leave();
 	return DS_OK;
 }
 
@@ -977,18 +1195,21 @@ static void normalize3(float *vector)
 HRESULT WINAPI IDirectSound_SetOrientation(LPDIRECTSOUND sound, FLOAT x_front, FLOAT y_front, FLOAT z_front,
 	FLOAT x_top, FLOAT y_top, FLOAT z_top, DWORD apply)
 {
+	float front[3], top[3];
+
 	(void)sound;
 	(void)apply;
-	mixer_enter();
-	listener.front[0] = x_front;
-	listener.front[1] = y_front;
-	listener.front[2] = z_front;
-	listener.top[0] = x_top;
-	listener.top[1] = y_top;
-	listener.top[2] = z_top;
-	normalize3(listener.front);
-	normalize3(listener.top);
-	mixer_leave();
+	/* normalized before the mixer can read them */
+	front[0] = x_front;
+	front[1] = y_front;
+	front[2] = z_front;
+	top[0] = x_top;
+	top[1] = y_top;
+	top[2] = z_top;
+	normalize3(front);
+	normalize3(top);
+	memcpy(listener.front, front, sizeof(front));
+	memcpy(listener.top, top, sizeof(top));
 	return DS_OK;
 }
 
@@ -1024,19 +1245,15 @@ void __stdcall DirectSoundStopStream(LPDIRECTSOUNDSTREAM stream)
 unsigned long __stdcall DirectSoundGetStreamVoiceStatus(LPDIRECTSOUNDSTREAM stream)
 {
 	struct ps3_stream *record = (struct ps3_stream *)stream;
-	unsigned long active;
 
-	mixer_enter();
-	active = record->packet_count != 0;
-	mixer_leave();
-	return active;
+	return record->packet_count != 0;
 }
 
+/* a voice's setting without the mixer's lock: words the mixer reads once a chunk (one chunk can take a part of a
+change), which the game sets hundreds of times a frame */
 #define STREAM_SETTER(body) \
 	struct ps3_stream *record = (struct ps3_stream *)stream; \
-	mixer_enter(); \
 	body; \
-	mixer_leave(); \
 	return DS_OK;
 
 HRESULT WINAPI IDirectSoundStream_SetFrequency(LPDIRECTSOUNDSTREAM stream, DWORD frequency)
@@ -1064,7 +1281,7 @@ HRESULT WINAPI IDirectSoundStream_SetMixBinVolumes(LPDIRECTSOUNDSTREAM stream, D
 	struct ps3_stream *record = (struct ps3_stream *)stream;
 	unsigned long bit, index = 0;
 
-	mixer_enter();
+	/* (settings: STREAM_SETTER's) */
 	for (bit = 0; bit < 32; bit++)
 	{
 		if (!(mix_bin_mask & (1UL << bit)))
@@ -1075,7 +1292,6 @@ HRESULT WINAPI IDirectSoundStream_SetMixBinVolumes(LPDIRECTSOUNDSTREAM stream, D
 			record->voice.mix_right = gain_from_millibels(volumes[index]);
 		index++;
 	}
-	mixer_leave();
 	return DS_OK;
 }
 
@@ -1278,19 +1494,15 @@ HRESULT WINAPI IDirectSoundBuffer_SetPitch(LPDIRECTSOUNDBUFFER buffer, LONG pitc
 		frequency = DSBFREQUENCY_MIN;
 	else if (frequency > DSBFREQUENCY_MAX)
 		frequency = DSBFREQUENCY_MAX;
-	mixer_enter();
+	/* (settings: STREAM_SETTER's) */
 	record->voice.frequency = (DWORD)frequency;
-	mixer_leave();
 	return DS_OK;
 }
 
 HRESULT WINAPI IDirectSoundBuffer_SetVolume(LPDIRECTSOUNDBUFFER buffer, LONG volume)
 {
 	struct ps3_buffer *record = (struct ps3_buffer *)buffer;
-	float gain = gain_from_millibels(volume);
 
-	mixer_enter();
-	record->voice.volume = gain;
-	mixer_leave();
+	record->voice.volume = gain_from_millibels(volume);
 	return DS_OK;
 }

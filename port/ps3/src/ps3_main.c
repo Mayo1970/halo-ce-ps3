@@ -205,6 +205,7 @@ static void display_stop(void)
 void ps3_host_exit(int status)
 {
 	ps3_log_printf("[ps3] exit %d\n", status);
+	ps3_gpu_stop_drawing();
 	ps3_audio_shutdown();
 	display_stop();
 	ps3_system_shutdown();
@@ -223,6 +224,7 @@ which waits for the XMB exit */
 void ps3_host_game_halted(void)
 {
 	ps3_host_set_status(_ps3_host_status_failed);
+	ps3_gpu_stop_drawing();
 	ps3_display_release();
 	ps3_log_printf("[ps3] the game halted: PS button > Quit Game\n");
 	wait_for_exit();
