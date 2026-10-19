@@ -46,13 +46,14 @@ HOST_OBJS += $(BUILD)/obj/port/linux/src/posix_dtls.o
 # goes first so that its setjmp.h shadows newlib's.
 CFLAGS := -std=gnu99 -O2 -Wall -mcpu=cell -mhard-float -mno-altivec -fno-strict-aliasing \
           -D__PS3__ -DPS3_LOG_IP=\"$(LOG_IP)\" \
-          -I$(PS3_DIR)/include -I$(PS3_DIR)/src -I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include
+          -I$(PS3_DIR)/include -I$(PS3_DIR)/src -I$(PS3_DIR)/spu -I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include
 ASFLAGS := -mcpu=cell -mno-altivec
 
 # --no-multi-toc: a TOC over 64 KB must fail the link; split-TOC r2off stubs hang the PS3 at boot.
-# --wrap: a retail PS3 has no console for stdout, so printf and co. go to the UDP log.
+# --wrap: printf and co. to the UDP log (a retail PS3 has no console), the heap's calls through its log (ps3_heap.c).
 LDFLAGS := -Wl,--no-multi-toc -L$(PSL1GHT)/ppu/lib -L$(PS3DEV)/portlibs/ppu/lib \
-           -Wl,--wrap,printf -Wl,--wrap,vprintf -Wl,--wrap,puts -Wl,--wrap,putchar
+           -Wl,--wrap,printf -Wl,--wrap,vprintf -Wl,--wrap,puts -Wl,--wrap,putchar \
+           -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -Wl,--wrap,memalign -Wl,--wrap,_sbrk_r
 
 LIBS := -lrsx -lgcm_sys -lio -laudio -lsysutil -lsysfs -lsysmodule -lnet -lnetctl -lrt -llv2 -lm
 
@@ -120,7 +121,8 @@ XBOX_CFLAGS = -std=gnu99 -fgnu89-inline $(GAME_ABI) -mminimal-toc -Wall -Wno-unu
               -DHALO_LINUX_PLATFORM_LAYER $(XBOX_DEFINES) \
               -include $(PS3_DIR)/include/halo_ps3_prefix.h -include $(PLATFORM_SEMANTICS) \
               -include $(PS3_DIR)/xbox/ps3_platform.h \
-              -I$(PS3_DIR)/include -I$(PS3_DIR)/xbox/include -Iport/linux/include -I$(PS3_DIR)/src -Iport/linux/src \
+              -I$(PS3_DIR)/include -I$(PS3_DIR)/xbox/include -Iport/linux/include -I$(PS3_DIR)/src -I$(PS3_DIR)/spu \
+              -Iport/linux/src \
               -I$(TOML_DIR) -I$(KCP_DIR) -Iport/third_party/monocypher -Isource -Isource/cseries -idirafter port/include/xdk
 
 # KCP's 64-bit integers are long long, which the game's long makes int int (halo_ps3_kcp.h); its own warnings off
@@ -192,6 +194,30 @@ $(MBEDTLS_OBJS): $(BUILD)/obj/%.o: %.c
 	@$(CC) $(MBEDTLS_FLAGS) -I$(MBEDTLS_DIR)/library $(CFLAGS) -w -MMD -MP -c $< -o $@
 
 $(BUILD)/obj/port/linux/src/posix_dtls.o $(BUILD)/obj/$(PS3_DIR)/src/ps3_mbedtls.o: CFLAGS := $(MBEDTLS_FLAGS) $(CFLAGS)
+# the one unit with VMX (exact, for the simulation: no fused multiply-adds of its own)
+$(BUILD)/obj/$(PS3_DIR)/src/ps3_vmx.o: CFLAGS += -maltivec -ffp-contract=off
+
+# ---------- the SPU programs (port/ps3/spu): spu-gcc, linked in as data (bin2s) for sysSpuImageImport (ps3_spu.c)
+
+SPU_CC     := $(PS3DEV)/spu/bin/spu-gcc
+BIN2S      := $(PS3DEV)/bin/bin2s
+# no fused multiply-adds: the same float operations as the PPE's mixer (dsound_ps3.c)
+SPU_CFLAGS := -std=gnu99 -O2 -Wall -ffp-contract=off -ffunction-sections -fdata-sections \
+              -I$(PSL1GHT)/spu/include -I$(PS3_DIR)/spu
+SPU_PROGRAMS := spu_mixer spu_vertices
+SPU_OBJS     := $(patsubst %,$(BUILD)/spu/%.bin.o,$(SPU_PROGRAMS))
+
+$(BUILD)/spu/%.elf: $(PS3_DIR)/spu/%.c $(wildcard $(PS3_DIR)/spu/*.h)
+	@mkdir -p $(dir $@)
+	@echo "SPU $<"
+	@$(SPU_CC) $(SPU_CFLAGS) -Wl,--gc-sections -s $< -L$(PSL1GHT)/spu/lib -lsputhread -o $@
+
+# bin2s names the data after the file: spu_mixer.elf is spu_mixer_elf[]
+$(BUILD)/spu/%.bin.o: $(BUILD)/spu/%.elf
+	@echo "BIN2S $<"
+	@$(BIN2S) -a 64 $< | $(PREFIX)as -o $@
+
+.PRECIOUS: $(BUILD)/spu/%.elf
 
 # ---------- the program
 
@@ -201,7 +227,7 @@ all: $(BUILD)/$(TARGET).elf
 
 # the host objects come first, before libc, so ps3_setjmp.o replaces its setjmp
 ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) $(MBEDTLS_OBJS) \
-           $(GAME_OBJS)
+           $(SPU_OBJS) $(GAME_OBJS)
 
 $(BUILD)/$(TARGET).elf: $(ALL_OBJS)
 	@echo "LD $@"
@@ -220,7 +246,7 @@ $(BUILD)/obj/%.o: %.S
 # the G0 bring-up test, without the game: build/ps3/halo_ps3_bringup.elf (bringup-self: its EBOOT.BIN)
 BRINGUP_OBJS := $(BUILD)/obj/$(PS3_DIR)/bringup/ps3_bringup.o \
                 $(filter-out %/ps3_main.o %/ps3_host.o %/ps3_posix.o %/ps3_gpu.o %/ps3_rsx_asm.o %/ps3_rsx_vp.o \
-                %/ps3_rsx_fp.o,$(HOST_OBJS))
+                %/ps3_rsx_fp.o %/ps3_spu.o,$(HOST_OBJS))
 
 $(BUILD)/$(TARGET)_bringup.elf: $(BRINGUP_OBJS)
 	@echo "LD $@"

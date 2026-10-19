@@ -2,6 +2,7 @@
 ps3gl. One thread calls it at a time: the Direct3D thread, or the game's while that one is idle (d3d8_rsx.c). */
 
 #include "ps3_gpu.h"
+#include "ps3_spu.h"
 #include "ps3_system.h"
 #include "ps3_timers.h"
 #include "ps3_video.h"
@@ -10,6 +11,7 @@ ps3gl. One thread calls it at a time: the Direct3D thread, or the game's while t
 #include <string.h>
 #include <unistd.h>
 
+#include <ppu-asm.h>
 #include <rsx/rsx.h>
 #include <rsx/gcm_sys.h>
 
@@ -43,7 +45,13 @@ ps3gl. One thread calls it at a time: the Direct3D thread, or the game's while t
 /* the RSX's time at each split of the frame (ps3_gpu_timestamp): report slots, three frames' worth (the
 reports of the frame before last are read) */
 #define TIMESTAMP_REPORT_BASE 256
-#define TIMESTAMP_PARTS 32
+#define TIMESTAMP_PARTS 48
+/* the stamped draws (ps3_gpu_draw_stamps): one frame's in DRAW_STAMP_FRAMES, after the timestamps' slots; the key
+of a span's first stamp */
+#define DRAW_STAMP_REPORT_BASE 512
+#define DRAW_STAMPS 480
+#define DRAW_STAMP_FRAMES 8
+#define DRAW_STAMP_START 0xffff
 /* each report holds the RSX's time; the Z-pass type as nouveau's NV40 timestamps (rsxSetTimeStamp's type 0x10 and
 misplaced word stopped the RSX on hardware) */
 #define REPORT_TIMESTAMP GCM_ZPASS_PIXEL_CNT
@@ -185,14 +193,25 @@ static struct
 static uint32_t program_clock;
 static unsigned overlay_events;
 
-/* the parts stamped in each of three frames, in order */
+/* the parts stamped in each of three frames, in order, with the draws since the stamp before; the draws so far */
 static struct
 {
-	uint8_t parts[TIMESTAMP_PARTS];
+	uint16_t parts[TIMESTAMP_PARTS];
+	uint32_t draws[TIMESTAMP_PARTS];
 	uint32_t count;
 } stamps[3];
+static uint32_t part_draws;
+/* the stamped frame's draws in order, by key; the frame; whether a span is on */
+static struct
+{
+	uint16_t keys[DRAW_STAMPS];
+	uint32_t count;
+	uint32_t frame;
+	int on;
+} draw_stamps;
 
 static void timestamps_read(void);
+static void draw_stamps_read(void);
 
 /* (the G8 diagnostic) the RSX writes the checkpoint's number once it has taken the commands before it (the command
 label) and once it has finished them (the back-end label) */
@@ -328,10 +347,28 @@ static int frame_finished(uint32_t frame)
 	return (int32_t)(*frame_label - frame) >= 0;
 }
 
-/* all the commands so far, done */
+/* all the commands so far, done; each flush comes after the SPU's conversions that its draws read */
 static void finish(void)
 {
+	ps3_spu_vertices_wait();
 	rsxFinish(context, ++finish_reference);
+}
+
+/* librsx's call through the context's callback (a 32-bit descriptor) */
+extern s32 rsxContextCallback(gcmContextData *context, u32 count);
+
+static gcmContextCallback system_callback, own_callback;
+
+/* the system's callback sends a full segment of the command buffer to the RSX: the SPU's conversions first */
+static s32 segment_flush(gcmContextData *data, u32 count)
+{
+	s32 result;
+
+	ps3_spu_vertices_wait();
+	data->callback = system_callback;
+	result = rsxContextCallback(data, count);
+	data->callback = own_callback;
+	return result;
 }
 
 static void deferred_frees_run(int all)
@@ -963,6 +1000,7 @@ static void draw_begin(void)
 		vertex_cache_dirty = 0;
 	}
 	statistics.draws++;
+	part_draws++;
 }
 
 void ps3_gpu_draw(uint32_t primitive, uint32_t first, uint32_t count)
@@ -1179,6 +1217,7 @@ static void frame_begin(void)
 		ps3_timer_add(_ps3_timer_rsx_wait, span);
 	}
 	timestamps_read();
+	draw_stamps_read();
 	deferred_frees_run(0);
 	caches_invalidate();
 	/* an overlay of the system's (the XMB in the game) may use the vertex program slots */
@@ -1202,6 +1241,7 @@ void ps3_gpu_wait_idle(void)
 
 	if (!ready)
 		return;
+	ps3_spu_vertices_wait();
 	rsxSetWriteBackendLabel(context, IDLE_LABEL, ++idle_reference);
 	rsxFlushBuffer(context);
 	start = ps3_time_seconds();
@@ -1224,9 +1264,41 @@ void ps3_gpu_timestamp(int part)
 	if (ready && stamps[set].count < TIMESTAMP_PARTS)
 	{
 		rsxSetReport(context, REPORT_TIMESTAMP, TIMESTAMP_REPORT_BASE + set * TIMESTAMP_PARTS + stamps[set].count);
-		stamps[set].parts[stamps[set].count++] = (uint8_t)part;
+		stamps[set].draws[stamps[set].count] = part_draws;
+		stamps[set].parts[stamps[set].count++] = (uint16_t)part;
+		part_draws = 0;
 		checkpoint(_checkpoint_timestamp);
 	}
+}
+
+void ps3_gpu_draw_stamps(int on)
+{
+	draw_stamps.on = 0;
+	/* one frame's stamps at a time, read once the RSX has finished it */
+	if (!ready || !on || frame_index % DRAW_STAMP_FRAMES || (draw_stamps.count && draw_stamps.frame != frame_index) ||
+		draw_stamps.count >= DRAW_STAMPS)
+	{
+		return;
+	}
+	draw_stamps.frame = frame_index;
+	rsxSetReport(context, REPORT_TIMESTAMP, DRAW_STAMP_REPORT_BASE + draw_stamps.count);
+	draw_stamps.keys[draw_stamps.count++] = DRAW_STAMP_START;
+	draw_stamps.on = 1;
+	checkpoint(_checkpoint_timestamp);
+}
+
+void ps3_gpu_draw_stamp(uint16_t key)
+{
+	if (!draw_stamps.on)
+		return;
+	if (draw_stamps.count >= DRAW_STAMPS)
+	{
+		ps3_draw_stamp_dropped++;
+		return;
+	}
+	rsxSetReport(context, REPORT_TIMESTAMP, DRAW_STAMP_REPORT_BASE + draw_stamps.count);
+	draw_stamps.keys[draw_stamps.count++] = key;
+	checkpoint(_checkpoint_timestamp);
 }
 
 static void (*stop_hook)(void);
@@ -1254,7 +1326,10 @@ static void timestamps_read(void)
 		uint64_t now = gcmGetTimeStamp(TIMESTAMP_REPORT_BASE + set * TIMESTAMP_PARTS + index);
 
 		if (index)
+		{
 			ps3_rsx_timers[stamps[set].parts[index]] += now > previous ? now - previous : 0;
+			ps3_rsx_draws[stamps[set].parts[index]] += stamps[set].draws[index];
+		}
 		else
 			first = now;
 		previous = now;
@@ -1265,6 +1340,30 @@ static void timestamps_read(void)
 		ps3_rsx_frames++;
 	}
 	stamps[set].count = 0;
+}
+
+/* the stamped frame's draws, once the RSX has finished it: each from the stamp before (a span's first starts it) */
+static void draw_stamps_read(void)
+{
+	uint64_t previous = 0;
+	uint32_t index;
+
+	if (!draw_stamps.count || frame_index - draw_stamps.frame < 2)
+		return;
+	for (index = 0; index < draw_stamps.count; index++)
+	{
+		uint64_t now = gcmGetTimeStamp(DRAW_STAMP_REPORT_BASE + index);
+		uint16_t key = draw_stamps.keys[index];
+
+		if (key != DRAW_STAMP_START && key < PS3_DRAW_STAMP_KEYS)
+		{
+			ps3_draw_stamp_nanoseconds[key] += now > previous ? now - previous : 0;
+			ps3_draw_stamp_draws[key]++;
+		}
+		previous = now;
+	}
+	ps3_draw_stamp_frames++;
+	draw_stamps.count = 0;
 }
 
 void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height)
@@ -1284,6 +1383,8 @@ void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t h
 	/* the RSX writes it once this frame's draws are done (a command label can come early: ioq3) */
 	rsxSetWriteBackendLabel(context, FRAME_LABEL, frame_index);
 	checkpoint(_checkpoint_frame_label);
+	/* (its flush) */
+	ps3_spu_vertices_wait();
 	ps3_video_end_frame();
 	checkpoint(_checkpoint_flip);
 	if (frame_index % STATISTICS_FRAMES == 0)
@@ -1304,6 +1405,7 @@ void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t h
 int ps3_gpu_initialize(void)
 {
 	gcmConfiguration configuration;
+	gcmContextCallback flush = segment_flush;
 
 	if (ready)
 		return 0;
@@ -1314,6 +1416,17 @@ int ps3_gpu_initialize(void)
 		ps3_log_printf("[gpu] no RSX context: nothing is drawn\n");
 		return -1;
 	}
+	/* the 32-bit descriptor the system calls (ppu-asm.h); once: a second hook would call itself */
+	own_callback = (gcmContextCallback)__get_opd32(flush);
+	if (context->callback && context->callback != own_callback)
+	{
+		system_callback = context->callback;
+		context->callback = own_callback;
+	}
+	ps3_log_printf("[gpu] the command buffer's segment: 0x%08x to 0x%08x (%u bytes), at 0x%08x; the system's callback "
+		"0x%08x after the SPU's conversions\n", (unsigned)context->begin, (unsigned)context->end,
+		(unsigned)((context->end - context->begin) * sizeof(u32)), (unsigned)context->current,
+		(unsigned)(uintptr_t)system_callback);
 	gcmGetConfiguration(&configuration);
 	/* PSL1GHT's heap (librsx mm.c) is all of it but 4 KB */
 	rsx_memory.local_size = configuration.localSize - 4096;

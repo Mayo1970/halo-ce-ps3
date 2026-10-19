@@ -4,6 +4,7 @@ thread keeps the display flipping for the XMB: blue running, green stopped, red 
 #include "ps3_audio.h"
 #include "ps3_gpu.h"
 #include "ps3_host.h"
+#include "ps3_spu.h"
 #include "ps3_system.h"
 #include "ps3_video.h"
 
@@ -98,6 +99,7 @@ static void memory_heartbeat(void)
 	ps3_log_printf("[mem] t=%.0fs main: %.1f MB free (lowest %.1f at t=%.0fs) of %.1f; Xbox window %u MB (peak %u); "
 		"heap %.1f MB, %.1f in use\n", now, available / megabyte, lowest / megabyte, lowest_time, total / megabyte,
 		(unsigned)window, (unsigned)window_peak, heap.arena / megabyte, heap.uordblks / megabyte);
+	ps3_heap_log();
 	ps3_gpu_memory_usage(&rsx);
 	if (!rsx.heap)
 		return;
@@ -201,12 +203,13 @@ static void display_stop(void)
 	}
 }
 
-/* the audio port and the RSX stop before the process ends, as at the bring-up test's exit */
+/* the audio port, the SPUs and the RSX stop before the process ends, as at the bring-up test's exit */
 void ps3_host_exit(int status)
 {
 	ps3_log_printf("[ps3] exit %d\n", status);
 	ps3_gpu_stop_drawing();
 	ps3_audio_shutdown();
+	ps3_spu_stop();
 	display_stop();
 	ps3_system_shutdown();
 	sysProcessExit(status);
@@ -280,6 +283,7 @@ int main(int argc, char *argv[])
 	ps3_log_printf("[ps3] the game returned %d\n", result);
 
 	ps3_audio_shutdown();
+	ps3_spu_stop();
 	display_stop();
 	ps3_system_shutdown();
 	return result;
