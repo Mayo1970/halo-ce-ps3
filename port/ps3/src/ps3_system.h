@@ -27,6 +27,8 @@ int ps3_memory_user(uint32_t *total, uint32_t *available);
 /* the free user memory at its lowest: the display thread samples it (ps3_main.c) */
 void ps3_memory_sample(void);
 void ps3_memory_lowest(uint32_t *bytes, double *seconds);
+/* the heap log (ps3_heap.c): newlib's heap's growths and the allocations of 64 KB or more since the last call */
+void ps3_heap_log(void);
 
 double ps3_time_seconds(void);
 

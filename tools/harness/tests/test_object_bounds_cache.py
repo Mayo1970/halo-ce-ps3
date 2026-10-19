@@ -1,7 +1,5 @@
-"""Collision's real object loop over a fake crowded world gathers the same features with the object bounds cache.
-
-    python tools/harness/tests/test_object_bounds_cache.py     # the cases, then how fast the cache is
-"""
+"""Collision's real object loops over a fake crowded world give the same results with the object bounds cache.
+python tools/harness/tests/test_object_bounds_cache.py runs the cases, then shows how fast the cache is."""
 
 import sys
 from pathlib import Path
@@ -11,12 +9,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, enum_with, function, inline, mutated, read, run  # noqa: E402
 
-CASES = ["identical", "moving", "detects-stale", "invalidated"]
+CASES = ["identical", "moving", "detects-stale", "invalidated", "vector", "vector-moving", "vector-detects-stale",
+         "vector-invalidated"]
 
 # a fault in the cache, and the case that must catch it
 NEGATIVE_CONTROLS = {
     "ignores-invalidation": (("bounds->epoch == object_bounds_epoch &&", ""), "invalidated"),
     "drops-the-query-radius": (("bounds->radius + radius", "bounds->radius"), "identical"),
+    "vector-ignores-invalidation": ((" && bounds->epoch == object_bounds_epoch;", ";"), "vector-invalidated"),
+    "vector-leaves-out-nothing": (("!fast_vector_intersects_sphere(point, vector, &bounds->center, bounds->radius)",
+                                   "FALSE"), "vector"),
+    "vector-drops-the-overflow": (("iterator->count = NONE;\n\t\treturn FALSE;", "return TRUE;"), "vector-invalidated"),
 }
 
 
@@ -33,6 +36,8 @@ def under_test(fault=None):
     real_math = read("source/math/real_math.h")
     text = "".join(inline(real_math, helper) + "\n"
                    for helper in ("vector_from_points3d", "magnitude_squared3d", "distance_squared3d", "point_in_sphere"))
+    text += function(read("source/math/real_math.c"), "fast_vector_intersects_sphere") + "\n"
+    text += read("port/linux/game/object_bounds_cache.h") + "\n"
     cache = read("port/linux/game/object_bounds_cache.c")
     cache = cache[cache.rindex("#include"):].split("\n", 1)[1]
     text += (mutated(cache, *fault) if fault else cache) + "\n"

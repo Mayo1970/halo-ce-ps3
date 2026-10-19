@@ -1,11 +1,5 @@
-/*
-OBJECT_BOUNDS_CACHE.C (test)
-
-Collision's real object loop (collisions.c) over a fake crowded world, with and
-without the object bounds cache: the features gathered, in order, must be the
-same. test_object_bounds_cache.py takes the enums (enums.inc) and the code
-(under_test.inc) from the sources.
-*/
+/* OBJECT_BOUNDS_CACHE.C (test): collision's real object loops over a fake crowded world give the same results with the
+object bounds cache. test_object_bounds_cache.py takes the enums and the code from the sources */
 
 #include "harness.h"
 #include "enums.inc"
@@ -254,6 +248,73 @@ static boolean same_features(void)
 	return with == run_queries_without_cache();
 }
 
+/* the segments of the vector tests: through and around the crowd */
+enum { SEGMENTS = 3000 };
+static struct { real_point3d point; real_vector3d vector; } segments[SEGMENTS];
+static void build_segments(void)
+{
+	int index;
+
+	for (index = 0; index < SEGMENTS; index++)
+	{
+		real extent = index % 3 ? 4.0f : 20.0f;
+
+		segments[index].point.x = random_real(15.0f - extent, 15.0f + extent);
+		segments[index].point.y = random_real(15.0f - extent, 15.0f + extent);
+		segments[index].point.z = random_real(0.0f, 2.0f);
+		segments[index].vector.i = random_real(-10.0f, 10.0f);
+		segments[index].vector.j = random_real(-10.0f, 10.0f);
+		segments[index].vector.k = random_real(-1.0f, 1.0f);
+	}
+}
+
+static boolean own_miss(long object_index, int segment)
+{
+	struct object_datum const *object = object_get(object_index);
+
+	return !fast_vector_intersects_sphere(&segments[segment].point, &segments[segment].vector,
+		&object->object.bounding_sphere_center, object->object.bounding_sphere_radius);
+}
+
+/* each segment and cluster: the objects given come in the cluster's order, each left out misses itself, and if known
+(every copy current) none given misses; missed: those left out; overflowed: the clusters past the iterator's room */
+static long vector_disagreements(boolean known, long *missed, long *overflowed)
+{
+	static long given[OBJECTS];
+	long disagreements = 0, reference, object_index;
+	int segment, cluster;
+
+	*missed = *overflowed = 0;
+	for (segment = 0; segment < SEGMENTS; segment++)
+	{
+		for (cluster = 0; cluster < CLUSTERS; cluster++)
+		{
+			struct object_bounds_vector_iterator bounds;
+			long count = 0, matched = 0;
+
+			for (object_index = object_bounds_cache_first_vector(&bounds, (short)cluster, &segments[segment].point,
+				&segments[segment].vector); object_index != NONE; object_index = object_bounds_cache_next_vector(&bounds))
+			{
+				if (count < OBJECTS)
+					given[count++] = object_index;
+			}
+			*overflowed += bounds.count == NONE;
+			for (object_index = cluster_get_first_collideable_object(&reference, (short)cluster); object_index != NONE;
+				object_index = cluster_get_next_collideable_object(&reference))
+			{
+				boolean was_given = matched < count && given[matched] == object_index;
+
+				matched += was_given;
+				*missed += !was_given;
+				if (was_given ? known && own_miss(object_index, segment) : !own_miss(object_index, segment))
+					disagreements++;
+			}
+			disagreements += matched != count;
+		}
+	}
+	return disagreements;
+}
+
 static double seconds(unsigned long (*queries)(void))
 {
 	struct timespec start, end;
@@ -272,6 +333,7 @@ int main(int argc, char **argv)
 
 	build_world();
 	build_queries();
+	build_segments();
 	CASE("identical")
 	{
 		tell_cache();
@@ -302,6 +364,50 @@ int main(int argc, char **argv)
 		move_some(FALSE);
 		object_bounds_cache_invalidate();
 		CHECK(same_features(), "the features differ after the cache was invalidated");
+		return 0;
+	}
+	/* the vector iterator leaves out exactly the objects whose own sphere test misses, in both of its ways */
+	CASE("vector")
+	{
+		long missed, overflowed;
+
+		tell_cache();
+		CHECK(vector_disagreements(TRUE, &missed, &overflowed) == 0, "the iterator differs from the objects' own tests");
+		CHECK(missed > 10000, "only %ld objects left out: the segments hardly test the copies", missed);
+		CHECK(overflowed > 0, "no cluster had more objects to give than the iterator holds: its list walk is not tested");
+		return 0;
+	}
+	CASE("vector-moving")
+	{
+		long missed, overflowed;
+
+		tell_cache();
+		move_some(TRUE);
+		move_some(TRUE);
+		CHECK(vector_disagreements(TRUE, &missed, &overflowed) == 0, "the iterator differs after objects moved");
+		return 0;
+	}
+	/* the comparison can fail: objects moved behind the cache's back */
+	CASE("vector-detects-stale")
+	{
+		long missed, overflowed;
+
+		tell_cache();
+		move_some(FALSE);
+		CHECK(vector_disagreements(FALSE, &missed, &overflowed) > 0,
+			"stale copies left out what the objects leave out: the comparison sees nothing");
+		return 0;
+	}
+	/* a replaced game state: no copy is known, so every object is given and tested itself */
+	CASE("vector-invalidated")
+	{
+		long missed, overflowed;
+
+		tell_cache();
+		move_some(FALSE);
+		object_bounds_cache_invalidate();
+		CHECK(vector_disagreements(FALSE, &missed, &overflowed) == 0 && missed == 0,
+			"%ld objects left out after the invalidation", missed);
 		return 0;
 	}
 	/* not a check: how long the queries take without and with the cache */

@@ -22,11 +22,30 @@ uint64_t ps3_collision_function_timers[PS3_COLLISION_FUNCTIONS];
 uint32_t ps3_collision_function_calls[PS3_COLLISION_FUNCTIONS];
 uint32_t ps3_collision_nodes[PS3_COLLISION_FUNCTIONS];
 uint32_t ps3_collision_objects;
+uint64_t ps3_los_function_timers[PS3_COLLISION_FUNCTIONS];
+uint32_t ps3_los_function_calls[PS3_COLLISION_FUNCTIONS];
+uint32_t ps3_los_nodes[PS3_COLLISION_FUNCTIONS];
+uint32_t ps3_los_objects;
+uint32_t ps3_los_leaves;
+uint32_t ps3_los_clusters;
+uint64_t ps3_los_loop_time;
+uint64_t ps3_los_test_time;
+uint32_t ps3_los_candidates;
+uint32_t ps3_los_walked;
+uint32_t ps3_bounds_walked;
+uint32_t ps3_bounds_read;
+uint32_t ps3_los_read;
 uint32_t ps3_obstruction_calls;
 uint32_t ps3_obstruction_computed;
 uint64_t ps3_rsx_timers[_ps3_timer_count];
 uint64_t ps3_rsx_frame_nanoseconds;
 uint32_t ps3_rsx_frames;
+uint32_t ps3_rsx_draws[_ps3_timer_count];
+uint64_t ps3_draw_stamp_nanoseconds[PS3_DRAW_STAMP_KEYS];
+uint32_t ps3_draw_stamp_draws[PS3_DRAW_STAMP_KEYS];
+uint32_t ps3_draw_stamp_frames;
+uint32_t ps3_draw_stamp_dropped;
+void (*ps3_timers_shaders_log)(void);
 
 /* the game's global_collision_user_names (its "????" as "unknown") and global_collision_function_names
 (collision_usage.c) */
@@ -40,6 +59,100 @@ static const char *const collision_function_names[PS3_COLLISION_FUNCTIONS] =
 	"vector-structure", "vector-objects", "features-in-sphere", "model-vector", "object-bsp-vector",
 	"structure-bsp-vector", "object-bsp-sphere", "structure-bsp-sphere",
 };
+/* the game's actions (actors.h), as the timers from _ps3_timer_action_none */
+static const char *const action_names[] =
+{
+	"none", "sleep", "alert", "fight", "flee", "uncover", "guard", "search", "wait", "vehicle", "charge", "obey",
+	"converse", "avoid",
+};
+/* the transparent groups' shader types, as the timers from _ps3_timer_transparent_effect */
+static const char *const transparent_names[] =
+{
+	"effect", "model", "generic", "chicago", "water", "glass", "meter", "plasma", "other",
+};
+/* the specular part's splits, as the timers from _ps3_timer_specular_lights */
+static const char *const specular_names[] =
+{
+	"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog",
+};
+
+/* the AI's lines: line of sight (ai.c, with its rays' collision parts), action control by action, the move */
+static void ai_log(double tick_scale, const double *k)
+{
+	char line[1024];
+	unsigned long length;
+	double ticks = ps3_timer_game_ticks ? (double)ps3_timer_game_ticks : 1.0;
+	uint32_t first_rays = ps3_timer_counts[_ps3_timer_los_first_ray];
+	uint32_t avoidance_calls = ps3_timer_counts[_ps3_timer_move_avoidance];
+	int action;
+
+	/* the collision functions: 0 vector-structure, 1 vector-objects, 3 model-vector, 4 and 5 the bsp vectors */
+	ps3_log_printf("[time] ai line of sight, ms a tick: total %.2f, calls %.1f, with a ray %.1f; first ray %.2f, "
+		"fog %.2f, mode rays %.2f, rest %.2f; rays %.1f, first ray length %.1f; structure %.2f (bsp %.2f, bsp nodes "
+		"%.0f), objects %.2f (models %.2f, object bsps %.2f, object bsp nodes %.0f); leaves %.1f, clusters %.1f, "
+		"objects tested %.1f\n", k[_ps3_timer_los_total], ps3_timer_counts[_ps3_timer_los_total] / ticks,
+		first_rays / ticks, k[_ps3_timer_los_first_ray], k[_ps3_timer_los_fog], k[_ps3_timer_los_mode_rays],
+		k[_ps3_timer_los_total] - k[_ps3_timer_los_first_ray] - k[_ps3_timer_los_fog] - k[_ps3_timer_los_mode_rays],
+		ps3_collision_tests[2] / ticks, first_rays ? ps3_timer_counts[_ps3_timer_los_length] / 100.0 / first_rays : 0.0,
+		ps3_los_function_timers[0] * tick_scale, ps3_los_function_timers[5] * tick_scale, ps3_los_nodes[5] / ticks,
+		ps3_los_function_timers[1] * tick_scale, ps3_los_function_timers[3] * tick_scale,
+		ps3_los_function_timers[4] * tick_scale, ps3_los_nodes[4] / ticks, ps3_los_leaves / ticks,
+		ps3_los_clusters / ticks, ps3_los_objects / ticks);
+	/* the loop holds the iterator (the copies' walk or kept block, and their test) and the tests */
+	ps3_log_printf("[time] ai line of sight objects, ms a tick: loop %.2f, tests %.2f, iterator %.2f; walked %.1f, "
+		"read from kept blocks %.1f, passed %.1f, tested %.1f\n", ps3_los_loop_time * tick_scale,
+		ps3_los_test_time * tick_scale, (ps3_los_loop_time - ps3_los_test_time) * tick_scale, ps3_los_walked / ticks,
+		ps3_los_read / ticks, ps3_los_candidates / ticks, ps3_los_objects / ticks);
+	length = (unsigned long)snprintf(line, sizeof(line), "[time] action control, ms a tick (calls a tick):");
+	for (action = 0; action <= _ps3_timer_action_avoid - _ps3_timer_action_none && length < sizeof(line); action++)
+	{
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f)", action ? "," : "",
+			action_names[action], k[_ps3_timer_action_none + action],
+			ps3_timer_counts[_ps3_timer_action_none + action] / ticks);
+	}
+	ps3_log_printf("%s\n", line);
+	ps3_log_printf("[time] ai move, ms a tick (calls a tick): vector avoidance %.2f (%.1f), movement %.2f (%.1f; "
+		"pathfinding location %.2f, line test %.2f), firing positions %.2f, rest %.2f; path refreshes %.2f (%.1f), "
+		"path builds %.2f (%.1f)\n", k[_ps3_timer_move_avoidance], ps3_timer_counts[_ps3_timer_move_avoidance] / ticks,
+		k[_ps3_timer_move_movement], ps3_timer_counts[_ps3_timer_move_movement] / ticks, k[_ps3_timer_move_location],
+		k[_ps3_timer_move_line], k[_ps3_timer_move_firing_positions], k[_ps3_timer_actor_move] -
+		k[_ps3_timer_move_avoidance] - k[_ps3_timer_move_movement] - k[_ps3_timer_move_firing_positions],
+		k[_ps3_timer_path_refresh], ps3_timer_counts[_ps3_timer_path_refresh] / ticks, k[_ps3_timer_path_build],
+		ps3_timer_counts[_ps3_timer_path_build] / ticks);
+	ps3_log_printf("[time] ai paths, ms a tick (calls a tick): setup %.2f (%.1f), search %.2f (%.1f), nodes a search "
+		"%.1f, path made %.2f (%.1f), flying %.2f (%.1f), cached %.2f (%.1f)\n", k[_ps3_timer_path_setup],
+		ps3_timer_counts[_ps3_timer_path_setup] / ticks, k[_ps3_timer_path_search],
+		ps3_timer_counts[_ps3_timer_path_search] / ticks, ps3_timer_counts[_ps3_timer_path_search] ?
+		(double)ps3_timer_counts[_ps3_timer_path_nodes] / ps3_timer_counts[_ps3_timer_path_search] : 0.0,
+		k[_ps3_timer_path_make], ps3_timer_counts[_ps3_timer_path_make] / ticks, k[_ps3_timer_path_flying],
+		ps3_timer_counts[_ps3_timer_path_flying] / ticks, k[_ps3_timer_path_cached],
+		ps3_timer_counts[_ps3_timer_path_cached] / ticks);
+	ps3_log_printf("[time] ai avoidance, ms a tick (a call): setup %.2f (objects %.1f), structure tests %.2f (%.1f), "
+		"object tests %.2f (%.1f), rest %.2f; calls %.1f\n", k[_ps3_timer_avoid_setup],
+		avoidance_calls ? (double)ps3_timer_counts[_ps3_timer_avoid_setup] / avoidance_calls : 0.0,
+		k[_ps3_timer_avoid_structure],
+		avoidance_calls ? (double)ps3_timer_counts[_ps3_timer_avoid_structure] / avoidance_calls : 0.0,
+		k[_ps3_timer_avoid_objects],
+		avoidance_calls ? (double)ps3_timer_counts[_ps3_timer_avoid_objects] / avoidance_calls : 0.0,
+		k[_ps3_timer_move_avoidance] - k[_ps3_timer_avoid_setup] - k[_ps3_timer_avoid_structure] -
+		k[_ps3_timer_avoid_objects], avoidance_calls / ticks);
+	ps3_log_printf("[time] ai decisions, ms a tick (calls a tick): situation %.2f, emotion %.2f, orders %.2f, decision "
+		"loop %.2f (decide %.2f (%.1f), perform %.2f (%.1f))\n", k[_ps3_timer_actor_situation],
+		k[_ps3_timer_actor_emotion], k[_ps3_timer_actor_orders], k[_ps3_timer_actor_decision_loop],
+		k[_ps3_timer_decision_decide], ps3_timer_counts[_ps3_timer_decision_decide] / ticks,
+		k[_ps3_timer_decision_perform], ps3_timer_counts[_ps3_timer_decision_perform] / ticks);
+	/* the traverse holds the pops, the edges and their loops; the loops hold the closest points */
+	ps3_log_printf("[time] ai path search, ms a tick: reset %.2f, begin %.2f, traverse %.2f (pops %.2f, edges %.2f, "
+		"edge loops %.2f, closest points %.2f; surfaces %.1f), debug copy %.2f; path made: smoothing %.2f, "
+		"obstacles %.2f\n", k[_ps3_timer_path_reset], k[_ps3_timer_path_begin], k[_ps3_timer_path_traverse],
+		k[_ps3_timer_path_pop], k[_ps3_timer_path_edges], k[_ps3_timer_path_edge_loop], k[_ps3_timer_path_closest],
+		ps3_timer_counts[_ps3_timer_path_edges] / ticks, k[_ps3_timer_path_debug_copy], k[_ps3_timer_path_smooth],
+		k[_ps3_timer_path_obstacles]);
+	ps3_log_printf("[time] ai path smoothing, ms a tick (calls a tick): pill tests %.2f (%.1f), turning points %.2f "
+		"(%.1f), surfaces %.2f (%.1f)\n", k[_ps3_timer_smooth_pills], ps3_timer_counts[_ps3_timer_smooth_pills] / ticks,
+		k[_ps3_timer_smooth_turning], ps3_timer_counts[_ps3_timer_smooth_turning] / ticks, k[_ps3_timer_smooth_surface],
+		ps3_timer_counts[_ps3_timer_smooth_surface] / ticks);
+}
 
 /* the collision lines: by kind, then by user with its tests a frame */
 static void collision_log(uint32_t frames, double scale)
@@ -91,6 +204,8 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 	double tick_scale = ps3_timer_game_ticks ? 1000.0 / frequency / ps3_timer_game_ticks : 0.0;
 	double rsx_scale = ps3_rsx_frames ? 1.0e-6 / ps3_rsx_frames : 0.0;
 	double t[_ps3_timer_count], k[_ps3_timer_count], r[_ps3_timer_count], frame = elapsed * scale;
+	char line[1024];
+	unsigned long length;
 	int index;
 
 	for (index = 0; index < _ps3_timer_count; index++)
@@ -98,6 +213,12 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[index] = ps3_timers[index] * scale;
 		k[index] = ps3_timers[index] * tick_scale;
 		r[index] = ps3_rsx_timers[index] * rsx_scale;
+	}
+	/* the specular part is its splits' */
+	for (index = _ps3_timer_specular_lights; index <= _ps3_timer_specular_fog; index++)
+	{
+		t[_ps3_timer_window_specular] += t[index];
+		r[_ps3_timer_window_specular] += r[index];
 	}
 	ps3_log_printf("[time] %u frames, %.1f fps, %.1f ms a frame: game ticks %.1f (%.2f a frame, %.1f ms each), "
 		"render %.1f, throttle wait %.1f, present %.1f, rest %.1f\n", (unsigned)frames, 1000.0 / frame, frame,
@@ -118,6 +239,42 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		k[_ps3_timer_objects_items], k[_ps3_timer_objects_projectiles], k[_ps3_timer_objects_others],
 		k[_ps3_timer_objects_damage], k[_ps3_timer_objects_nodes], k[_ps3_timer_objects_lights],
 		k[_ps3_timer_objects_values], k[_ps3_timer_objects_activation], k[_ps3_timer_objects_cleanup]);
+	ps3_log_printf("[time] node matrices, ms a tick: orientations %.2f, overlays and blends %.2f, matrices %.2f (first "
+		"node %.2f, checks %.2f, other nodes %.2f, bounds %.2f); postprocess %.2f; %.1f calls and %.1f nodes a tick\n",
+		k[_ps3_timer_nodes_orientations], k[_ps3_timer_nodes_blends], k[_ps3_timer_nodes_root] +
+		k[_ps3_timer_nodes_checks] + k[_ps3_timer_nodes_children] + k[_ps3_timer_nodes_bounds],
+		k[_ps3_timer_nodes_root], k[_ps3_timer_nodes_checks], k[_ps3_timer_nodes_children], k[_ps3_timer_nodes_bounds],
+		k[_ps3_timer_nodes_postprocess],
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_nodes_orientations] / ps3_timer_game_ticks : 0.0,
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_nodes_children] / ps3_timer_game_ticks : 0.0);
+	ps3_log_printf("[time] particles, ms a frame: particles_update %.2f (their physics %.2f; %.1f particles, %.1f with "
+		"physics), contrails %.2f, particle systems %.2f\n", t[_ps3_timer_particles_update],
+		t[_ps3_timer_particles_physics], (double)ps3_timer_counts[_ps3_timer_particles_update] / frames,
+		(double)ps3_timer_counts[_ps3_timer_particles_physics] / frames, t[_ps3_timer_contrails_update],
+		t[_ps3_timer_particle_systems_update]);
+	ps3_log_printf("[time] point physics, ms a frame: %.2f (wind %.2f, rays %.2f); %.1f calls and %.1f rays a frame\n",
+		t[_ps3_timer_point_total], t[_ps3_timer_point_wind], t[_ps3_timer_point_rays],
+		(double)ps3_timer_counts[_ps3_timer_point_total] / frames, (double)ps3_timer_counts[_ps3_timer_point_rays] / frames);
+	ps3_log_printf("[time] ai, ms a tick: conversations %.2f, encounters %.2f, actors %.2f (general %.2f, perception %.2f, "
+		"decisions %.2f, actions %.2f, control %.2f, movement %.2f, look and combat %.2f, unit control %.2f), other %.2f; "
+		"%.1f actors a tick\n", k[_ps3_timer_ai_conversations], k[_ps3_timer_ai_encounters], k[_ps3_timer_ai_actors],
+		k[_ps3_timer_actor_general], k[_ps3_timer_actor_perception], k[_ps3_timer_actor_situation] +
+		k[_ps3_timer_actor_emotion] + k[_ps3_timer_actor_orders] + k[_ps3_timer_actor_decision_loop],
+		k[_ps3_timer_actor_actions], k[_ps3_timer_actor_clear_output] + k[_ps3_timer_actor_action_control] +
+		k[_ps3_timer_actor_communication] + k[_ps3_timer_actor_conversation], k[_ps3_timer_actor_destination] +
+		k[_ps3_timer_actor_look_movement] + k[_ps3_timer_actor_move], k[_ps3_timer_actor_look_combat],
+		k[_ps3_timer_actor_unit], k[_ps3_timer_ai_other],
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_actor_general] / ps3_timer_game_ticks : 0.0);
+	ps3_log_printf("[time] ai parts, ms a tick: control: clear output %.2f, action control %.2f, communication %.2f, "
+		"conversation %.2f; movement: destination %.2f, look %.2f, move %.2f; perception: refresh %.2f, danger zone "
+		"%.2f, props %.2f (refreshes %.2f); %.1f props and %.1f refreshes a tick\n", k[_ps3_timer_actor_clear_output],
+		k[_ps3_timer_actor_action_control], k[_ps3_timer_actor_communication], k[_ps3_timer_actor_conversation],
+		k[_ps3_timer_actor_destination], k[_ps3_timer_actor_look_movement], k[_ps3_timer_actor_move],
+		k[_ps3_timer_perception_refresh], k[_ps3_timer_perception_danger], k[_ps3_timer_perception_props],
+		k[_ps3_timer_perception_prop_refresh],
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_perception_props] / ps3_timer_game_ticks : 0.0,
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_perception_prop_refresh] / ps3_timer_game_ticks : 0.0);
+	ai_log(tick_scale, k);
 	/* a pass's parts; the objects pass's render_objects holds find, first person, lighting and models */
 	ps3_log_printf("[time] render: sound %.1f; windows: visibility %.1f, objects %.1f, lightmaps %.1f, lights %.1f, "
 		"diffuse %.1f, specular %.1f, effects %.1f, interface %.1f, end %.1f\n", t[_ps3_timer_sound],
@@ -133,6 +290,24 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		k[_ps3_timer_part_unit], k[_ps3_timer_part_biped], k[_ps3_timer_biped_turning], k[_ps3_timer_biped_moving],
 		k[_ps3_timer_biped_state], k[_ps3_timer_biped_animation], k[_ps3_timer_biped_rest], k[_ps3_timer_part_vehicle],
 		k[_ps3_timer_part_item], k[_ps3_timer_part_projectile], k[_ps3_timer_part_other]);
+	ps3_log_printf("[time] vehicles, ms a tick (calls a tick): physics %.2f (%.1f), effects %.2f, stopping %.2f, "
+		"animation %.2f (%.1f)\n", k[_ps3_timer_vehicle_physics], tick_scale ?
+		(double)ps3_timer_counts[_ps3_timer_vehicle_physics] / ps3_timer_game_ticks : 0.0, k[_ps3_timer_vehicle_effects],
+		k[_ps3_timer_vehicle_stopping], k[_ps3_timer_vehicle_animation], tick_scale ?
+		(double)ps3_timer_counts[_ps3_timer_vehicle_animation] / ps3_timer_game_ticks : 0.0);
+	ps3_log_printf("[time] physics, ms a tick (calls a tick): forces %.2f (%.1f; %.1f mass points), movement %.2f, "
+		"units' collisions %.2f, old physics %.2f (%.1f)\n", k[_ps3_timer_physics_compute], tick_scale ?
+		(double)ps3_timer_counts[_ps3_timer_physics_compute] / ps3_timer_game_ticks : 0.0, tick_scale ?
+		(double)ps3_timer_counts[_ps3_timer_physics_mass_points] / ps3_timer_game_ticks : 0.0, k[_ps3_timer_physics_move],
+		k[_ps3_timer_physics_unit_collisions], k[_ps3_timer_physics_old], tick_scale ?
+		(double)ps3_timer_counts[_ps3_timer_physics_old] / ps3_timer_game_ticks : 0.0);
+	ps3_log_printf("[time] old physics, ms a tick (a tick): location %.2f (%.1f mass points), ground %.2f, water %.2f, "
+		"antigravity probes %.2f (%.1f), move %.2f, rest %.2f\n", k[_ps3_timer_old_location], tick_scale ?
+		(double)ps3_timer_counts[_ps3_timer_old_location] / ps3_timer_game_ticks : 0.0, k[_ps3_timer_old_ground],
+		k[_ps3_timer_old_water], k[_ps3_timer_old_antigrav], tick_scale ?
+		(double)ps3_timer_counts[_ps3_timer_old_antigrav] / ps3_timer_game_ticks : 0.0, k[_ps3_timer_old_translate],
+		k[_ps3_timer_physics_old] - k[_ps3_timer_old_location] - k[_ps3_timer_old_ground] - k[_ps3_timer_old_water] -
+		k[_ps3_timer_old_antigrav] - k[_ps3_timer_old_translate]);
 	ps3_log_printf("[time] sound, ms a frame: sound_render: listener %.2f, looping %.2f, refresh %.2f, prioritize %.2f, "
 		"channels %.2f, cache %.2f; game_sound_update: environment %.2f, looping %.2f; DirectSound's lock waits %.2f; "
 		"obstruction a frame: calls %.1f, computed %.1f\n", t[_ps3_timer_sound_listener], t[_ps3_timer_sound_looping],
@@ -175,13 +350,31 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[_ps3_timer_render_first_person_draw], t[_ps3_timer_render_lighting], t[_ps3_timer_render_models],
 		t[_ps3_timer_effects_weather], t[_ps3_timer_effects_particles], t[_ps3_timer_effects_contrails],
 		t[_ps3_timer_effects_transparent], t[_ps3_timer_effects_decals], t[_ps3_timer_effects_detail]);
-	/* the draws, the flips and the RSX are the Direct3D thread's; the vertical blank is the game thread's */
+	/* the weather's visibility tests are what its update, sprites and draw leave */
+	ps3_log_printf("[time] weather, ms a frame (a frame): update %.2f (%.1f particles), visibility %.2f, sprites %.2f "
+		"(%.1f), draw %.2f\n", t[_ps3_timer_weather_update], (double)ps3_timer_counts[_ps3_timer_weather_update] / frames,
+		t[_ps3_timer_effects_weather] - t[_ps3_timer_weather_update] - t[_ps3_timer_weather_sprites] -
+		t[_ps3_timer_weather_draw], t[_ps3_timer_weather_sprites],
+		(double)ps3_timer_counts[_ps3_timer_weather_sprites] / frames, t[_ps3_timer_weather_draw]);
+	length = (unsigned long)snprintf(line, sizeof(line), "[time] transparent geometry, ms a frame (groups a frame): "
+		"sort %.2f (%.1f), begin and end %.2f; by shader:", t[_ps3_timer_transparent_sort],
+		(double)ps3_timer_counts[_ps3_timer_transparent_sort] / frames, t[_ps3_timer_transparent_begin_end]);
+	for (index = 0; index <= _ps3_timer_transparent_other - _ps3_timer_transparent_effect && length < sizeof(line);
+		index++)
+	{
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f)", index ? "," : "",
+			transparent_names[index], t[_ps3_timer_transparent_effect + index],
+			(double)ps3_timer_counts[_ps3_timer_transparent_effect + index] / frames);
+	}
+	ps3_log_printf("%s\n", line);
+	/* the draws, the flips, the RSX and the SPU are the Direct3D thread's; the vertical blank is the game thread's */
 	ps3_log_printf("[time] Direct3D thread: busy %.1f, the game thread's waits %.1f; draws: state %.1f (textures %.1f: "
-		"hash %.1f, uploads %.1f; colours %.1f), vertices %.1f, indices %.1f; waits: vblank %.1f, flip %.1f, RSX %.1f\n",
+		"hash %.1f, uploads %.1f; colours %.1f), vertices %.1f, indices %.1f; waits: vblank %.1f, flip %.1f, RSX %.1f, "
+		"SPU %.1f\n",
 		t[_ps3_timer_thread_busy], t[_ps3_timer_thread_wait], t[_ps3_timer_draw_state], t[_ps3_timer_draw_textures],
 		t[_ps3_timer_texture_hash], t[_ps3_timer_texture_upload], t[_ps3_timer_draw_colours],
 		t[_ps3_timer_draw_vertices], t[_ps3_timer_draw_indices], t[_ps3_timer_vblank_wait], t[_ps3_timer_flip_wait],
-		t[_ps3_timer_rsx_wait]);
+		t[_ps3_timer_rsx_wait], t[_ps3_timer_spu_wait]);
 	if (!ps3_rsx_frames)
 		return;
 	/* each part: the RSX's time from the split before to its own; the frame's from its first split to its last */
@@ -192,6 +385,21 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		r[_ps3_timer_window_lightmaps], r[_ps3_timer_window_lights], r[_ps3_timer_window_diffuse],
 		r[_ps3_timer_window_specular], r[_ps3_timer_window_effects], r[_ps3_timer_window_interface],
 		r[_ps3_timer_window_end], r[_ps3_timer_rsx_after], r[_ps3_timer_present]);
+	length = (unsigned long)snprintf(line, sizeof(line), "[time] specular part, ms a frame: game thread:");
+	for (index = 0; index <= _ps3_timer_specular_fog - _ps3_timer_specular_lights && length < sizeof(line); index++)
+	{
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f", index ? "," : "",
+			specular_names[index], t[_ps3_timer_specular_lights + index]);
+	}
+	for (index = 0; index <= _ps3_timer_specular_fog - _ps3_timer_specular_lights && length < sizeof(line); index++)
+	{
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f draws)",
+			index ? "," : "; RSX:", specular_names[index], r[_ps3_timer_specular_lights + index],
+			(double)ps3_rsx_draws[_ps3_timer_specular_lights + index] / ps3_rsx_frames);
+	}
+	ps3_log_printf("%s\n", line);
+	if (ps3_timers_shaders_log)
+		ps3_timers_shaders_log();
 }
 
 void ps3_timers_frame(void)
@@ -213,12 +421,28 @@ void ps3_timers_frame(void)
 	memset(ps3_collision_function_calls, 0, sizeof(ps3_collision_function_calls));
 	memset(ps3_collision_nodes, 0, sizeof(ps3_collision_nodes));
 	ps3_collision_objects = 0;
+	memset(ps3_los_function_timers, 0, sizeof(ps3_los_function_timers));
+	memset(ps3_los_function_calls, 0, sizeof(ps3_los_function_calls));
+	memset(ps3_los_nodes, 0, sizeof(ps3_los_nodes));
+	ps3_los_objects = 0;
+	ps3_los_leaves = 0;
+	ps3_los_clusters = 0;
+	ps3_los_loop_time = 0;
+	ps3_los_test_time = 0;
+	ps3_los_candidates = 0;
+	ps3_los_walked = 0;
+	ps3_los_read = 0;
 	ps3_obstruction_calls = 0;
 	ps3_obstruction_computed = 0;
 	ps3_timer_quads = 0;
 	memset(ps3_rsx_timers, 0, sizeof(ps3_rsx_timers));
 	ps3_rsx_frame_nanoseconds = 0;
 	ps3_rsx_frames = 0;
+	memset(ps3_rsx_draws, 0, sizeof(ps3_rsx_draws));
+	memset(ps3_draw_stamp_nanoseconds, 0, sizeof(ps3_draw_stamp_nanoseconds));
+	memset(ps3_draw_stamp_draws, 0, sizeof(ps3_draw_stamp_draws));
+	ps3_draw_stamp_frames = 0;
+	ps3_draw_stamp_dropped = 0;
 	ps3_timer_game_ticks = 0;
 	frames = 0;
 	/* after the log, which is not a phase */

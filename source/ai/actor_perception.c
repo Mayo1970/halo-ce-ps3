@@ -31,6 +31,24 @@ upstream halo-ce-universal copy of source/ai/actor_perception.c. */
 #include "units/vehicles.h"
 #include "units/biped_definitions.h"
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of actor_perception_update, its props and prop refreshes (port/ps3/include/ps3_timers.h) */
+#define PS3_PERCEPTION_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_PERCEPTION_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_PERCEPTION_COUNT(timer) (ps3_timer_counts[(timer)]++)
+#define PS3_PERCEPTION_REFRESH_BEGIN(span, refresh) ((span) = (refresh) ? ps3_timer_now() : 0)
+#define PS3_PERCEPTION_REFRESH_END(span) ((span) ? (ps3_timer_add(_ps3_timer_perception_prop_refresh, (span)), \
+	ps3_timer_counts[_ps3_timer_perception_prop_refresh]++) : 0)
+#else
+#define PS3_PERCEPTION_SPAN(span) ((void)0)
+#define PS3_PERCEPTION_ADD(timer, span) ((void)0)
+#define PS3_PERCEPTION_COUNT(timer) ((void)0)
+#define PS3_PERCEPTION_REFRESH_BEGIN(span, refresh) ((void)0)
+#define PS3_PERCEPTION_REFRESH_END(span) ((void)0)
+#endif
+
 /* ---------- constants */
 
 enum
@@ -5883,13 +5901,18 @@ void actor_perception_update(
 	struct prop_iterator iterator;
 	struct prop_datum *prop;
 	struct actor_position_data position;
+#ifdef HALO_PS3
+	uint64_t ps3_span, ps3_refresh;
+#endif
 
+	PS3_PERCEPTION_SPAN(ps3_span); /* port: (the timer build) */
 	if (!actor->meta.dormant)
 	{
 		if (actor->meta.timeslice)
 		{
 			actor_perception_refresh(actor_index);
 		}
+		PS3_PERCEPTION_ADD(_ps3_timer_perception_refresh, ps3_span); /* port: (the timer build) */
 
 		actor_perception_refresh_danger_zone(actor_index);
 
@@ -5990,6 +6013,7 @@ void actor_perception_update(
 			}
 		}
 	}
+	PS3_PERCEPTION_ADD(_ps3_timer_perception_danger, ps3_span); /* port: (the timer build) */
 
 	prop_iterator_new(&iterator, actor_index);
 	while ((prop = prop_iterator_next(&iterator)) != NULL)
@@ -6001,6 +6025,7 @@ void actor_perception_update(
 		boolean became_acknowledged = FALSE;
 		boolean expected_acknowledgement = FALSE;
 
+		PS3_PERCEPTION_COUNT(_ps3_timer_perception_props); /* port: (the timer build) */
 		if (prop->unit_effect_decay_ticks > 0 &&
 			--prop->unit_effect_decay_ticks == 0)
 		{
@@ -6155,6 +6180,7 @@ void actor_perception_update(
 			assert(!refresh_status || refresh_position);
 #line 6624 "source\\ai\\actor_perception.c"
 
+			PS3_PERCEPTION_REFRESH_BEGIN(ps3_refresh, refresh_position); /* port: (the timer build) */
 			if (refresh_position)
 			{
 				prop_position_refresh(
@@ -6169,6 +6195,7 @@ void actor_perception_update(
 			{
 				prop_status_refresh(actor_index, iterator.index, &position);
 			}
+			PS3_PERCEPTION_REFRESH_END(ps3_refresh); /* port: (the timer build) */
 		}
 
 		switch (prop->state)
@@ -6690,6 +6717,7 @@ void actor_perception_update(
 			}
 		}
 	}
+	PS3_PERCEPTION_ADD(_ps3_timer_perception_props, ps3_span); /* port: (the timer build) */
 
 	if (actor->target.target_prop_index != NONE)
 	{

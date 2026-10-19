@@ -1,96 +1,5 @@
-/*
-PHYSICS.C
-
-symbols in this file:
-0013FF60 0080:
-	_pin_fraction (0000)
-0013FFE0 00b0:
-	_physics_get_features_in_sphere (0000)
-00140090 0070:
-	_code_00140090 (0000)
-00140100 0110:
-	_render_debug_physics (0000)
-00140210 0100:
-	_physics_instance_new (0000)
-00140310 00a0:
-	_physics_test_point (0000)
-001403B0 0120:
-	_physics_test_vector (0000)
-001404D0 0150:
-	_code_001404d0 (0000)
-00140620 0100:
-	_code_00140620 (0000)
-00140720 0b80:
-	_physics_compute_new (0000)
-001412A0 0470:
-	_code_001412a0 (0000)
-00141710 0490:
-	_code_00141710 (0000)
-00141BA0 0180:
-	_code_00141ba0 (0000)
-00141D20 01b0:
-	_code_00141d20 (0000)
-00141ED0 07c0:
-	_physics_update_new (0000)
-00142690 1430:
-	_code_00142690 (0000)
-00143AC0 0260:
-	_physics_update (0000)
-0028BC20 008d:
-	??_C@_0IN@ODNFDOFI@mass_point?9?$DOground_material_type@ (0000)
-0028BCB0 0021:
-	??_C@_0CB@OHGIJBLL@c?3?2halo?2SOURCE?2physics?2physics?4c@ (0000)
-0028BCD4 0004:
-	__real@45ea6000 (0000)
-0028BCD8 0057:
-	??_C@_0FH@DDOACPI@unit_definition?9?$DOunit?4blip_type?$DO@ (0000)
-0028BD30 0015:
-	??_C@_0BF@GMDJIBPD@model_instance_valid?$AA@ (0000)
-0028BD48 0010:
-	??_C@_0BA@LNKGLGKJ@rotated_forward?$AA@ (0000)
-0028BD58 000b:
-	??_C@_0L@GBBDLPMF@rotated_up?$AA@ (0000)
-0028BD64 000f:
-	??_C@_0P@OGJNHPDG@up?$CB?$DNrotated_up?$AA@ (0000)
-0028BD74 0019:
-	??_C@_0BJ@GEGCJHGH@forward?$CB?$DNrotated_forward?$AA@ (0000)
-0028BD90 0004:
-	__real@364c6ce0 (0000)
-0028BD94 0004:
-	__real@34a5b36e (0000)
-0028BD98 0004:
-	__real@3b33abb1 (0000)
-0028BDA0 0008:
-	__real@3f80000000000000 (0000)
-0028BDA8 0012:
-	??_C@_0BC@MDPNAJDL@?$CGangular_velocity?$AA@ (0000)
-0028BDBC 0016:
-	??_C@_0BG@NPNNHCFI@?$CGangular_acceleration?$AA@ (0000)
-0028BDD4 0011:
-	??_C@_0BB@IHCLBKLO@?$CGlinear_velocity?$AA@ (0000)
-0028BDE8 0015:
-	??_C@_0BF@LNOJMOGI@?$CGlinear_acceleration?$AA@ (0000)
-0028BE00 001d:
-	??_C@_0BN@FOPAIIBD@instance?9?$DOphysics?9?$DOmass?$DO0?40f?$AA@ (0000)
-0028BE20 0018:
-	??_C@_0BI@HOJEHDKE@?$CGobject?9?$DOobject?4forward?$AA@ (0000)
-0028BE38 0013:
-	??_C@_0BD@JHPMDDBM@?$CGobject?9?$DOobject?4up?$AA@ (0000)
-0028BE4C 001c:
-	??_C@_0BM@EKBNDJOG@?$CGtranslational_acceleration?$AA@ (0000)
-0028BE68 000d:
-	??_C@_0N@EMPCNLII@magic_torque?$AA@ (0000)
-0028BE78 000c:
-	??_C@_0M@LNGNIFCJ@magic_force?$AA@ (0000)
-0030CEB4 002c:
-	_global_gravity (0000)
-	_global_water_density (0004)
-	_global_air_density (0008)
-	_global_physics_collision_depth (000c)
-	_depths_of_hell (0010)
-0045E01A 0001:
-	_debug_physics_disable_penetration_freeze (0000)
-*/
+/* PHYSICS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/physics/physics.c. */
 
 /* ---------- headers */
 
@@ -161,10 +70,8 @@ enum
 
 /* ---------- macros */
 
-/* January's physics.c expands point_from_line3d in place for points and
- * vectors alike; this scalar expansion preserves that inline schedule without
- * selecting the external point_from_line3d COMDAT for this object (the same
- * emitted-symbol invariant as COLLISION_POINT_FROM_LINE3D in collisions.c). */
+/* January's physics.c expands point_from_line3d in place for points and vectors alike; this expansion keeps that
+schedule without the external COMDAT (the symbol invariant of COLLISION_POINT_FROM_LINE3D in collisions.c) */
 #define PHYSICS_POINT_FROM_LINE3D(point, vector, distance, result) \
 	do \
 	{ \
@@ -176,6 +83,23 @@ enum
 		line_result[1] = line_vector[1] * line_distance + line_point[1]; \
 		line_result[2] = line_vector[2] * line_distance + line_point[2]; \
 	} while (0)
+
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of physics_update (port/ps3/include/ps3_timers.h) */
+#define PS3_PHYSICS_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_PHYSICS_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_PHYSICS_COUNT(timer, count) (ps3_timer_counts[(timer)] += (uint32_t)(count))
+#define PS3_PHYSICS_TIMED(timer, call) ({ uint64_t ps3_timed_start = ps3_timer_now(); \
+	__typeof__(call) ps3_timed_result = (call); \
+	ps3_timer_add((timer), ps3_timed_start); ps3_timer_counts[(timer)]++; ps3_timed_result; })
+#else
+#define PS3_PHYSICS_SPAN(span) ((void)0)
+#define PS3_PHYSICS_ADD(timer, span) ((void)0)
+#define PS3_PHYSICS_COUNT(timer, count) ((void)0)
+#define PS3_PHYSICS_TIMED(timer, call) (call)
+#endif
 
 /* ---------- structures */
 
@@ -200,9 +124,8 @@ struct powered_mass_point_definition
 
 #include "units/vehicle_datum.h"
 
-/* TU-local copy: no shared header declares the game globals falling-damage
- * block yet; identical complete copies live in objects/damage.c and
- * units/bipeds.c. */
+/* TU-local copy: no shared header declares the game globals' falling-damage block yet; identical copies live in
+objects/damage.c and units/bipeds.c */
 struct game_globals_falling_damage
 {
 	long unused0[2];
@@ -783,9 +706,8 @@ void physics_compute_new(
 	struct physics_definition const *physics = instance->physics;
 	real gravity = physics->gravity_scale*global_gravity;
 	short mass_point_index;
-	/* port: no more mass points than the caller's arrays hold, nor a
-	powered one the physics does not have (physics_mass_point_count,
-	physics_powered_mass_point_index) */
+	/* port: no more mass points than the caller's arrays hold, nor a powered one the physics does not have
+	(physics_mass_point_count, physics_powered_mass_point_index) */
 	short mass_point_count = physics_mass_point_count(physics);
 
 	set_real_vector3d(total_force, 0.0f, 0.0f, -physics->mass*gravity);
@@ -1662,10 +1584,8 @@ void physics_update_new(
 	return;
 }
 
-/* NonMatching: the owner-safe natural reconstruction is 0x1500 bytes with 116
- * relocations versus the January target's 0x1430 bytes and 115 relocations.
- * Its final axes predicate also falls out of line after the earlier codegen
- * divergence, so this coherent candidate is parked without schedule tuning. */
+/* NonMatching: the natural reconstruction is 0x1500 bytes, 116 relocations (January's 0x1430, 115); its final axes
+predicate falls out of line after the earlier divergence, so it is parked without schedule tuning */
 static void physics_update_old(
 	long object_index,
 	struct powered_mass_point_datum *powered_mass_points,
@@ -1690,6 +1610,9 @@ static void physics_update_old(
 	short mass_point_index;
 	/* port: (as in physics_compute_new) */
 	short mass_point_count = physics_mass_point_count(physics);
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	matrix4x3_from_point_and_vectors(
 		&world_matrix,
@@ -1798,7 +1721,10 @@ static void physics_update_old(
 				&mass_point->up);
 		}
 
+		PS3_PHYSICS_SPAN(ps3_span); /* port: (the timer build) */
 		scenario_location_from_point(&mass_point->location, &mass_point->position);
+		PS3_PHYSICS_ADD(_ps3_timer_old_location, ps3_span); /* port: (the timer build) */
+		PS3_PHYSICS_COUNT(_ps3_timer_old_location, 1); /* port: (the timer build) */
 		vector_from_points3d(&object->object.position, &mass_point->position, &mass_point->radius);
 		cross_product3d(&object->object.angular_velocity, &mass_point->radius, &mass_point->velocity);
 		add_vectors3d(
@@ -1806,10 +1732,13 @@ static void physics_update_old(
 			&mass_point->velocity,
 			&mass_point->velocity);
 
+		PS3_PHYSICS_SPAN(ps3_span); /* port: (the timer build) */
 		compute_ground_plane(object_index, mass_point, mass_point_definition);
+		PS3_PHYSICS_ADD(_ps3_timer_old_ground, ps3_span); /* port: (the timer build) */
 		mass_point->water_depth = scenario_location_water_depth(
 			&mass_point->location,
 			&mass_point->position);
+		PS3_PHYSICS_ADD(_ps3_timer_old_water, ps3_span); /* port: (the timer build) */
 
 		if (mass_point->ground_depth > 0.0f && physics->ground_depth > 0.0f)
 		{
@@ -2056,12 +1985,13 @@ static void physics_update_old(
 				struct collision_result collision;
 
 				scale_vector3d(global_down3d, probe_length, &probe_vector);
-				if (collision_test_vector(
+				/* port: (the timer build) */
+				if (PS3_PHYSICS_TIMED(_ps3_timer_old_antigrav, collision_test_vector(
 						_collision_test_for_bipeds_dead_flags,
 						&point,
 						&probe_vector,
 						object_index,
-						&collision))
+						&collision)))
 				{
 					real height = probe_length*collision.t - mass_point_definition->radius;
 					real alignment = pin_fraction(
@@ -2167,12 +2097,14 @@ static void physics_update_old(
 		new_position.x = object->object.position.x + object->object.translational_velocity.i;
 		new_position.y = object->object.position.y + object->object.translational_velocity.j;
 		new_position.z = object->object.position.z + object->object.translational_velocity.k;
+		PS3_PHYSICS_SPAN(ps3_span); /* port: (the timer build) */
 		scenario_location_from_line(
 			&new_location,
 			&object->object.location,
 			&object->object.position,
 			&new_position);
 		object_translate(object_index, &new_position, &new_location);
+		PS3_PHYSICS_ADD(_ps3_timer_old_translate, ps3_span); /* port: (the timer build) */
 
 		rotation_axis = object->object.angular_velocity;
 		angular_speed = normalize3d(&rotation_axis);
@@ -2244,15 +2176,21 @@ void physics_update(
 	real_vector3d total_force;
 	real_vector3d total_torque;
 	short powered_mass_point_index;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	if (physics->radius > 0.0f)
 	{
+		PS3_PHYSICS_SPAN(ps3_span); /* port: (the timer build) */
 		physics_update_old(
 			object_index,
 			powered_mass_points,
 			mass_points,
 			magic_force,
 			magic_torque);
+		PS3_PHYSICS_ADD(_ps3_timer_physics_old, ps3_span); /* port: (the timer build) */
+		PS3_PHYSICS_COUNT(_ps3_timer_physics_old, 1); /* port: (the timer build) */
 		return;
 	}
 
@@ -2274,12 +2212,16 @@ void physics_update(
 		}
 	}
 
+	PS3_PHYSICS_SPAN(ps3_span); /* port: (the timer build) */
 	physics_compute_new(
 		&instance,
 		powered_mass_points,
 		mass_points,
 		&total_force,
 		&total_torque);
+	PS3_PHYSICS_ADD(_ps3_timer_physics_compute, ps3_span); /* port: (the timer build) */
+	PS3_PHYSICS_COUNT(_ps3_timer_physics_compute, 1); /* port: (the timer build) */
+	PS3_PHYSICS_COUNT(_ps3_timer_physics_mass_points, physics_mass_point_count(physics)); /* port: (the timer build) */
 
 	{
 		struct vehicle_datum *vehicle = vehicle_datum_get(object_index);
@@ -2319,13 +2261,16 @@ void physics_update(
 		total_torque.k += magic_torque->k;
 	}
 
+	PS3_PHYSICS_SPAN(ps3_span); /* port: (the timer build) */
 	physics_update_new(
 		&instance,
 		powered_mass_points,
 		mass_points,
 		&total_force,
 		&total_torque);
+	PS3_PHYSICS_ADD(_ps3_timer_physics_move, ps3_span); /* port: (the timer build) */
 	physics_compute_unit_collisions(object_index);
+	PS3_PHYSICS_ADD(_ps3_timer_physics_unit_collisions, ps3_span); /* port: (the timer build) */
 
 	return;
 }

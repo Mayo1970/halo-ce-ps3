@@ -1,118 +1,5 @@
-/*
-GAME.C
-
-symbols in this file:
-00095260 0110:
-	_game_initialize (0000)
-00095370 00c0:
-	_game_dispose (0000)
-00095430 01f0:
-	_game_precache_new_map (0000)
-00095620 0020:
-	_game_map_loading_in_progress (0000)
-00095640 0080:
-	_game_unload (0000)
-000956C0 00c0:
-	_game_dispose_from_old_map (0000)
-00095780 00a0:
-	_game_frame (0000)
-00095820 00b0:
-	_remove_quitting_players_from_game (0000)
-000958D0 0110:
-	_game_tick (0000)
-000959E0 0030:
-	_game_options_new (0000)
-00095A10 0020:
-	_game_options_verify (0000)
-00095A30 0050:
-	_game_initial_pulse (0000)
-00095A80 0020:
-	_game_set_players_are_double_speed (0000)
-00095AA0 0010:
-	_game_players_are_double_speed (0000)
-00095AB0 0020:
-	_game_difficulty_level_set (0000)
-00095AD0 0010:
-	_game_difficulty_level_get (0000)
-00095AE0 0020:
-	_game_difficulty_level_get_ignore_easy (0000)
-00095B00 0030:
-	_game_set_game_variant (0000)
-00095B30 0030:
-	_game_set_game_engine_index (0000)
-00095B60 0040:
-	_game_all_quiet (0000)
-00095BA0 0140:
-	_game_safe_to_save (0000)
-00095CE0 0020:
-	_game_safe_to_speak (0000)
-00095D00 0010:
-	_game_is_cooperative (0000)
-00095D10 0010:
-	_set_random_seed (0000)
-00095D20 00d0:
-	_game_load (0000)
-00095DF0 0160:
-	_game_initialize_for_new_map (0000)
-00095F50 0060:
-	_game_set_game_variant_from_name (0000)
-0025AD18 000c:
-	??_C@_0M@OGHJLDGG@game_update?$AA@ (0000)
-0025AD24 000b:
-	??_C@_0L@GOOMCKGH@impossible?$AA@ (0000)
-0025AD30 0005:
-	??_C@_04EFOBLGJF@hard?$AA@ (0000)
-0025AD38 0007:
-	??_C@_06IKLLLDHL@normal?$AA@ (0000)
-0025AD40 0005:
-	??_C@_04EDNPHEAP@easy?$AA@ (0000)
-0025AD48 000d:
-	??_C@_0N@FEKOENDC@game?5globals?$AA@ (0000)
-0025AD58 002a:
-	??_C@_0CK@PBEAEMDE@cache_files_precache_map_loaded?$CI@ (0000)
-0025AD88 0054:
-	??_C@_0FE@OLEMLKAO@cache_files_precache_in_progress@ (0000)
-0025ADDC 0039:
-	??_C@_0DJ@FJDPKGNI@read?5the?5last?5error?5message?5for?5@ (0000)
-0025AE18 001b:
-	??_C@_0BL@KNHJNBLO@c?3?2halo?2SOURCE?2game?2game?4c?$AA@ (0000)
-0025AE34 002c:
-	??_C@_0CM@DHJPIMML@shouldn?8t?5be?5here?4?4?4?5map?5?8?$CFs?8?5do@ (0000)
-0025AE60 0015:
-	??_C@_0BF@OMFFMPBC@game_globals?9?$DOactive?$AA@ (0000)
-0025AE78 002a:
-	??_C@_0CK@HKBOLAEF@player?5?$CFx?5failed?5to?5quit?0?5wanted@ (0000)
-0025AEA8 0047:
-	??_C@_0EH@OCEAOGL@?$CB?$CCthis?5is?5broken?5and?5should?5get?5@ (0000)
-0025AEF0 0031:
-	??_C@_0DB@DCHNCJKB@not?5safe?5to?5save?3?5vehicle_moving@ (0000)
-0025AF24 0025:
-	??_C@_0CF@PDKCNCHK@not?5safe?5to?5save?3?5any_player_is_@ (0000)
-0025AF4C 002b:
-	??_C@_0CL@CDOGDNMO@not?5safe?5to?5save?3?5any_player_is_@ (0000)
-0025AF78 0028:
-	??_C@_0CI@POCCMPOA@not?5safe?5to?5save?3?5any_unit_is_da@ (0000)
-0025AFA0 0030:
-	??_C@_0DA@BKJKAMHL@not?5safe?5to?5save?3?5dangerous_effe@ (0000)
-0025AFD0 002e:
-	??_C@_0CO@LFBOBOC@not?5safe?5to?5save?3?5dangerous_item@ (0000)
-0025B000 0034:
-	??_C@_0DE@DKEBJNA@not?5safe?5to?5save?3?5dangerous_proj@ (0000)
-0025B034 002c:
-	??_C@_0CM@IBBKLIBO@not?5safe?5to?5save?3?5ai_enemies_can@ (0000)
-0025B060 001d:
-	??_C@_0BN@FDEBMHJB@game_options_verify?$CIoptions?$CJ?$AA@ (0000)
-0025B080 001a:
-	??_C@_0BK@NHHNPJL@?$CBgame_globals?9?$DOmap_loaded?$AA@ (0000)
-0025B09C 0016:
-	??_C@_0BG@JKMPENHK@?$CBgame_globals?9?$DOactive?$AA@ (0000)
-0025B0B4 0019:
-	??_C@_0BJ@CDJMHJAA@game_globals?9?$DOmap_loaded?$AA@ (0000)
-002DDDB0 0608:
-	_global_game_difficulty_level_names (0000)
-0043E48C 0004:
-	_game_globals (0000)
-*/
+/* GAME.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/game/game.c. */
 
 struct game_options;
 
@@ -200,15 +87,18 @@ void network_actors_drive(void);
 #include "ps3_timers.h"
 
 /* port: the timer build's splits of a tick and of a frame's game part (port/ps3/include/ps3_timers.h) */
-static uint64_t ps3_timer_game;
-#define PS3_GAME_BEGIN() (ps3_timer_game = ps3_timer_now())
+static uint64_t ps3_timer_game, ps3_timer_particles;
+#define PS3_GAME_BEGIN() (ps3_timer_game = ps3_timer_particles = ps3_timer_now())
 #define PS3_GAME_SPLIT(timer) (ps3_timer_game = ps3_timer_add((timer), ps3_timer_game))
+/* port: the particles' part split, inside its own split */
+#define PS3_PARTICLES_SPLIT(timer) (ps3_timer_particles = ps3_timer_add((timer), ps3_timer_particles))
 /* port: the time and the frames since the game's sounds last updated (game_frame) */
 static real ps3_game_sound_dt = 0.f;
 static long ps3_frames_without_game_sound = 0;
 #else
 #define PS3_GAME_BEGIN() ((void)0)
 #define PS3_GAME_SPLIT(timer) ((void)0)
+#define PS3_PARTICLES_SPLIT(timer) ((void)0)
 #endif
 
 /* ---------- structures */
@@ -358,10 +248,8 @@ void game_tick(
 		0x28D,
 		game_globals->active);
 
-	/* port: a data array gone out of order reported, and the lights made
-	again if it was theirs (game_state.c, object_lights.c), before anything
-	of the tick: a loaded game state's first tick, its scripts placing
-	actors, made the first light from it (Sentry NATIVE-7) */
+	/* port: a data array out of order reported, the lights made again if it was theirs (game_state.c, object_lights.c),
+	before the tick: a loaded game state's first tick, its scripts placing actors, made the first light (Sentry NATIVE-7) */
 	game_state_check_data_arrays();
 	lights_port_recover();
 
@@ -373,9 +261,8 @@ void game_tick(
 	PS3_GAME_SPLIT(_ps3_timer_tick_other);
 	profile_scope(game_tick_units_section, units_update();)
 	PS3_GAME_SPLIT(_ps3_timer_tick_units);
-	/* (the host's actors drive the host's units, which a client of the
-	distributed netcode has from the host: its own would fight the host's
-	positions, and could place objects of their own) */
+	/* (the host's actors drive the host's units, which a distributed-netcode client has from the host: its own would
+	fight the host's positions, and could place objects of their own) */
 	if (!network_game_distributed_client())
 		profile_scope(game_tick_ai_section, ai_update();)
 	else
@@ -389,11 +276,8 @@ void game_tick(
 		: 1.0f / TICKS_PER_SECOND;
 	profile_scope(game_tick_effects_section, effects_update(seconds_per_tick);)
 	PS3_GAME_SPLIT(_ps3_timer_tick_effects);
-	/* An antenna's chain is a simulation of the Xbox's own step, an update a
-	tick: stepped a frame at a time, its springs, its carry and its points'
-	physics act against the frames' own movement of it, and a vehicle at
-	speed swings it far wider than a tick's step does. The frames between the
-	ticks are drawn from what each tick leaves (antenna.c). */
+	/* an antenna's chain steps a tick at a time, as the Xbox's: a frame at a time, its springs and points act against the
+	frames' own movement and a vehicle at speed swings it far wider; frames between ticks draw a tick's (antenna.c) */
 	profile_scope(game_tick_antennas_section, antennas_update(seconds_per_tick);)
 	profile_scope(game_tick_first_person_section,
 		lock_global_random_seed();
@@ -404,9 +288,8 @@ void game_tick(
 	profile_scope(game_tick_game_engine_section, game_engine_update();)
 	profile_scope(game_tick_editor_section, editor_update();)
 	PS3_GAME_SPLIT(_ps3_timer_tick_other);
-	/* port: in network co-op only the host runs the scripts. A client running
-	them would place the map's actors and objects a second time and make
-	decisions that belong to the host. */
+	/* port: in network co-op only the host runs the scripts: a client running them would place the map's actors and
+	objects a second time and make decisions that belong to the host */
 	if (!(network_game_distributed_client() && network_coop_active()))
 		profile_scope(game_tick_hs_section, hs_update();)
 	PS3_GAME_SPLIT(_ps3_timer_tick_scripts);
@@ -638,9 +521,8 @@ boolean game_load(
 	struct game_options *options)
 {
 #ifdef HALO_PROFILE
-	/* port: the profiling build's recording learns of the map (every map
-	load passes here: main_new_map's and a network game's,
-	network_game_manager.c) */
+	/* port: the profiling build's recording learns of the map (every map load passes here: main_new_map's and a
+	network game's, network_game_manager.c) */
 	profile_console_map_loaded(options->map_name);
 #endif
 	match_assert(
@@ -693,11 +575,8 @@ void game_initialize_for_new_map(
 	players_initialize_for_new_map();
 	scenario_initialize_for_new_map();
 	objects_initialize_for_new_map();
-	/* nothing of the distributed netcode's carried into the new game
-	(port/linux/game/network_distributed.c), before anything of the map
-	makes an object: a client makes the map's objects, and the game type's
-	(the flags of capture the flag, game_engine_initialize_for_new_map), at
-	the host's indices, not its own objects' of the last game's */
+	/* nothing of the distributed netcode's carried into the new game (network_distributed.c) before the map makes an
+	object: a client makes the map's and the game type's objects (CTF flags) at the host's indices, not last game's */
 	network_distributed_new_game();
 	render_interpolation_reset();
 	render_initialize_for_new_map();
@@ -993,8 +872,11 @@ void game_frame(
 	collision_log_begin_period(1);
 	PS3_GAME_BEGIN();
 	particles_update(frame_dt);
+	PS3_PARTICLES_SPLIT(_ps3_timer_particles_update); /* port: (the timer build) */
 	contrails_update(frame_dt);
+	PS3_PARTICLES_SPLIT(_ps3_timer_contrails_update); /* port: (the timer build) */
 	particle_systems_update(frame_dt);
+	PS3_PARTICLES_SPLIT(_ps3_timer_particle_systems_update); /* port: (the timer build) */
 	PS3_GAME_SPLIT(_ps3_timer_frame_particles);
 	widgets_update(frame_dt);
 	PS3_GAME_SPLIT(_ps3_timer_frame_widgets);

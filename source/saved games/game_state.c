@@ -1,96 +1,5 @@
-/*
-GAME_STATE.C
-
-symbols in this file:
-001AF250 0010:
-	_dummy (0000)
-001AF260 0010:
-	_code_001af260 (0000)
-001AF270 0010:
-	_code_001af270 (0000)
-001AF280 0020:
-	_code_001af280 (0000)
-001AF2A0 0010:
-	_game_state_dispose (0000)
-001AF2B0 00b0:
-	_game_state_initialize_for_new_map (0000)
-001AF360 0010:
-	_game_state_dispose_from_old_map (0000)
-001AF370 0020:
-	_game_state_save (0000)
-001AF390 0040:
-	_game_state_revert (0000)
-001AF3D0 0040:
-	_game_state_save_to_persistent_storage (0000)
-001AF410 0070:
-	_game_state_test_persistent_storage (0000)
-001AF480 0050:
-	_game_state_save_core (0000)
-001AF4D0 0020:
-	_game_state_reverted (0000)
-001AF4F0 0160:
-	_game_state_header_valid (0000)
-001AF650 0070:
-	_game_state_allocation_record (0000)
-001AF6C0 0020:
-	_code_001af6c0 (0000)
-001AF6E0 0110:
-	_game_state_malloc (0000)
-001AF7F0 0110:
-	_game_state_gpu_malloc (0000)
-001AF900 0040:
-	_game_state_data_new (0000)
-001AF940 0040:
-	_game_state_memory_pool_new (0000)
-001AF980 0050:
-	_game_state_lruv_cache_new (0000)
-001AF9D0 00f0:
-	_game_state_try_and_load_from_persistent_storage (0000)
-001AFAC0 00a0:
-	_game_state_load_core (0000)
-001AFB60 0050:
-	_game_state_initialize (0000)
-002A7E7C 0013:
-	??_C@_0BD@BHHOKLIG@error?5writing?5?8?$CFs?8?$AA@ (0000)
-002A7E90 000b:
-	??_C@_0L@MGAFKEJL@saved?5?8?$CFs?8?$AA@ (0000)
-002A7E9C 0025:
-	??_C@_0CF@NHHJOMMA@checksum?5from?5map?5file?5doesn?8t?5m@ (0000)
-002A7EC4 0021:
-	??_C@_0CB@ELFCALCI@expected?5?$CD?$CFd?5players?5but?5got?5?$CD?$CFd@ (0000)
-002A7EE8 001d:
-	??_C@_0BN@CGADBPLM@allocation?5checksum?5mismatch?$AA@ (0000)
-002A7F08 001b:
-	??_C@_0BL@PFDNBAEN@expected?5?$CC?$CFs?$CC?5but?5got?5?$CC?$CFs?$CC?$AA@ (0000)
-002A7F24 001f:
-	??_C@_0BP@FJPMMOPC@expected?5build?5?$CD?$CFd?5but?5got?5?$CD?$CFd?$AA@ (0000)
-002A7F44 0028:
-	??_C@_0CI@KECEBGOP@c?3?2halo?2SOURCE?2saved?5games?2game_@ (0000)
-002A7F6C 0013:
-	??_C@_0BD@JHLLDANP@?$CF?540s?$CF?520s?$CF?510d?$CFs?6?$AA@ (0000)
-002A7F80 0011:
-	??_C@_0BB@DCECPIDG@d?3?2gamestate?4txt?$AA@ (0000)
-002A7F98 0041:
-	??_C@_0EB@JIJEJKFB@game_state_globals?4cpu_allocatio@ (0000)
-002A7FDC 001b:
-	??_C@_0BL@IDCLCKDD@?$CBgame_state_globals?4locked?$AA@ (0000)
-002A7FF8 000a:
-	??_C@_09KFGLKCMD@?$CB?$CIsize?$CG3?$CJ?$AA@ (0000)
-002A8008 0041:
-	??_C@_0EB@OBCPKDFA@game_state_globals?4gpu_allocatio@ (0000)
-002A804C 000b:
-	??_C@_0L@CIHKLGI@data?5array?$AA@ (0000)
-002A8058 000b:
-	??_C@_0L@HOFDEGMG@lruv?5cache?$AA@ (0000)
-002A8064 0013:
-	??_C@_0BD@OOCHHAFI@couldn?8t?5open?5?8?$CFs?8?$AA@ (0000)
-002A8078 000c:
-	??_C@_0M@NNNFMOGK@loaded?5?8?$CFs?8?$AA@ (0000)
-00316840 003c:
-	_data_00316840 (0000)
-004D27B0 0020:
-	_bss_004d27b0 (0000)
-*/
+/* GAME_STATE.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/saved games/game_state.c. */
 
 /* ---------- headers */
 
@@ -339,9 +248,8 @@ boolean game_state_port_saved_game_valid(
 	return game_state_globals.saved_game_valid;
 }
 
-/* port: stamps the revert at the current game time again, after a network
-co-op host moved its clock on past the revert (game_state_reverted
-compares the two) */
+/* port: stamps the revert at the current game time again, after a network co-op host moved its clock on past
+the revert (game_state_reverted compares the two) */
 void game_state_port_restamp_revert_time(
 	void)
 {
@@ -589,16 +497,8 @@ void *game_state_gpu_malloc(
 }
 
 
-/* ---------- port: the image of a saved game
-
-A saved game (a checkpoint's savegame.bin, a core) is the game state's
-memory as it was, read back over it: with the data arrays' pointers to
-their elements, the objects' memory pool's blocks and their references, and
-the caches' procedures in it. The file is anyone's, so before an image is
-taken, what the game state has of those is checked against what was made
-at startup (the same in every run of this build: the header's allocation
-checksum says so), and the procedures are put back. An image that fails is
-not taken. */
+/* ---------- port: the image of a saved game: a checkpoint's or core's game state read back over it, its data arrays,
+pools and caches checked first against what startup made (the same each run of this build); else not taken */
 
 enum
 {
@@ -850,11 +750,27 @@ boolean game_state_image_accept(
 		if (!valid)
 			return FALSE;
 	}
+#ifdef HALO_PS3
+	/* port: an image already put over the game state (game_state_xbox.c's checkpoint copy) is not copied onto itself */
+	if ((byte *)image != (byte *)game_state_globals.base_address)
+#endif
 	csmemcpy(game_state_globals.base_address, image, size);
 	error(_error_silent, "the saved game is taken");
 
 	return TRUE;
 }
+
+#ifdef HALO_PS3
+/* port: the game state's used parts: the CPU part's allocations from its start, the GPU part's from its end (the rest
+is never written: game_state_xbox.c's checkpoint copies only these) */
+void game_state_port_used_sizes(
+	long *cpu_size,
+	long *gpu_size)
+{
+	*cpu_size = game_state_globals.cpu_allocation_size;
+	*gpu_size = game_state_globals.gpu_allocation_size;
+}
+#endif
 
 struct data_array *game_state_data_new(
 	const char *name,
@@ -877,9 +793,8 @@ struct data_array *game_state_data_new(
 	return data;
 }
 
-/* port: a data array in order: an array (its signature, its own elements)
-made valid for the map, with an identifier to give out and counts that fit
-(data.c's data_usable) */
+/* port: a data array in order: an array (its signature, its own elements) made valid for the map, with an
+identifier to give out and counts that fit (data.c's data_usable) */
 static boolean game_state_data_array_good(
 	struct data_array const *data)
 {
@@ -901,12 +816,8 @@ static void game_state_data_arrays_new_map(
 	}
 }
 
-/* port: each tick, every data array that was in order this map and no
-longer is, reported once a map to halo.log (which a crash report carries):
-when it went wrong (between its last tick in order and this one), how, and
-what last rewrote the game state. A lights array found made for no map
-(Sentry NATIVE-7) was the first sign of it; data.c now gives out no datum
-from such an array, so this says where it came from. */
+/* port: each tick, a data array in order this map and no longer is reported once a map to halo.log (when, how,
+what last rewrote the state: a lights array made for no map, Sentry NATIVE-7, was the first sign) */
 void game_state_check_data_arrays(
 	void)
 {

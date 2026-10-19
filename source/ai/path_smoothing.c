@@ -1,38 +1,5 @@
-/*
-PATH_SMOOTHING.C
-
-symbols in this file:
-00051190 0080:
-	_surface_is_walkable (0000)
-00051210 0150:
-	_find_tangent_point (0000)
-00051360 0120:
-	_find_avoidance_point (0000)
-00051480 0220:
-	_choose_turning_point (0000)
-000516A0 0380:
-	_find_turning_point (0000)
-00051A20 0360:
-	_path_smooth (0000)
-0024EAB0 0046:
-	??_C@_0EG@DGPBJLIB@TEST_FLAG?$CIcollision_surface?9?$DOfla@ (0000)
-0024EAF8 0023:
-	??_C@_0CD@IKIHDGOB@c?3?2halo?2SOURCE?2ai?2path_smoothing@ (0000)
-0024EB20 006d:
-	??_C@_0GN@DGMBNALI@collision_edge?9?$DOvertex_indices?$FL0@ (0000)
-0024EB90 0024:
-	??_C@_0CE@JGDDFPAJ@clockwise?$DN?$DNTRUE?5?$HM?$HM?5clockwise?$DN?$DNFA@ (0000)
-0024EBB4 0012:
-	??_C@_0BC@GBNEHDPD@steps_finish_path?$AA@ (0000)
-0024EBC8 000f:
-	??_C@_0P@LBJDKFJI@smoothed_steps?$AA@ (0000)
-0024EBD8 0014:
-	??_C@_0BE@FBKMNIEA@smoothed_step_count?$AA@ (0000)
-0024EBEC 000a:
-	??_C@_09LCGCKCI@raw_steps?$AA@ (0000)
-0024EBF8 0013:
-	??_C@_0BD@DLANHJEI@raw_step_count?5?$DO?50?$AA@ (0000)
-*/
+/* PATH_SMOOTHING.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/ai/path_smoothing.c. */
 
 /* ---------- headers */
 
@@ -58,6 +25,21 @@ enum
 };
 
 /* ---------- macros */
+
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of path_smooth; a timed call gives its result (port/ps3/include/ps3_timers.h) */
+#define PS3_SMOOTH_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_SMOOTH_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)), ps3_timer_counts[(timer)]++)
+#define PS3_SMOOTH_TIMED(timer, call) ({ uint64_t ps3_timed_start = ps3_timer_now(); \
+	__typeof__(call) ps3_timed_result = (call); \
+	ps3_timer_add((timer), ps3_timed_start); ps3_timer_counts[(timer)]++; ps3_timed_result; })
+#else
+#define PS3_SMOOTH_SPAN(span) ((void)0)
+#define PS3_SMOOTH_ADD(timer, span) ((void)0)
+#define PS3_SMOOTH_TIMED(timer, call) (call)
+#endif
 
 /* ---------- structures */
 
@@ -119,9 +101,8 @@ static boolean surface_is_walkable(
 	byte breakable_surface_index;
 
 	/* (an open edge, with no surface beyond it, is in no shipped map) */
-	/* port: (NONE still is; any other index past the pathfinding surfaces, a
-	map's, is no walkable surface. The retail bsps have as many pathfinding
-	surfaces as surfaces, and every edge's surfaces are theirs) */
+	/* port: (NONE still is; any other index past the pathfinding surfaces, a map's, is no walkable surface: the retail
+	bsps have as many pathfinding surfaces as surfaces, and every edge's surfaces are theirs) */
 	/* (nor is NONE of a bsp with no pathfinding surfaces: there is no array
 	to read before) */
 	if (surface_index == NONE && pathfinding_surface_count <= 0)
@@ -388,11 +369,8 @@ static boolean find_turning_point(
 	boundary_step_count = 0;
 	while (TRUE)
 	{
-		/* port: the walk along the boundary takes no more steps than there
-		are edges, twice over for the vertex it comes from (each step depends
-		on the edge and that vertex alone, so a walk that ends never repeats
-		one; a map's edges that loop would walk forever): past that there is
-		no turning point */
+		/* port: the walk along the boundary takes no more steps than twice the edges (a step depends on its edge and the
+		vertex it comes from, so a walk that ends repeats none; a map's looping edges walked forever): then no point */
 		boundary_step_count++;
 		if (boundary_step_count > 2 * bsp->edges.count + 1)
 			return FALSE;
@@ -482,9 +460,8 @@ static boolean find_turning_point(
 		fan_step_count = 0;
 		while (TRUE)
 		{
-			/* port: and the walk around the vertex no more than there are
-			edges (as above; a map's fan that doesn't close would walk
-			forever) */
+			/* port: and the walk around the vertex no more than there are edges (as above; a map's fan that doesn't close
+			would walk forever) */
 			fan_step_count++;
 			if (fan_step_count > bsp->edges.count)
 				return FALSE;
@@ -552,6 +529,9 @@ void path_smooth(
 	real_point2d tangent_points[2];
 	real_point2d avoidance_point;
 	real_point2d known_point;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 #line 33 "c:\\halo\\SOURCE\\ai\\path_smoothing.c"
 	assert(raw_step_count > 0);
@@ -577,7 +557,8 @@ void path_smooth(
 
 			for (i = step_index; i < raw_step_count; i++)
 			{
-				if (structure_test_pill2d(
+				/* port: (the timer build) */
+				if (PS3_SMOOTH_TIMED(_ps3_timer_smooth_pills, structure_test_pill2d(
 					state->structure,
 					state->input.ignore_broken_surfaces,
 					&current_position,
@@ -586,7 +567,7 @@ void path_smooth(
 					raw_steps[i].surface_index,
 					0.3f,
 					FLAG(_path_test_pill_endpoint_near_wall_ok_bit),
-					&collision_result))
+					&collision_result)))
 				{
 					if (!collision_active)
 					{
@@ -606,22 +587,23 @@ void path_smooth(
 			if (!collision_active || collision_edge_index == NONE)
 				break;
 
-			found_clockwise = find_turning_point(
+			/* port: (the timer build) */
+			found_clockwise = PS3_SMOOTH_TIMED(_ps3_timer_smooth_turning, find_turning_point(
 				state->structure,
 				&current_position,
 				0.3f,
 				collision_edge_index,
 				TRUE,
 				state->input.ignore_broken_surfaces,
-				&clockwise_turning_point);
-			found_counterclockwise = find_turning_point(
+				&clockwise_turning_point));
+			found_counterclockwise = PS3_SMOOTH_TIMED(_ps3_timer_smooth_turning, find_turning_point(
 				state->structure,
 				&current_position,
 				0.3f,
 				collision_edge_index,
 				FALSE,
 				state->input.ignore_broken_surfaces,
-				&counterclockwise_turning_point);
+				&counterclockwise_turning_point));
 			if (!found_counterclockwise || !found_clockwise)
 				goto bail_out;
 
@@ -654,6 +636,7 @@ void path_smooth(
 
 			known_point = current_position;
 			current_position = avoidance_point;
+			PS3_SMOOTH_SPAN(ps3_span); /* port: (the timer build) */
 			current_surface_index = structure_surface_index_from_point(
 				state->structure,
 				state->input.ignore_broken_surfaces,
@@ -673,6 +656,7 @@ void path_smooth(
 				TRUE,
 				&current_position,
 				&smoothed_step->point);
+			PS3_SMOOTH_ADD(_ps3_timer_smooth_surface, ps3_span); /* port: (the timer build) */
 			smoothed_step->surface_index = current_surface_index;
 
 			if (smoothed_count >= 4)

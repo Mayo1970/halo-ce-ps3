@@ -22,6 +22,10 @@ void ps3_gpu_wait_idle(void);
 void ps3_gpu_display(uint32_t *width, uint32_t *height, int *widescreen);
 /* the RSX's time at this split of the frame, without a stall: a timestamp report, read two frames on */
 void ps3_gpu_timestamp(int part);
+/* (the timer build) the draws from here stamped (on) or not, in one frame of eight: each draw's RSX time by its key
+(ps3_draw_stamp_nanoseconds), read with the frame's timestamps */
+void ps3_gpu_draw_stamps(int on);
+void ps3_gpu_draw_stamp(uint16_t key);
 /* the thread that draws ends at stop_drawing (the process ends, or the display thread takes the RSX back) */
 void ps3_gpu_set_stop_hook(void (*hook)(void));
 void ps3_gpu_stop_drawing(void);

@@ -1,144 +1,5 @@
-/*
-VEHICLES.C
-
-symbols in this file:
-001A4E30 0010:
-	_vehicles_initialize (0000)
-001A4E40 0010:
-	_vehicles_initialize_for_new_map (0000)
-001A4E50 0010:
-	_vehicles_dispose_from_old_map (0000)
-001A4E60 0010:
-	_vehicles_dispose (0000)
-001A4E70 0030:
-	_vehicle_place (0000)
-001A4EA0 0010:
-	_vehicle_delete (0000)
-001A4EB0 0030:
-	_vehicle_causes_collision_damage (0000)
-001A4EE0 0010:
-	_vehicle_build_update (0000)
-001A4EF0 0010:
-	_vehicle_parse_update (0000)
-001A4F00 0050:
-	_vehicle_hover (0000)
-001A4F50 0020:
-	_code_001a4f50 (0000)
-001A4F70 0030:
-	_vehicle_is_flipped (0000)
-001A4FA0 00a0:
-	_code_001a4fa0 (0000)
-001A5040 0020:
-	_set_real_quaternion (0000)
-001A5060 00b0:
-	_vehicle_reset (0000)
-001A5110 0070:
-	_vehicle_new (0000)
-001A5180 0400:
-	_vehicle_preprocess_node_orientations (0000)
-001A5580 0100:
-	_vehicle_accelerate (0000)
-001A5680 0060:
-	_vehicle_render_debug (0000)
-001A56E0 0130:
-	_vehicle_find_pathfinding_surface_index (0000)
-001A5810 00d0:
-	_code_001a5810 (0000)
-001A58E0 0150:
-	_code_001a58e0 (0000)
-001A5A30 0110:
-	_code_001a5a30 (0000)
-001A5B40 0310:
-	_code_001a5b40 (0000)
-001A5E50 0440:
-	_code_001a5e50 (0000)
-001A6290 0300:
-	_code_001a6290 (0000)
-001A6590 0180:
-	_code_001a6590 (0000)
-001A6710 0200:
-	_code_001a6710 (0000)
-001A6910 0290:
-	_code_001a6910 (0000)
-001A6BA0 0220:
-	_code_001a6ba0 (0000)
-001A6DC0 0320:
-	_code_001a6dc0 (0000)
-001A70E0 01d0:
-	_code_001a70e0 (0000)
-001A72B0 0520:
-	_vehicle_export_function_values (0000)
-001A77D0 0180:
-	_vehicle_moving_near_any_player (0000)
-001A7950 0170:
-	_vehicle_stuck (0000)
-001A7AC0 03a0:
-	_code_001a7ac0 (0000)
-001A7E60 09a0:
-	_code_001a7e60 (0000)
-001A8800 0070:
-	_code_001a8800 (0000)
-001A8870 0910:
-	_vehicle_update (0000)
-002A6200 000f:
-	??_C@_0P@GMMIJBCG@vehicle_update?$AA@ (0000)
-002A6210 0004:
-	__real@3c64c389 (0000)
-002A6214 0004:
-	__real@bc64c389 (0000)
-002A6218 0008:
-	__real@3f9c987120000000 (0000)
-002A6220 0004:
-	__real@3e088889 (0000)
-002A6224 0004:
-	__real@3f866666 (0000)
-002A6228 0004:
-	__real@3f55c28f (0000)
-002A622C 000a:
-	??_C@_09IPNEIKLN@reflected?$AA@ (0000)
-002A6238 000e:
-	??_C@_0O@FEOFEIPO@jet?5thrusters?$AA@ (0000)
-002A6248 0010:
-	??_C@_0BA@JGHLOGHL@hover?5thrusters?$AA@ (0000)
-002A6258 0009:
-	??_C@_08FLPDFBMI@midpoint?$AA@ (0000)
-002A6264 0004:
-	__real@4235d174 (0000)
-002A6268 0004:
-	__real@3fd55556 (0000)
-002A626C 0004:
-	__real@4091745d (0000)
-002A6270 0004:
-	__real@3f969697 (0000)
-002A6274 0004:
-	__real@bd4ccccd (0000)
-002A6278 0004:
-	__real@3b03126f (0000)
-002A627C 0004:
-	__real@3b83126f (0000)
-002A6280 0004:
-	__real@bbbea2f1 (0000)
-002A6284 0004:
-	__real@3b7e2e97 (0000)
-002A6288 0004:
-	__real@3acb5879 (0000)
-002A628C 0004:
-	__real@3b64c389 (0000)
-002A6290 0004:
-	__real@bb64c389 (0000)
-002A6298 0008:
-	__real@3f7c987120000000 (0000)
-002A62A0 0006:
-	??_C@_05KCCEOPLE@?$HOblur?$AA@ (0000)
-002A62A8 0020:
-	??_C@_0CA@NBAFPFDO@c?3?2halo?2SOURCE?2units?2vehicles?4c?$AA@ (0000)
-002A62C8 0008:
-	__real@3fd3333333333333 (0000)
-002A62D0 0008:
-	__real@bfd3333333333333 (0000)
-00316228 05f8:
-	_data_00316228 (0000)
-*/
+/* VEHICLES.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/units/vehicles.c. */
 
 /* ---------- headers */
 
@@ -182,11 +43,22 @@ enum
 
 /* ---------- macros */
 
-/* 0.8 degrees in radians. Spelled as a float literal because MSVC folds
-constant expressions in double and only rounds at the final assignment, so
-((real)(0.8*_pi/180)) yields 0x3c64c388 where January has 0x3c64c389 -- and
-2.0*it then differs in the double constant too. */
+/* 0.8 degrees in radians, a float literal: MSVC folds constants in double and rounds only at the assignment, so
+((real)(0.8*_pi/180)) gives 0x3c64c388 where January has 0x3c64c389 (and 2.0*it differs in the double too) */
 #define VEHICLE_ANGULAR_ACCELERATION 0.0139626344f
+
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of vehicle_update (port/ps3/include/ps3_timers.h) */
+#define PS3_VEHICLE_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_VEHICLE_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_VEHICLE_COUNT(timer) (ps3_timer_counts[(timer)]++)
+#else
+#define PS3_VEHICLE_SPAN(span) ((void)0)
+#define PS3_VEHICLE_ADD(timer, span) ((void)0)
+#define PS3_VEHICLE_COUNT(timer) ((void)0)
+#endif
 
 /* ---------- structures */
 
@@ -287,12 +159,8 @@ struct scenario_vehicle
 
 /* ---------- prototypes */
 
-/* NOTE: code_001a5e50 and code_001a6290 are file statics in January, but they
-are not reconstructed yet. They are declared here rather than defined so that
-code_001a8800 can call them: January passes their arguments on the stack, and a
-declared-but-undefined static would give MSVC a body to inspect and a register
-convention to invent. The relocation carries the name either way, which is what
-the comparator checks. */
+/* NOTE: code_001a5e50 and code_001a6290, January's file statics, are not reconstructed: declared, not defined, so
+code_001a8800 passes their arguments on the stack as January does (the comparator checks the names) */
 
 
 extern boolean debug_objects_vehicle_powered_mass_points;
@@ -555,9 +423,8 @@ boolean vehicle_stuck(
 	return stuck;
 }
 
-/* NOTE: the vehicle function enum is not recovered from January. These names
-describe what each case computes, read off the disassembly. They are descriptive,
-not authentic. */
+/* NOTE: the vehicle function enum is not recovered from January: these names, read off the disassembly, say
+what each case computes (descriptive, not authentic) */
 
 enum
 {
@@ -1463,9 +1330,8 @@ void vehicle_preprocess_node_orientations(
 			node_orientations);
 	}
 
-	/* port: no more suspensions than the vehicle keeps (a map's count), and
-	only animations the graph has and that fit the model (a map's index and
-	animation) */
+	/* port: no more suspensions than the vehicle keeps (a map's count), and only animations the graph has and that
+	fit the model (a map's index and animation) */
 	for (suspension_index = 0;
 		suspension_index<MIN(animation->suspensions.count, (long)NUMBEROF(vehicle->vehicle.suspension));
 		suspension_index++)
@@ -2411,11 +2277,8 @@ static void update_alien_fighter_physics(
 	return;
 }
 
-/* port: TRUE when the vehicle's mass points fit the arrays vehicle_update
-keeps on its stack (a map's counts; past them physics_update wrote over the
-stack). A vehicle that doesn't fit gets no physics. Released maps have at
-most 22 mass points and 2 powered ones. (Each mass point's powered index is
-checked where it is used: physics.c, physics_powered_mass_point_index.) */
+/* port: TRUE when the mass points fit vehicle_update's stack arrays (a map's counts; past them physics_update wrote
+over the stack), else no physics; retail maps have at most 22 and 2 powered (indices checked in physics.c) */
 static boolean vehicle_mass_points_fit(
 	long vehicle_index,
 	long maximum_mass_point_count,
@@ -2441,10 +2304,8 @@ static boolean vehicle_mass_points_fit(
 	return fit;
 }
 
-/* Full semantic reconstruction. January's vehicle_update is 2320 bytes; this
-body has the same padded size and 98 relocations. The remaining residual is
-instruction scheduling, branch layout, and relocation placement. Keep the
-file-static call topology intact while closing it. */
+/* Full semantic reconstruction: January's vehicle_update is 2320 bytes, this body the same padded size with 98
+relocations; what remains is scheduling, branch layout and relocation placement (keep the static call topology) */
 
 boolean vehicle_update(
 	long vehicle_index)
@@ -2456,6 +2317,9 @@ boolean vehicle_update(
 	real steering_angle;
 	real torque;
 	struct vehicle_definition *definition;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	vehicle = vehicle_datum_get(vehicle_index);
 	definition = vehicle_specific_definition_get(vehicle->definition_index);
@@ -2641,6 +2505,7 @@ boolean vehicle_update(
 	{
 		real_vector3d previous_velocity = vehicle->object.translational_velocity;
 
+		PS3_VEHICLE_SPAN(ps3_span); /* port: (the timer build) */
 		switch (definition->vehicle_type)
 		{
 		case _vehicle_type_human_tank:
@@ -2665,11 +2530,14 @@ boolean vehicle_update(
 			update_turret_physics(vehicle_index, mass_points);
 			break;
 		}
+		PS3_VEHICLE_ADD(_ps3_timer_vehicle_physics, ps3_span); /* port: (the timer build) */
+		PS3_VEHICLE_COUNT(_ps3_timer_vehicle_physics); /* port: (the timer build) */
 
 		create_slipping_effects(vehicle_index, powered_mass_points, mass_points);
 		if (!update_suspension(vehicle_index))
 			create_crashing_effects(vehicle_index, &previous_velocity, mass_points);
 		compute_airborne_ticks(vehicle_index, mass_points, powered_mass_points);
+		PS3_VEHICLE_ADD(_ps3_timer_vehicle_effects, ps3_span); /* port: (the timer build) */
 
 		if (TEST_FLAG(vehicle->object.flags, _object_at_rest_bit))
 			vehicle->vehicle.stop_time = 15;
@@ -2700,8 +2568,10 @@ boolean vehicle_update(
 	}
 	else if (vehicle->vehicle.stop_time>0)
 	{
+		PS3_VEHICLE_SPAN(ps3_span); /* port: (the timer build) */
 		slowly_stop_vehicle(vehicle_index);
 		update_suspension(vehicle_index);
+		PS3_VEHICLE_ADD(_ps3_timer_vehicle_stopping, ps3_span); /* port: (the timer build) */
 	}
 
 	match_assert("c:\\halo\\SOURCE\\units\\vehicles.c", 372,
@@ -2737,7 +2607,10 @@ animate:
 
 		data.state_desired = _unit_state_idle;
 		data.crouching = FALSE;
+		PS3_VEHICLE_SPAN(ps3_span); /* port: (the timer build) */
 		unit_update_animation(vehicle_index, &data);
+		PS3_VEHICLE_ADD(_ps3_timer_vehicle_animation, ps3_span); /* port: (the timer build) */
+		PS3_VEHICLE_COUNT(_ps3_timer_vehicle_animation); /* port: (the timer build) */
 	}
 
 	{

@@ -1,8 +1,4 @@
-/*
-GAME_STATE.H
-
-header included in hcex build.
-*/
+/* GAME_STATE.H: header included in hcex build. */
 
 #ifndef __GAME_STATE_H
 #define __GAME_STATE_H
@@ -54,6 +50,12 @@ this build's (game_state.c) */
 boolean game_state_image_accept(
 	void *image,
 	long size);
+#ifdef HALO_PS3
+/* port: the game state's used parts (game_state.c) */
+void game_state_port_used_sizes(
+	long *cpu_size,
+	long *gpu_size);
+#endif
 void game_state_save_core(
 	const char *name);
 boolean game_state_reverted(

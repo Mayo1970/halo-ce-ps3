@@ -63,13 +63,32 @@ enum
 function; the bsp nodes a test entered (collision_bsp.c), the objects a ray tested (collisions.c) */
 #define PS3_COLLISION_BEGIN() ps3_collision_begin()
 #define PS3_COLLISION_END(kind) ps3_collision_end((kind), NONE)
-#define PS3_COLLISION_NODES(function, count) ((void)(ps3_collision_nodes[(function)] += (uint32_t)(count)))
-#define PS3_COLLISION_OBJECT() ((void)ps3_collision_objects++)
+/* port: and the same for the AI's line-of-sight rays alone (the user on top of the stack), with the leaves their
+bsp test gave and the clusters whose objects they walked (collisions.c) */
+#define PS3_COLLISION_LOS() (global_current_collision_user_depth > 0 && \
+	global_current_collision_user_depth <= MAXIMUM_COLLISION_USER_STACK_DEPTH && \
+	global_current_collision_users[global_current_collision_user_depth - 1] == _collision_user_ai_lineofsight)
+#define PS3_COLLISION_NODES(function, count) ((void)(ps3_collision_nodes[(function)] += (uint32_t)(count), \
+	PS3_COLLISION_LOS() ? (ps3_los_nodes[(function)] += (uint32_t)(count)) : 0))
+#define PS3_COLLISION_OBJECT() ((void)(ps3_collision_objects++, PS3_COLLISION_LOS() ? ps3_los_objects++ : 0))
+#define PS3_COLLISION_LEAVES(count) ((void)(PS3_COLLISION_LOS() ? (ps3_los_leaves += (uint32_t)(count)) : 0))
+#define PS3_COLLISION_CLUSTER() ((void)(PS3_COLLISION_LOS() ? ps3_los_clusters++ : 0))
+/* port: their loop over a cluster's objects (collisions.c): a test's start with the object the copies passed, its end;
+the loop's end, with the objects the copies' iterator walked and read from kept blocks since walked and read were read */
+#define PS3_COLLISION_TEST_BEGIN(los, span) ((void)((los) ? ((span) = ps3_timer_now(), ps3_los_candidates++) : 0))
+#define PS3_COLLISION_TEST_END(los, span) ((void)((los) ? (ps3_los_test_time += ps3_timer_now() - (span)) : 0))
+#define PS3_COLLISION_LOOP_END(los, span, walked, read) ((void)((los) ? (ps3_los_loop_time += ps3_timer_now() - (span), \
+	ps3_los_walked += ps3_bounds_walked - (walked), ps3_los_read += ps3_bounds_read - (read)) : 0))
 #else
 #define PS3_COLLISION_BEGIN() ((void)0)
 #define PS3_COLLISION_END(kind) ((void)0)
 #define PS3_COLLISION_NODES(function, count) ((void)0)
 #define PS3_COLLISION_OBJECT() ((void)0)
+#define PS3_COLLISION_LEAVES(count) ((void)0)
+#define PS3_COLLISION_CLUSTER() ((void)0)
+#define PS3_COLLISION_TEST_BEGIN(los, span) ((void)0)
+#define PS3_COLLISION_TEST_END(los, span) ((void)0)
+#define PS3_COLLISION_LOOP_END(los, span, walked, read) ((void)0)
 #endif
 
 /* ---------- structures */

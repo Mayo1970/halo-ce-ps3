@@ -51,6 +51,167 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-19)
 
+- 2026-10-19: G8, the SPE tasks (Matt: "Let's work on the SPEs tasks."):
+  the first in the proposed order ("SPEs and VMX"): the SPU set-up and the
+  DirectSound mixer's decode and mix on an SPU. PKG of 12:52 in
+  `build/ps3_spu/` (the tree of `8f833512` and this change only). Run on
+  hardware (Matt: "Done."), a30: the SPU mixed the whole run, 0 silent or
+  partial port blocks, the SPU's events worked, `[ps3] exit 0`; the mixer
+  thread's own PPE time 107 us a chunk (before 469), the SPU 183 us a
+  chunk. Hardware SUCCESS (Matt: "No audible faults."). See the Log.
+  The second SPE task (Matt: "Go with the second SPE's task!"): the
+  Direct3D thread's vertex conversions (at draws and into the vertex
+  cache) and index copies as tasks of a second SPU thread. Built, not
+  tested on the PS3. PKG of 13:47 in `build/ps3_spu/` (the first SPE task
+  and this). Run on hardware (Matt: "Done."): no `SPU off`, a clean exit;
+  the Direct3D thread's vertices 3.3 to 0.5 ms a frame, but it waits 1.1
+  ms a frame for the SPU (about once a task). Hardware SUCCESS (Matt:
+  "Yes, it looked correctly."). See the Log. Then (Matt: "Let's go with
+  option 3."): the ring's room given back without a wait (the records
+  with SPU tasks in a list), and the SPU's fetches ahead of its work, its
+  outputs out while the next task runs. Built, not tested on the PS3. PKG
+  of 14:06 in `build/ps3_spu/`. Run on hardware (Matt: "Done"): a clean
+  exit, but the Direct3D thread still waits for the SPU about once a task
+  (0.9 ms a frame): `ps3_gpu_commands_check` fires at every record (the
+  context's end is a segment's, not the buffer's). Hardware SUCCESS
+  (Matt: "Yes, the picture looked correct."). See the Log. Then (Matt:
+  "Go with option 1."): the SPU wait only before a segment's flush: our
+  own context callback waits for the SPU, then calls the system's;
+  `ps3_gpu_commands_check` removed. Built, not tested on the PS3. PKG of
+  14:29 in `build/ps3_spu/`. Run on hardware (Matt: "Done."): a clean
+  exit; the segment is 28 KB (the cause confirmed); the waits 0.6 to 2 a
+  frame (before about one a task), but each of 340 to 740 us: the SPU
+  waits 0.60 / 0.70 ms a frame (before 0.90 / 0.95). Hardware SUCCESS
+  (Matt: "The picture looked correct."). See the Log. Then
+  (Matt: "Do 2 and 3."): the conversions' SPU faster (one fetch a
+  stream, four vertices at a time, the divisions in integers; its DMA
+  waits and the elements by type logged), and exact VMX in the rays'
+  objects part (each cluster's objects first against the copies of
+  their bounding spheres, four at once). Built, not tested on the PS3.
+  PKG of 15:26 in `build/ps3_spu/`. Run on hardware (Matt: "Done."): a
+  clean exit, `[vmx] exact`; the SPU 22 to 26 cycles an element (before
+  about 89), the Direct3D thread's SPU waits 0.10 / 0.10 ms a frame
+  (before 0.60 / 0.70); the rays' own object tests 1.8 / 2.2 a ray
+  (before 65 / 93), but each ray only 5 to 18% faster: the loop's mark
+  reads each object before the copies' answer. Hardware SUCCESS (Matt:
+  "Yup", to "Was the picture correct this run?"). See the Log. Then
+  (Matt: "1-2"): the copies' answer before the mark, and exact VMX in
+  `matrix4x3_multiply` (every node's matrix, and its other callers).
+  Built, not tested on the PS3. PKG of 15:50 in `build/ps3_spu/`. Run on
+  hardware (Matt: "Done."): a clean exit, `[vmx] exact`; a ray's
+  objects part 29.8 us (before 37.2), node matrices 1.00 ms a tick
+  (before 1.08). Hardware SUCCESS (Matt: "Picture was correct"). See the
+  Log. Then (Matt: "Go with 1-2."): each cluster's list walked once (an
+  iterator gives the objects the copies do not rule out), and timers
+  inside the node matrices. Built, not tested on the PS3. PKG of 16:22 in
+  `build/ps3_spu/`. Run on hardware (Matt: "Done"): a clean exit; a ray's
+  objects part 23.3 us (before 29.8); node matrices: the matrices 0.45
+  ms a tick (2.0 us a call), the orientations 0.21, the overlays and
+  blends 0.18, the postprocess 0.06; 231 calls and 569 nodes a tick.
+  Hardware SUCCESS (Matt: "Yeah, it was"). See the Log. Then (Matt: "All
+  3."): `valid_real` without a store read back (PS3), the matrices step
+  timed inside, and the particles timed inside (the next target: 1.11 /
+  1.96 ms a frame, above the AI's 1.21 / 1.72 ms a tick). Built, not
+  tested on the PS3. PKG of 16:58 in `build/ps3_spu/`. Run on hardware
+  (Matt: "Done."): a clean exit; the matrices step 0.50 ms a tick (first
+  node 0.18, checks 0.15, other nodes 0.15, bounds 0.05), no gain seen
+  from `valid_real`; particles_update 0.80 / 1.72 ms a frame, 85% its
+  particles' physics (about 4 us a particle). Hardware SUCCESS (Matt:
+  "Yes, the picture was still correct. I will tell you if the picture is
+  wrong from now on."). See the Log. Then (Matt: "All 3."): the
+  particles' point physics timed inside (its rays test the structure and
+  water only), the AI timed inside, and why the validity checks cost
+  (each test's branch waits for its whole float chain on the in-order
+  PPE). Built, not tested on the PS3. PKG of 17:31 in `build/ps3_spu/`.
+  Run on hardware (Matt: "Done."; no fault reported): a clean exit; the
+  AI 2.21 ms a tick for 7 actors (313 us an actor: perception 128,
+  control 42, movement 41, decisions 35); point physics 3.5 us a call
+  (wind 0.9, the ray 2.2). See the Log. Then (Matt: "Do all 4 then."):
+  the AI's perception, control and movement timed inside, why the wind
+  lookup costs 0.9 us (each particle finds its cluster's palette and
+  definitions again; 10 store-and-read stalls a call), and the validity
+  checks' terms first, then the tests without a branch each (the same
+  answer). Built, not tested on the PS3. PKG of 18:05 in
+  `build/ps3_spu/`. Run on hardware (Matt: "Done."; no fault reported):
+  a clean exit; the validity checks 0.15 to 0.09 ms a tick (0.67 to 0.39
+  us a call); perception is the props' refreshes (77 us each, 86% of it
+  the AI's line-of-sight rays: 57 us a ray), control is action control
+  (43 us an actor), movement is the move (29 us an actor). See the Log.
+  Then (Matt: "Do all 4 next steps."): the AI's line-of-sight rays timed
+  inside, action control by action, the move's parts and the path
+  searches (`actor_path_refresh` runs in action control and destination,
+  not in the move), and the wind's lookups kept for the tick, its keys
+  without the stalls (the same answer: PC check, 29,101,907 calls, 0
+  differ). Built, not tested on the PS3. PKG of 18:58 in
+  `build/ps3_spu/`. Run on hardware (Matt: "Done"; no fault reported): a
+  clean exit; the wind 0.88 to 0.60 us a call; action control is the
+  guard action's path builds (`actor_path_refresh`: 2 to 3.6 ms each, one
+  every 2 or 3 ticks in combat); the move is the flying vehicles' pilots'
+  vector avoidance (334 us a call: 25 rays, each up to 2 structure bsp
+  tests);
+  a line-of-sight ray 59 us (its objects part 38). See the Log. Then
+  (Matt: "Do 'em"): a path build timed inside (setup, search with its
+  nodes, path made), the vector avoidance timed inside (setup, the rays'
+  structure tests, their object tests), and the line-of-sight rays' loop
+  over a cluster's objects (the copies' iterator against the tests; the
+  objects walked, passed, tested). Built, not tested on the PS3. PKG of
+  19:38 in `build/ps3_spu/`. Run on hardware (Matt: "Done."; no fault
+  reported): a clean exit; a path search 1.1 ms and the path made from
+  it 1.5 ms (each up to about 2.5); the vector avoidance 310 us a call
+  (its 50 structure tests 150); a line-of-sight ray's objects loop 44.5
+  us (the iterator 19.5: 122 objects walked at 158 ns each). The
+  heaviest combat window: 38.8 frames per second, 19.0 ms a tick, 0.77
+  ticks a frame (vehicles 3.1 ms a tick, AI 4.6, decisions 1.7 of it).
+  See the Log. Before it (Matt: "are we close at getting 60 stable
+  FPS?"): not yet; close in light play. Then (Matt: "Do it along all
+  the steps you mentioned, so we concretize the amount of things we
+  test."): the checkpoint's state copied into main memory and written
+  by a thread of its own (a revert from the copy); each cluster's
+  objects and spheres kept in a block for the rays' iterator (the same
+  answer: PC check); and timers inside the path search, the path made,
+  the vehicles and the AI's decisions. Built, not tested on the PS3.
+  PKG of 21:17 in `build/ps3_spu/`. Run on hardware (Matt: "Done. The
+  fix for the stutter worked, though"): a clean exit; a checkpoint holds
+  the game thread 29 to 30 ms (the copy), the writer's thread writes it
+  in 1.6 to 1.8 s; a revert took the copy. Main memory: 45.6 MB free
+  before the first checkpoint, 23.6 after, the lowest 18.6. The rays'
+  iterator 9.3 us a ray (before 19.5), the lists all but unwalked. A
+  path made is its smoothing (1.27 ms); a search copies 225 us into the
+  debug storage; a simulated vehicle's physics 400 us. 36 windows, none
+  under 45 frames per second. See the Log. Then (Matt: "Yeah, do all
+  those. We're doing great!"): timers inside the path smoothing and the
+  vehicles' physics; the search's debug copy only while a debug view
+  draws it; the surfaces' edges kept for the searches (the same answer:
+  PC check); the checkpoint's copy of the state's used parts only (the
+  rest zeroes, checked). Built, not tested on the PS3. PKG of 22:08 in
+  `build/ps3_spu/`. Run on hardware (b40, Matt: "Got a red screen."): the
+  first checkpoint halted the game: the checkpoint's `free` of the copy
+  not yet made (the game's `free` halts on NULL, `debug_memory.c`). Fixed
+  (`free` only of a copy made). PKG of 22:24 in `build/ps3_spu/`. See the
+  Log. Run on hardware (b40; Matt: "Run's done!"; no fault reported): a
+  clean exit; three checkpoints, each 38 to 40 ms on the game thread
+  (17,942 KB copied), written by the writer in 1.5 to 2.0 s; a revert
+  took the copy. Main memory 42.3 MB free before the first checkpoint,
+  25.3 after it, the lowest 18.3 (the heap grows in play, its use not).
+  35 windows, 59.9 frames per second on median, two under 45 (the load's
+  32.4, the last 37.5). The debug copy gone; the kept edges no faster (a
+  kept surface 1.1 us, a built one 0.9); the RSX's specular pass 4.8 ms a
+  frame on median (a30: 0.7), up to 9.0. See the Log. Then (Matt: "Go for
+  it! Also, maybe we can delegate the specular pass to one SPU."): the
+  kept edges taken out; the checkpoint's copy and check with VMX streams
+  (the same bytes: PC check); the specular part split in seven on the
+  game thread and the RSX, its draws timed on the RSX by pixel shader in
+  one frame of eight; the weather, the transparent geometry and the old
+  vehicle physics timed inside; the heap's growths and large allocations
+  logged. The SPU: not for the RSX's time (see the Log). Built, not
+  tested on the PS3. PKG of 23:33 in `build/ps3_spu/`. Run on hardware
+  (b40; Matt: "Done."; no fault reported): a clean exit; a checkpoint
+  holds the game thread 10.4 to 11.9 ms (before 38 to 40); a revert took
+  the VMX copy and play went on. The specular part's RSX time is its
+  pixel shaders: 96 instructions for 6 combiners (lights), 66 for 5
+  (reflections), 36 for 2 (fog). The heap grows with the sound streams'
+  64 KB buffers (10 to 25 a second) and the shader translator's
+  temporary buffers: 16.5 MB free at t=200 s. See the Log.
 - Handoff (2026-10-19, end of the session; Matt: "Update ROADMAP and
   GOALS. I'll start a new session."): G8 is in progress. The last PKG is
   11:40 in `build/ps3_g8/` (run on hardware: a clean exit, no sound
@@ -299,6 +460,18 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     function` (each logged function at any depth, the BSP nodes, the
     objects tested), `[time] HUD parts` (with their quads), and the
     obstruction calls and computations in `[time] sound`.
+  - The SPE tasks (2026-10-19): `[spu] mixer up` and `DirectSound: the
+    streams decode and mix on an SPU` at the start; the SPU's part of the
+    `DirectSound:` line (its time a chunk and its decoding, the mixer
+    thread's wait, how the waits ended, the events lv2 refused); `[spu]
+    mixer: ... SPU off` with the SPU's own echo when a job is not done in
+    100 ms; `[spu] mixer down` at the exit. The second: `Direct3D: vertex
+    and index conversions on an SPU` and `[spu] vertices up` at the start;
+    every 600 frames `Direct3D: frame N: the conversions' SPU on: ...`
+    (tasks, elements, indices, its time a frame, the waits that found
+    tasks not done and their time a frame); `SPU` among the Direct3D
+    thread's waits in `[time]`; `[spu] vertices: ... SPU off` when a task
+    is not done in 100 ms; `[spu] vertices down` at the exit.
   - The G7 measurement build (Matt, 2026-10-06):
     - Two `[mem]` lines every 10 s (`ps3_main.c` `memory_heartbeat`). The
       first: the free main memory from lv2 syscall 352 (`ps3_memory_user`,
@@ -332,7 +505,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
-| G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the next step is Matt's choice |
+| G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS) |
 
 ## G8 analysis (2026-10-18)
 
@@ -1469,6 +1642,10 @@ the whole tree. No code change.
     waits before a load) and textures (`Lock`, trap 34); other vertices and
     indices are copied into the record. Game-thread code that uses the
     Direct3D thread's state or `ps3_gpu.c` calls `direct3d_drain` first.
+50. In the game's sources `free` is `match_free` (`cseries.h`): it halts the
+    game on NULL ("Attempted an operation with pointer at 0x0",
+    `debug_memory.c`), where the C library's `free` does nothing. Free only
+    what was allocated.
 
 ## Commands
 
@@ -2144,3 +2321,1036 @@ then `./build.sh pkg LOG_IP=<address>`.
 - 2026-10-19: The handoff (Matt: "Update ROADMAP and GOALS. I'll start a
   new session."): "Now", the goal table and GOALS.md updated. No code
   change after the PKG of 11:40.
+- 2026-10-19: The first SPE task (Matt: "Let's work on the SPEs tasks."):
+  the SPU set-up and the DirectSound mixer on an SPU. Files:
+  - `port/ps3/spu/spu_mixer.c`, `.h` (new, `spu-gcc`): an SPU thread that
+    sleeps on a reservation of the bell's 128-byte line (flycastPS3's
+    model). A job is one 256-frame chunk: the voices in 32-voice DMA
+    batches, each packet not decoded yet decoded (16 KB batches from the
+    sound cache, floats put into its buffer), then `mix_run` on windows of
+    the floats (at most 8 KB a DMA), the same float operations in the same
+    order as `dsound_ps3.c`. Then the chunk, the voices' positions and
+    flags, the echo (fenced behind them) and `spu_thread_send_event` (port
+    16). 73 KB of the 256 KB local store.
+  - `port/ps3/src/ps3_spu.c`, `.h` (new): `sysSpuInitialize(6, 0)`, the
+    thread group (priority 100), an event queue connected to the SPU
+    thread's port 16. A job: the header, a drain of the queue, `lwsync`,
+    the bell's store; the mixer thread then sleeps on the queue (1 ms
+    timeouts that look at the echo). A job not done in 100 ms: the SPU's
+    own echo read from its LS, the group terminated, `SPU off`, the PPE
+    mixes from then on. `ps3_spu_stop` at both exits (`ps3_main.c`).
+  - `dsound_ps3.c`: a pass computes each taken stream's step and gains
+    (`mix_begin`, kept in the stream), then `spu_mix` fills the job, runs
+    it, copies the chunk and gives each stream the SPU's position and
+    packet flags; `mix_stream` (the PPE) only for the streams past 256 or
+    with the SPU off. `Process` allocates the floats 128-aligned with the
+    size rounded up to 128 bytes (`ps3_spu_buffer_allocate`; `free()` frees
+    them). The `DirectSound:` line ends with the SPU's part.
+  - `Makefile`: the SPU rules (`spu-gcc -O2 -ffp-contract=off`, `bin2s`
+    into `spu_mixer_elf[]`), `-I port/ps3/spu`; the bring-up leaves out
+    `ps3_spu.o`. `port/ps3/README.md`: the `spu/` folder, the files, the
+    log lines.
+  - The PC check (Docker, gcc 13; the session's scratchpad): flycastPS3's
+    SPU simulator (`misc/spu_sim/spusim.c`, a copy with lv2's side of
+    `spu_thread_send_event`: channel 30 is an event, channel 29 its answer)
+    runs the real SPU image (its `.text` the same as the PKG's).
+    `dsound_ps3.c` itself, with stand-ins of the XDK types and the host
+    layer, plays the game's part: 8 to 64 streams of 6 formats (ADPCM mono
+    and stereo at 22 and 44 kHz, PCM), 2 to 12 packets, refills from the
+    callback, odd packet sizes, flushes, stream releases, frequencies from
+    1 kHz to 30 times the rate, 3D, I3DL2, mix bins, a looping buffer. Two
+    runs of a seed, the SPU's and the PPE's, both in the SPU's arithmetic
+    (round toward zero, no denormals): their chunks and packet completions
+    equal byte for byte. 5 seeds, 38000 chunks, about 49000 packets, 6600
+    flushes; no DMA outside its block (each block its own mapping). The
+    simulator's SPU time a chunk: 8 streams 110 us, 24 streams 308 to 381,
+    40 streams 587, 64 streams 920 (max 3.4 ms); the decode about half. The
+    first version took 433 us (24 streams): `adpcm_expand` as a call and
+    the clamps as branches (an SPU branch without a hint costs 18 cycles);
+    now inline with selects.
+  - `check`: 0 `r2off`, `.got` 0x81e8. PKG of 12:52 in `build/ps3_spu/`
+    (a copy of `build/ps3_g8`, whose objects are the commit's). Not tested
+    on hardware.
+- 2026-10-19: PKG of 12:52 on hardware (Matt: "Done."; our listener, from
+  the boot): menus, a30, `[ps3] exit 0` and `[spu] mixer down`, no halt.
+  `[spu] mixer up` and `DirectSound: the streams decode and mix on an
+  SPU`; the SPU mixed to the exit (no `SPU off`). Every `DirectSound:` line
+  0 silent and 0 partial port blocks. The 10 `DirectSound:` lines of a30's
+  play (4 to 22 streams, median 12; 672 packets in 10 s), medians (range):
+  the mixer thread 329 us a chunk (159 to 578; max 1.5 to 2.4 ms), of it
+  its wait for the SPU 223 (132 to 430), so its own PPE time 107 (20 to
+  148; the lock held 50 of it, as before) against 469 in the run of 11:40;
+  the SPU 183 us a chunk (95 to 389), decoding 94 (43 to 162). The waits:
+  about 1875 a 10 s line ended by the SPU's event (one a job), 4 to 111 by
+  the 1 ms timeout (jobs over 1 ms), 0 errors, 0 events refused. 17 timer
+  windows of play, 3 under 45 frames per second (one of them the load);
+  medians all / under 45: the frame 19.80 / 26.40 ms (50.6 / 37.9 frames
+  per second; 0.54 / 0.54 ticks a frame), game ticks 5.40 / 4.20, render
+  10.90 / 10.60; the RSX 10.5 / 10.9; the Direct3D thread busy 13.0 / 13.8
+  (vertices 3.3, state 3.2, colours 0.7, indices 0.4 / 0.2). The play
+  differs from the runs before: the frames are not comparable. Hardware
+  SUCCESS (Matt: "No audible faults.").
+- 2026-10-19: The second SPE task (Matt: "Go with the second SPE's
+  task!"): the Direct3D thread's conversions on an SPU. The log of 12:52:
+  12 to 25 million vertex elements converted at draws a 600 frames (20 to
+  40 thousand a frame: the dynamic vertices), the vertex cache's 10 to 20
+  thousand after the first frames; "colours" (the pixel shader's constants
+  and its copy into the scratch, about 1 us a draw) stays on the PPE.
+  Files:
+  - `port/ps3/spu/spu_vertices.c`, `.h` (new): an SPU thread on a ring of
+    1024 tasks of 256 bytes (the bell's reservation as the mixer's). A
+    CONVERT task: up to 15 elements of a draw (source, stride, type, size),
+    each pass of up to 16 KB of float4s put while the next converts; each
+    element's bytes fetched as the 16-byte lines that hold them (a line
+    never crosses a page: no read past the last element's line). Every
+    Xbox type as `vertex_element_convert`: floats copied, bytes through
+    d3d8_rsx.c's `b / 255` table (DMA at the start), shorts by `csflt`,
+    the divisions of NORMSHORT and NORMPACKED3 as the double product by the
+    reciprocal rounded once (a whole number over an odd divisor is never
+    within 2^-39 of a rounding point: the float division's result). An
+    INDICES task: 16-bit indices less a base, 8 a quadword. The echo after
+    each task, behind its output. 60 KB of the local store.
+  - `port/ps3/src/ps3_spu.c`, `.h`: `ps3_spu_vertices_start` (in
+    `Direct3D_CreateDevice`, after the table), `_task` (a ring slot, after
+    the SPU's room), `_commit` (`lwsync`, the bell), `_wait` (until the
+    echo's tail: a spin of about 60 us with `db16cyc`, then 20 us sleeps;
+    100 ms: the SPU's own echo logged, the group terminated, the tasks left
+    run on the PPE by d3d8_rsx.c's fallback, the PPE converts from then
+    on). `ps3_spu_stop` stops both groups; the SPU finishes its tasks
+    before a quit.
+  - `port/ps3/src/ps3_gpu.c`, `.h`: the wait before every flush
+    (`ps3_gpu_wait_idle`, `finish`, the present's `ps3_video_end_frame`),
+    and `ps3_gpu_commands_check`: less than 64 KB left in the command
+    buffer (its wrap flushes) waits first; `record_execute` calls it
+    before each record (one record's commands are under 20 KB).
+  - `port/ps3/xbox/d3d8_rsx.c`: `vertices_convert` and `indices_convert`
+    queue a task (else convert as before) in `setup_vertices`,
+    `vertex_cache_get`, `index_cache_offset`, `index_copy` (its index OR
+    first, then the copy; the scratch rounded up to 16 bytes) and
+    `draw_indexed_run`'s rebase. The Direct3D thread gives the ring's room
+    back after the SPU's tasks (they read the records' vertices): when it
+    goes idle, or at each record while the game's thread waits; an inline
+    record waits for them (its memory is the next one's). `byte_floats`
+    128-aligned. `[time]`: `_ps3_timer_spu_wait`.
+  - `Makefile`: `spu_vertices` among the SPU programs.
+    `port/ps3/README.md`: the files, the log lines.
+  - The PC check (the session's scratchpad; flycastPS3's simulator as for
+    the mixer): the real image (its `.text` the same as the build's) runs
+    random tasks of all 19 types and 2 unknown ones, 1 to 15 elements,
+    strides 0 to 20000, any alignment, floats with NaN, infinity and
+    denormals, shorts at their ends, the ring wrapping, a quit; against
+    `vertex_element_convert` extracted from `d3d8_rsx.c` (its aligned fast
+    path removed: the x86 order) and the index rebase. 11 seeds, about
+    9300 tasks, 17.7 million elements and 4.7 million indices: equal byte
+    for byte (the indices' padding aside), each source block unchanged, no
+    DMA outside a block (each block its own mapping, its last line only).
+    The simulator's SPU time: about 70 cycles an element or index over all
+    types, 31 with FLOAT3, FLOAT2 and D3DCOLOR only (the dynamic vertices:
+    20 to 40 thousand elements a frame are about 0.2 to 0.4 ms of the SPU,
+    against 3.3 ms of the PPE).
+  - flycastPS3's hardware runs: SPU puts into RSX local memory work (3.3
+    GB/s); its `spe_vb` orders them as here (the puts' tags, then the echo).
+  - `check`: 0 `r2off`, `.got` 0x8300. PKG of 13:47 in `build/ps3_spu/`.
+    Not tested on hardware.
+- 2026-10-19: PKG of 13:47 on hardware (Matt: "Done."; our listener, from
+  the boot): menus, a30, `[spu] vertices up`, no `SPU off`, `[ps3] exit 0`,
+  `[spu] mixer down` and `[spu] vertices down`. The conversions' SPU every
+  600 frames of play: 21 to 50 thousand tasks, 12 to 29 million elements
+  and 4 to 23 million indices (about 45 thousand elements a frame); its
+  time 0.6 to 1.6 ms a frame (about 100 cycles an element on hardware, 31
+  in the simulator: the fetches wait for their DMA). The waits that found
+  tasks not done: about one a task (19 to 59 thousand a 600 frames), 0.6
+  to 1.6 ms a frame: while the game's thread waits for the Direct3D thread
+  (its present's wait for the frame before), the Direct3D thread waits for
+  the SPU after every record. 27 timer windows of play, 4 under 45 frames
+  per second (one the load); medians all / under 45: the frame 17.00 /
+  27.50 ms (58.7 / 36.9 frames per second), game ticks 6.30 / 8.50, render
+  9.60 / 12.20; the RSX 8.4 / 12.1; the Direct3D thread: vertices 0.50 /
+  0.55 ms a frame (before 3.3), indices 0.20 / 0.25 (before 0.4 / 0.2),
+  the SPU waits 1.10 / 1.05, state 2.70 / 3.15, colours 0.50 / 0.65; the
+  game thread's waits for it 1.00 / 0.65. The play differs from the run
+  before: the frames are not comparable. Hardware SUCCESS (Matt: "Yes, it
+  looked correctly.").
+- 2026-10-19: Option 3 of the next steps (Matt: "Let's go with option
+  3."): both.
+  - The ring's room without a wait (`d3d8_rsx.c`): the records that
+    committed SPU tasks go in a list of 1024 (their start, the task head
+    after them; a full list waits for the SPU). After each record the room
+    comes back up to the first record whose tasks are not done
+    (`ps3_spu_vertices_done`, a test of the echo's tail, no wait): at once
+    while nothing is pending, and while the game's thread waits for room or
+    a position; when the thread goes idle, all of it after a wait. The
+    waits left: the present's flush, a wrap of the command buffer, an idle
+    thread, a full list or ring. `ps3_spu.c`: `ps3_spu_vertices_head` and
+    `_done`.
+  - The SPU (`spu_vertices.c`): two input buffers, each slot's (or index
+    batch's) fetch started while the one before converts. A task's outputs
+    are put while the next task runs: each output buffer's puts and an echo
+    copy on its own tag; the echo fenced (`mfc_putf`) behind the task's last
+    buffer, after a wait for its other buffer and the echo before (so the
+    PPE never sees a tail before its output, or an older tail after a
+    newer one). A buffer is waited for when it is taken again. 76 KB of the
+    local store.
+  - The PC check (as before): 5 seeds equal byte for byte (about 2300
+    tasks, 4.3 million elements, 1.2 million indices); the simulator's SPU
+    time 54 to 63 cycles an element over all types (before 66 to 76), 27
+    with the common types (before 31); its DMA has no RSX bandwidth (3.3
+    GB/s on hardware), so the output puts that now run beside the work are
+    not in these numbers. The build's image has the checked `.text`.
+  - `check`: 0 `r2off`, `.got` 0x8300. PKG of 14:06 in `build/ps3_spu/`.
+    Not tested on hardware.
+- 2026-10-19: PKG of 14:06 on hardware (Matt: "Done"; our listener, from
+  the boot): menus, a30, `[spu] vertices up`, no `SPU off`, `[ps3] exit 0`,
+  `[spu] mixer down` and `[spu] vertices down`. The conversions' SPU every
+  600 frames of play: 30 to 90 thousand tasks, 11 to 25 million elements
+  and 8 to 22 million indices; its time 0.64 to 1.29 ms a frame (about 89
+  cycles an element and an eighth of the indices, before about 100). The
+  waits that found tasks not done: still about one a task (0.75 to 0.94),
+  0.57 to 1.31 ms a frame, the same as the SPU's time. The cause:
+  `ps3_gpu_commands_check` before every record takes `context->end` as the
+  end of the 1 MB buffer, but the system's default FIFO ("traditional"
+  mode, `gcm_sys.h`) ends the context at the end of a segment; the
+  callback flushes and starts the next segment. A segment under 64 KB
+  makes the check wait at every record (the segment's size is not in the
+  log; at the buffer's end the check would wait at about 6% of the
+  records). 17 timer windows of play, 4 under 45 frames per second;
+  medians all / under 45: the frame 17.60 / 27.60 ms (56.7 / 37.1 frames
+  per second), game ticks 4.60 / 7.95, render 10.40 / 11.80; the RSX 9.1 /
+  11.8; the Direct3D thread: vertices 0.60 / 0.55, indices 0.40 / 0.25,
+  the SPU waits 0.90 / 0.95 (before 1.10 / 1.05), state 3.20 / 3.10,
+  colours 0.70 / 0.60; the game thread's waits for it 0.80 / 0.25 (before
+  1.00 / 0.65). The play differs from the run before: the frames are not
+  comparable. Hardware SUCCESS (Matt: "Yes, the picture looked correct.").
+- 2026-10-19: Option 1 of the fixes (Matt: "Go with option 1."): the SPU
+  wait at the segment's flush, not before every record.
+  - `port/ps3/src/ps3_gpu.c`: `ps3_gpu_initialize` keeps the context's
+    callback (the system's, a 32-bit descriptor) and puts its own
+    (`segment_flush`, its descriptor from `__get_opd32`; once, so it never
+    calls itself). `segment_flush` waits for the SPU, puts the system's
+    callback back in the context, calls librsx's `rsxContextCallback` (the
+    call through the context's 32-bit descriptor), then puts its own back.
+    A log line: `[gpu] the command buffer's segment`, its start, end, size,
+    the current position and the system's callback. `COMMAND_ROOM` and
+    `ps3_gpu_commands_check` removed (`ps3_gpu.h`, `d3d8_rsx.c`'s
+    `record_execute`). The waits left: the segment's flush, the present,
+    `ps3_gpu_wait_idle`, `finish`, an idle Direct3D thread, a full list or
+    ring.
+  - The ELF: the descriptor's 32-bit words (code 0x11060, TOC 0x9749d8)
+    as the flip handler's (TOC 0x9749d8), which works on hardware.
+    `segment_flush`'s code: the wait, a 32-bit store of the system's
+    callback at the context's offset 12, `rsxContextCallback`, its own
+    back, the result returned.
+  - `port/ps3/README.md`: the `ps3_gpu.c` and `d3d8_rsx.c` rows, the log.
+  - `check`: 0 `r2off`, `.got` 0x8320. PKG of 14:29 in `build/ps3_spu/`.
+    Not tested on hardware.
+- 2026-10-19: PKG of 14:29 on hardware (Matt: "Done."; our listener, from
+  the boot): menus, a30, `[spu] vertices up`, no `SPU off`, `[ps3] exit 0`,
+  `[spu] mixer down` and `[spu] vertices down`. `[gpu] the command
+  buffer's segment: 0x50101000 to 0x50107ffc (28668 bytes)`: the first
+  segment starts 4 KB into the IO buffer and ends 4 bytes before its 32
+  KB; the cause of the waits at every record confirmed. The conversions'
+  SPU every 600 frames of play: 28 to 95 thousand tasks, 9 to 24 million
+  elements, its time 0.52 to 1.23 ms a frame (about 89 cycles an element,
+  as before). The waits that found tasks not done: 344 to 1180 a 600
+  frames (0.6 to 2 a frame; before 28 to 53 thousand), 0.20 to 1.03 ms a
+  frame, 340 to 740 us each: 35 to 83% of the SPU's time. Each wait now
+  waits for many tasks; the log does not show which waits they are (a
+  segment's flush, the present or the idle Direct3D thread). 16 timer
+  windows of play, 3 under 45 frames per second; medians all / under 45:
+  the frame 17.40 / 26.00 ms (57.6 / 38.4 frames per second), game ticks
+  5.05 / 14.60, render 10.25 / 11.10; the RSX 8.9 / 9.9; the Direct3D
+  thread: the SPU waits 0.60 / 0.70 (before 0.90 / 0.95), vertices 0.60 /
+  0.50, indices 0.40 / 0.20, state 3.25 / 2.90, colours 0.65 / 0.50; the
+  game thread's waits for it 1.35 / 0.00 (the frames under 45 do not wait
+  for the Direct3D thread). The play differs from the run before: the
+  frames are not comparable. Hardware SUCCESS (Matt: "The picture looked
+  correct.").
+- 2026-10-19: Steps 2 and 3 of the next steps (Matt: "Do 2 and 3."): 3,
+  the conversions' SPU faster; 2, exact VMX where the measurements point
+  (the rays' objects part: 0.79 / 3.52 ms a frame, the largest).
+  - 3, `spu_vertices.c`: the slots of one stream (the same stride, within
+    2 KB of a vertex) come in one fetch, the next fetch while one
+    converts; each type's loop does four vertices at a time. NORMSHORT,
+    NORMPACKED3, D3DCOLOR and PBYTE without double precision or the byte
+    table: x / (2^n - 1) has |x|'s n bits repeating as its binary digits,
+    so a window of |x|'s copies, normalized, gives the 24 bits and the
+    rounding bit (the digits after are never all 0: no ties), in
+    integers. Checked on the PC for every input (256 bytes, 65536 shorts,
+    2048 and 1024 packed fields) against the float division: equal. The
+    SPU's waits for its input and output DMA are timed (the echo), and
+    `d3d8_rsx.c` counts the elements by type: both in the 600-frame
+    lines. The byte table's DMA is gone (`ps3_spu_vertices_start`).
+  - The PC check of 3 (flycastPS3's simulator, as before; now slots that
+    share streams too): 14 seeds, 63 million elements, 15 million
+    indices: equal byte for byte, no DMA outside a block, the sources
+    unchanged. The simulator's SPU 24 to 28 cycles an element or index
+    over all types (before 67 to 75), 11 with the dynamic vertices'
+    layout (FLOAT3, D3DCOLOR, FLOAT2 in 24 bytes; before 27). 80 KB of
+    the local store. The build's image has the checked `.text`.
+  - 2, `collisions.c`: the rays' loop tests each cluster's objects first
+    against the copies of their bounding spheres
+    (`port/linux/game/object_bounds_cache.c`: `fast_vector_intersects_sphere`
+    on the copies); an object that the segment misses there fails its own
+    test the same way, so the loop skips it (only root objects are in
+    the clusters, and their next object is none). Each answer carries its
+    test's serial: a test between another's and its answers leaves those
+    unknown. An entry is 32 bytes, the sphere first, 16-byte aligned on
+    the PS3. The other builds: the same test, scalar.
+  - The VMX (`port/ps3/src/ps3_vmx.c`, `include/ps3_vmx.h`, the one unit
+    with `-maltivec`): four spheres at once, each lane the scalar
+    operations in the same order (a product is a multiply-add of -0, no
+    estimates), VSCR's NJ off. The first call compares VMX with the FPU
+    (denormal products and sums, signed zeros) and logs `[vmx] exact`;
+    else the scalar code. The PPU code: the operations in the source's
+    order, no other fused multiply-add.
+  - The PC checks of 2: `ps3_vmx.c`'s own source on x86 (each VMX
+    operation emulated per lane, the multiply-add fused) against
+    `real_math.c`'s `fast_vector_intersects_sphere`: 49.5 million spheres
+    (random, near the segments, denormals, zeros, infinities, NaNs): no
+    difference. `tools/harness/tests/test_object_bounds_cache.py`: 5
+    vector cases and 3 negative controls more, 14 passed (a container
+    with a 32-bit runtime). The rest of the harness: 144 failures in
+    other tests (sound, transparent geometry, keyboard, elevator), which
+    do not compile on `HALO_PTR32` in the game's headers.
+  - `[time] collision by function`: its objects tested are now only those
+    tested themselves.
+  - `check`: 0 `r2off`, `.got` 0x8360. PKG of 15:26 in `build/ps3_spu/`.
+    Not tested on hardware.
+- 2026-10-19: PKG of 15:26 on hardware (Matt: "Done."; our listener, from
+  the boot): menus, a30, `[spu] vertices up`, no `SPU off`, `[vmx] exact:
+  VSCR's NJ off, the denormals as the FPU's` (the PPE's VMX keeps
+  denormals: the VMX test runs), `[ps3] exit 0`, `[spu] mixer down` and
+  `[spu] vertices down`.
+  - The elements converted by type, a 600 frames of play: PBYTE3 (0x34)
+    5 to 14 million and SHORT1 (0x15) 2.5 to 7 million (two PBYTE3 and a
+    SHORT1 a vertex: declaration 0x20 of
+    `rasterizer_xbox_vertex_shaders_initialize.c`), FLOAT3, FLOAT2 and
+    D3DCOLOR 0.5 to 1.5 million each, the rest under 0.1 million. The
+    PBYTE3s went through the byte table before.
+  - The conversions' SPU every 600 frames of play: 28 to 73 thousand
+    tasks, 9 to 25 million elements, its time 121 to 319 us a frame: 22 to
+    26 cycles an element and an eighth of the indices (before about 89),
+    of it its waits for input 22 to 52 and for output 27 to 75 us a
+    frame. The waits that found tasks not done: 0.4 to 2.3 a frame, 13 to
+    182 us a frame (before 0.20 to 1.03 ms).
+  - The rays' objects part: each ray tests 1.8 / 2.2 objects itself
+    (before 65 / 93): the copies rule out 97%. But a ray takes 37.2 /
+    43.0 us (before 45.4 / 46.5): `object_mark_function`, before the
+    copies' answer, reads each object (its marker), so the cache misses
+    stay. vector-objects 0.82 / 2.36 ms a frame (before 0.79 / 3.52;
+    37.2 / 69.2 rays a frame, before 27.1 / 76.3).
+  - 18 timer windows of play, 5 under 45 frames per second; medians all /
+    under 45: the frame 18.30 / 24.50 ms (54.7 / 40.8 frames per second),
+    game ticks 5.65 / 11.00, render 11.05 / 11.70; the RSX 9.1 / 11.1; the
+    collision tests 2.25 / 5.64, rays 2.00 / 4.61; the Direct3D thread:
+    the SPU waits 0.10 / 0.10 (before 0.60 / 0.70), vertices 0.70 / 0.50,
+    indices 0.35 / 0.30, state 3.40 / 3.00; the game thread's waits for it
+    0.45 / 0.00. The play differs from the run before: the frames are not
+    comparable.
+  - Hardware SUCCESS (Matt: "Yup", to "Was the picture correct this
+    run?").
+- 2026-10-19: Next steps 1 and 2 (Matt: "1-2").
+  - 1, `collisions.c`: the rays' object loop asks the copies' answer
+    before `object_mark_function`, which reads the object (its marker):
+    an object the segment misses is neither marked nor read. The same
+    results: its mark only stops a second test, in another cluster, that
+    fails too (the same copy, the same segment).
+  - 2, exact VMX in the node matrices: `object_compute_node_matrices`
+    makes each node's matrix with `matrix4x3_from_orientation` (scalar:
+    it divides) and `matrix4x3_multiply`, whose PS3 code is a loop of 12
+    elements into a stack array that is read back at once (each read
+    waits for its store). `ps3_vmx_matrix4x3_multiply`: a row of the
+    product in each vector, the scalar code's operations in each lane
+    ((b[r][0] * forward + b[r][1] * left) + b[r][2] * up; the position's
+    row times a's scale, plus a's position), unaligned loads from the
+    quadwords that hold the floats only, word stores (no byte outside the
+    matrix), result as a or b. `matrix_math.c` calls it when
+    `ps3_vmx_exact` (so every caller gets it: units, physics, models).
+    VSCR's NJ is now set by an `mtvscr` with a memory clobber before
+    each call's loads; `ps3_vmx.c` builds with `-ffp-contract=off` too.
+    `matrix_math.c`'s symbol table header points to upstream's copy.
+  - The PC checks: `ps3_vmx.c`'s own source on x86 (the VMX operations
+    emulated per lane, the loads, permutes and word stores as VMX does
+    them) against `matrix_math.c`'s `matrix4x3_multiply`: 4 million
+    products (every 4-byte alignment, result as a, as b or apart, random
+    and special values): equal, but 158 where both give a NaN with other
+    bits (the x86 emulation's fused multiply-add and SSE make different
+    NaNs; the PC builds and the PPE already differ there); no byte
+    written outside. The sphere test's check again: 49.5 million, equal.
+    The PPU code: `mtvscr` before the loads, each product a multiply-add
+    of -0, nothing else fused, 13 word stores.
+  - `check`: 0 `r2off`, `.got` 0x8360. PKG of 15:50 in `build/ps3_spu/`.
+    Not tested on hardware.
+- 2026-10-19: PKG of 15:50 on hardware (Matt: "Done."; our listener, from
+  the boot): menus, a30, `[spu] vertices up`, no `SPU off`, `[vmx]
+  exact`, `[ps3] exit 0`, `[spu] mixer down` and `[spu] vertices down`.
+  18 timer windows of play, 1 under 45 frames per second (the "under 45"
+  values are that one window); medians all / under 45:
+  - The rays' objects part: 29.8 / 36.4 us a ray (before 37.2 / 43.0),
+    28.8 / 84.5 rays a frame; vector-objects 0.60 / 3.08 ms a frame; 60 /
+    260 objects tested themselves a frame. The rest of a ray's time: its
+    clusters' object lists, walked twice (the copies' test, then the
+    loop), and the copies and answers read by absolute index.
+  - Node matrices 1.00 / 1.40 ms a tick (before 1.08 / 1.15): the
+    multiply is a small part of the node time.
+  - The frame 17.45 / 28.10 ms (57.4 / 35.5 frames per second), game
+    ticks 4.70 / 16.30, render 10.40 / 11.30; the RSX 8.7 / 9.1; the
+    collision tests 1.71 / 7.51, rays 1.44 / 5.51; the Direct3D thread's
+    SPU waits 0.10 / 0.10. The play differs from the run before: the
+    frames are not comparable.
+  - Hardware SUCCESS (Matt: "Picture was correct").
+- 2026-10-19: Next steps 1 and 2 (Matt: "Go with 1-2.").
+  - 1, each cluster's object list walked once: `object_bounds_cache.h`
+    (new) holds an iterator of 64 objects; `object_bounds_cache_first_vector`
+    runs the copies' test over the whole list (four at once with VMX) and
+    keeps, in the list's order, the objects it does not rule out;
+    `_next_vector` gives them. With more than 64, the list is walked again
+    and each object's copy tested as it comes (the scalar test: the same
+    answers). `collisions.c`'s loop takes the iterator; the answers by
+    absolute index and their serial are gone. The same objects marked and
+    tested, in the same order.
+  - `tools/harness`: the vector cases check the iterator (the objects
+    given in the cluster's order, each left out missing itself, and none
+    given missing when every copy is current; the list walk of a full
+    iterator too), and 3 negative controls (the epoch not checked, nothing
+    left out, the objects past 64 dropped): 13 passed.
+  - 2, the node matrices timed (`[time] node matrices`, ms a tick):
+    `object_compute_node_matrices` at every call, its steps: the
+    animation's orientations (`animation_get_node_orientations` or the
+    model's), the overlays and blends (overlays, scale, the type's
+    preprocess, interpolation), the matrices (the node loop, the bounding
+    sphere); `object_postprocess_node_matrices`; its calls and nodes a
+    tick.
+  - `objects.c`'s comments over 2 lines shortened (19; its code without
+    comments differs only by the timers). `check`: 0 `r2off`, `.got`
+    0x8368. PKG of 16:22 in `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-19: PKG of 16:22 on hardware (Matt: "Done"; our listener, from
+  the boot): menus, a30, `[spu] vertices up`, no `SPU off`, `[vmx]
+  exact`, `[ps3] exit 0`, `[spu] mixer down` and `[spu] vertices down`.
+  21 timer windows of play, 4 under 45 frames per second; medians all /
+  under 45:
+  - The rays' objects part: 23.3 / 25.3 us a ray (before 29.8 / 36.4; at
+    the start of the work 45.4 / 46.5), 33.1 / 43.5 rays a frame;
+    vector-objects 0.52 / 1.05 ms a frame.
+  - Node matrices (objects_update's) 1.01 / 1.06 ms a tick. In
+    `object_compute_node_matrices` at every call: the matrices 0.45 /
+    0.45 ms a tick, the orientations 0.21 / 0.20, the overlays and blends
+    0.18 / 0.26; the postprocess 0.06 / 0.05; 231 / 231 calls and 569 /
+    506 nodes a tick: 2.5 nodes a call. A call's matrices take 2.0 us
+    (0.86 us a node), its orientations 0.92, its blends 0.78: most calls
+    are an object of one or two nodes, so the root's work counts most
+    (the object's translation and rotation, its offset and center of
+    mass, 2 to 4 multiplies, `valid_real_matrix4x3` twice, the bounding
+    sphere), and the reads of the object's and its tags' data.
+    `valid_real` reads a float's bits through memory: on the PPE a store
+    read back at once, about 10 in each `valid_real_matrix4x3`.
+  - The frame 18.20 / 24.65 ms (55.0 / 40.7 frames per second), game
+    ticks 5.10 / 8.20, render 10.30 / 10.55; the RSX 8.8 / 10.8; the
+    collision tests 1.87 / 3.36, rays 1.61 / 2.44. The play differs from
+    the run before: the frames are not comparable.
+  - Hardware SUCCESS (Matt: "Yeah, it was").
+- 2026-10-19: Next steps 1 to 3 (Matt: "All 3.").
+  - 1, `real_math.h`'s `valid_real` on the PS3: `n - n == 0.0f` (0 for
+    every finite n, NaN for an infinity or a NaN) in place of the float's
+    bits read through memory (on the PPE a store read back at once). The
+    same answer for every float: all 2^32 checked on the PC. The PPU code
+    of `object_compute_node_matrices`: 30 `fsubs n,n,n`, no exponent mask.
+    Every `valid_real*` check gains (the matrix checks: about 20 a call).
+  - 2, the matrices step timed inside (`[time] node matrices`): the first
+    node (its matrices and multiplies), the validity checks (the parent
+    node's, and the first node's twice), the other nodes, the bounding
+    sphere (with the copy's update and the objects without a model).
+  - 3, the next target, the particles (1.11 / 1.96 ms a frame in the last
+    run, above the AI's 1.21 / 1.72 ms a tick, about 1.0 a frame at 0.6
+    ticks a frame), timed inside as the node matrices were (`[time]
+    particles`, ms a frame): `particles_update` (its particles' physics,
+    the particles and those with physics), `contrails_update`,
+    `particle_systems_update` (`game.c`, `particles.c`).
+  - Comments over 2 lines shortened: `real_math.h` (3; a function in a
+    comment is now `#if 0`), `particles.c` (3) and `game.c` (7; their
+    symbol tables point to upstream's copy). Without comments the four
+    game files differ from git only by these changes. `check`: 0 `r2off`,
+    `.got` 0x8370. PKG of 16:58 in `build/ps3_spu/`. Not tested on
+    hardware.
+- 2026-10-19: PKG of 16:58 on hardware (Matt: "Done."; our listener, from
+  the boot): menus, a30, `[spu] vertices up`, no `SPU off`, `[vmx]
+  exact`, `[ps3] exit 0`, `[spu] mixer down` and `[spu] vertices down`.
+  22 timer windows of play, 5 under 45 frames per second; medians all /
+  under 45:
+  - Node matrices 1.06 / 1.47 ms a tick: orientations 0.23 / 0.26,
+    overlays and blends 0.18 / 0.49, matrices 0.50 / 0.55 (first node
+    0.18 / 0.18, checks 0.15 / 0.15, other nodes 0.15 / 0.18, bounds 0.05
+    / 0.05), postprocess 0.06 / 0.06; 569 / 687 nodes a tick. A call:
+    first node 0.78 us, checks 0.65, bounds 0.21; another node 0.47 us.
+    The matrices step was 0.45 / 0.45 before with 4 timer reads fewer a
+    call: no gain from `valid_real` shows.
+  - Particles, ms a frame: particles_update 0.80 / 1.72, of it their
+    physics 0.69 / 1.48 (196 / 392 particles a frame, nearly all with
+    physics: 4.5 us a particle, 3.9 in its physics); the particles' rays
+    (pt-phys) 0.43 / 0.89 of the physics; contrails 0.13 / 0.17 (0.4 to
+    0.9 in 8 of the windows); particle systems 0.00 / 0.00 (up to 0.32).
+  - AI 1.32 / 4.08 ms a tick: in the frames under 45 the largest tick
+    part.
+  - A ray's objects part 25.0 / 26.0 us. The frame 16.95 / 23.70 ms (59.1
+    / 42.1 frames per second), game ticks 5.50 / 11.70, render 9.45 /
+    9.70. The play differs from the run before: the frames are not
+    comparable.
+  - Hardware SUCCESS (Matt: "Yes, the picture was still correct. I will
+    tell you if the picture is wrong from now on.").
+- 2026-10-19: Next steps 1 to 3 (Matt: "All 3.").
+  - 1, the particles' physics: `point_physics_update` timed at every call
+    (`[time] point physics`, ms a frame: its time, its wind lookup
+    `scenario_get_current`, its rays loop; its calls and rays a frame).
+    What a particle's ray tests: `collision_test_vector` with front-facing
+    surfaces, the structure if its physics has structure collisions, water
+    (media) if it has water collisions, never objects; up to 3 rays an
+    update (each bounce goes on along the rest of the frame's motion). So
+    the objects' copies do not shorten these rays: their cost is the
+    structure BSP's.
+  - 2, the AI timed (`[time] ai`, ms a tick): `ai_update`'s conversations,
+    encounters, actors and the rest; each actor's update by step (general
+    and input, perception, situation to decisions, actions, control and
+    communication, movement, look and combat, unit control); the actors a
+    tick.
+  - 3, why the validity checks cost 0.65 us a call: the PPU code of
+    `valid_real_matrix4x3` (inline, no call) is ten tests, each a chain of
+    3 to 6 dependent float operations (about 10 cycles each on the PPE)
+    then a compare and a branch; the PPE issues in order, so each test
+    waits for its whole chain before the next starts: about 600 to 700
+    cycles a matrix, 2 to 3 matrices a call. The fix to offer: every term
+    first, then the tests (the same answer; `valid_realcmp(y)` is
+    `fabs(y) < 0.001f`, false for a NaN or an infinity, without its
+    `valid_real`).
+  - Comments over 2 lines shortened: `point_physics.c` (1), `ai.c` (2) and
+    `actors.c` (5; their symbol tables point to upstream's copy). Without
+    comments the three files differ from git only by the timers. `check`:
+    0 `r2off`, `.got` 0x8380. PKG of 17:31 in `build/ps3_spu/`. Not tested
+    on hardware.
+- 2026-10-19: PKG of 17:31 on hardware (Matt: "Done."; no fault reported;
+  our listener, from the boot): menus, a30, `[spu] vertices up`, no `SPU
+  off`, `[vmx] exact`, `[ps3] exit 0`, `[spu] mixer down` and `[spu]
+  vertices down`. 28 timer windows of play, 2 under 45 frames per second
+  (both RSX-bound: the RSX 15.3 ms a frame); medians of all:
+  - The AI, in the 21 windows with actors (the level's first windows have
+    none): actors 2.21 ms a tick for 7 actors, up to 4.58 for 14: 313 us
+    an actor, of it perception 128 (0.96 ms a tick), control (action
+    control, communication, conversation) 42 (0.52), movement
+    (destination, look's effect, move) 41 (0.46), decisions (situation,
+    emotion, orders, decision loop) 35 (0.37), general 0.11, look and
+    combat 0.10, unit control 0.02, actions 0.00 ms a tick; conversations
+    0.00, encounters 0.01, the rest 0.04.
+  - Point physics 0.69 ms a frame, 196 calls (one ray each): 3.5 us a
+    call, of it the wind lookup (`scenario_get_current`) 0.9 us (0.18 ms
+    a frame) and the ray 2.2 us (0.42). Particles: particles_update 0.83,
+    their physics 0.72, 181 particles a frame.
+  - Node matrices as before (matrices 0.52 ms a tick: first node 0.18,
+    checks 0.15, other nodes 0.15, bounds 0.05).
+  - The frame 16.70 ms (59.9 frames per second), game ticks 5.55, render
+    7.75, the RSX 8.35. The play differs from the run before: the frames
+    are not comparable.
+- 2026-10-19: Next steps 1 to 4 (Matt: "Do all 4 then.").
+  - 1, perception timed (`[time] ai parts`, ms a tick, `actor_perception.c`):
+    `actor_perception_update`'s refresh (timeslice), danger zone, and props
+    loop, with the props' position and status refreshes inside it; the
+    props and the refreshes a tick.
+  - 2, control and movement timed by call (`actors.c`): clear output,
+    action control (the swarm's control too), communication, conversation;
+    destination, look's effect on movement, move. `[time] ai` gives their
+    sums as before.
+  - 3, why the wind lookup costs 0.9 us a call (`scenario_get_current`,
+    `wind.c`, `scenario.c`; PPU code seen): for each particle it finds
+    again what its cluster gives: the BSP 3 times (`global_structure_bsp_get`,
+    a call with its assert), the cluster twice, the fog region
+    (`scenario_get_fog_region_index`: the cluster's fog plane, its region's
+    fog, `fog_definition_get`, the plane test), the fog palette's fog
+    again, the weather palette and the wind (`wind_definition_get`): 2 to
+    3 `tag_get` calls (each `cache_get_tag_instance` and the group tests).
+    `wind_variance_get` moves a float's bits through memory 3 times an axis
+    (9 store-and-read stalls), and the tick count to a float once more. The
+    fix to offer: each cluster's palette and definitions kept for the tick
+    (the fog plane test still at each call), and the variance's axes
+    without the stalls (the same answer).
+  - 4, the validity checks (`real_math.h`, PS3): `valid_real_matrix4x3`
+    computes its six terms first, then tests all ten with `&`. PPU code:
+    no branch (the terms in parallel, then the compares, `mfocrf`, `and`).
+    PC check (gcc, `-ffp-contract=off`): 50,000,000 matrices (near
+    orthonormal, with NaNs, infinities, denormals and random bits;
+    37,019,466 valid): 0 differ from the `&&` form with the float bits.
+  - Without comments the changed files differ from git only by the timers
+    and the checks. `check`: 0 `r2off`, `.got` 0x8388. PKG of 18:05 in
+    `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-19: PKG of 18:05 on hardware (Matt: "Done."; no fault
+  reported). The boot's first lines are not in the log: our listener's
+  first start failed (a Windows path given to MSYS's python), the second
+  started after the boot. From the menus on: a30, both SPUs on (no `SPU
+  off`), `[ps3] exit 0`, `[spu] mixer down` and `[spu] vertices down`.
+  29 timer windows of play, 1 under 45 frames per second (the level's
+  start, no actors); medians of all:
+  - The validity checks 0.09 ms a tick (before 0.15), 0.39 us a call
+    (before 0.67) for 232 calls a tick; the matrices step 0.48 ms a tick
+    (before 0.52): first node 0.19, other nodes 0.15, bounds 0.05.
+  - The AI, in the 22 windows with actors: actors 2.20 ms a tick for 7
+    actors (up to 14): 315 us an actor, of it perception 122, control 44,
+    decisions 37, movement 33, general 14, look and combat 13.
+  - Perception: the timeslice refresh 16 us an actor, the danger zone 0,
+    the props loop 105: its props' position and status refreshes 0.79 ms
+    a tick, 8.8 a tick, 77 us each (47 to 108); the rest 1.5 us a prop
+    (23.6 props a tick). The AI's line-of-sight rays (`ai_test_line_of_sight`,
+    `ai-los`) 0.67 ms a tick, 8.2 rays a tick, 57 us a ray (44 to 118):
+    86% of the refreshes' time.
+  - Control: action control 43 us an actor (0 in the windows with 3
+    actors, 31 to 134 in combat with 13 and 14); clear output,
+    communication and conversation 0 to 1. Movement: the move 29 us an
+    actor (157 to 262 in the windows with 3 actors, 6 to 9 with 7 to 12);
+    destination 1, look's effect 0.
+  - Point physics: the wind 0.19 ms a frame, 0.88 us a call (211 calls),
+    the rays 0.47; particles_update 0.89, their physics 0.76.
+  - The frame 17.00 ms (58.8 frames per second), game ticks 5.70, render
+    8.70, the RSX 8.5. The play differs from the run before: the frames
+    are not comparable.
+- 2026-10-19: Next steps 1 to 4 (Matt: "Do all 4 next steps.").
+  - 1, the AI's line of sight timed (`[time] ai line of sight`, ms a
+    tick): `ai_test_line_of_sight`'s calls and those with a ray (the
+    others the PVS rules out), the first ray, the fog
+    (`scenario_fog_at_point`), the mode's rays, the rest; its rays a tick
+    and the first rays' length. Its rays' parts (the user `ai-los` on top
+    of the collision stack, `collision_usage.h`): the structure part with
+    its bsp and bsp nodes, the objects part with the models, the object
+    bsps and their nodes; the leaves, the clusters whose objects the rays
+    walked and the objects tested.
+  - 2, action control by action (`[time] action control`, `actions.c`):
+    each of the 14 actions' time and calls a tick.
+  - 3, the move (`[time] ai move`, `actor_moving.c`): `actor_move_update`
+    has no path search; its parts: the flying vector avoidance, the
+    movement (`actor_move_calculate_movement`: in it the pathfinding
+    location and the line test), the firing positions, the rest. The path
+    searches are `actor_path_refresh` (from action control's
+    `actor_move_to_*`, `actor_move_halt*`, and `actor_destination_update`):
+    timed wherever it runs, with its path builds (`path_state_find` and
+    the build).
+  - 4, the wind (`wind.c`, PS3): `scenario_get_current`'s lookups for a
+    cluster (its weather palette entry; its fog region's, with the fog's
+    water flag; the fog plane and the water's distance) and each weather
+    palette entry's wind definition, kept for one tick (`wind_update`'s
+    time), structure bsp and map, 32 clusters direct mapped; the fog
+    plane's test still at each call; a cluster or entry the structure bsp
+    does not have takes the code as it was (its error report at each
+    call). `wind_variance_get`: the three keys made, then stored and read
+    once, `fabs` for the sign mask, the time as a real once a tick, the
+    axis scales in the program's data (PPU code: three stores, then the
+    loads; before, 10 store-and-read stalls a call). PC check (gcc,
+    `-ffp-contract=off`, both forms taken from the sources): 29,101,907
+    calls with ticks, structure bsp switches (one at the same address with
+    new data) and map changes between them, NaNs, infinities, denormals,
+    bad indices: 0 differ in the wind's bits, the water flag or the block
+    errors; 11,774,506 calls found their cluster's lookup kept. Six
+    faults put in the PS3 code (no bsp index test, no water distance, no
+    `fabs`, no water flag, a wrong cluster kept, a stale time) each
+    differ.
+  - Comments over 2 lines shortened: `actions.c` (3), `actor_moving.c`
+    (3), `wind.c` (1; the symbol tables point to upstream's copy).
+    Without comments the files differ from git only by the timers and the
+    wind. Warnings (`-Wall`) in the changed files: none in the new code.
+    `check`: 0 `r2off`, `.got` 0x83f8. PKG of 18:58 in `build/ps3_spu/`.
+    Not tested on hardware.
+- 2026-10-19: PKG of 18:58 on hardware (Matt: "Done"; no fault reported;
+  our listener, from the boot): menus, a30, `[spu] vertices up`, `[spu]
+  mixer up`, `[vmx] exact`, no `SPU off`, `[ps3] exit 0`, `[spu] mixer
+  down` and `[spu] vertices down`. 25 timer windows of play, 2 under 45
+  frames per second (no actors in them: the level's start, 40.4 ms a
+  frame, 20.1 of it outside the phases; and an RSX-bound one, the RSX
+  13.3 ms); medians of all:
+  - The wind 0.60 us a call (before 0.88), 0.12 ms a frame for 220 calls
+    (before 0.19 for 211); point physics 3.0 us a call (before 3.5).
+  - The AI, in the 18 windows with actors: 2.00 ms a tick for 5.2 actors
+    (up to 14): 326 us an actor, of it perception 120, movement 40,
+    decisions 35, control 25.
+  - Action control is the guard action (90 us a call; up to 1.66 ms a
+    tick with 14 actors); the other actions about 0. It is the path
+    builds: `actor_path_refresh` 0.36 ms a tick, its builds 0.36 (in the
+    windows with 7 to 14 actors 0.73 to 1.78 ms a tick, 0.3 to 0.6
+    builds a tick: 1.8 to 3.6 ms a build, in one tick). The 3-actor
+    windows' builds cost about 0.
+  - The move is the flying vector avoidance (the flying vehicles'
+    pilots): 0.36 ms a tick, 334 us a call, 1 to 2 calls a tick; each
+    call 25 rays (9
+    sense rays, 8 directions of 2), each up to 2 structure bsp tests and
+    the pills of the objects near. The movement 0.03, the rest 0.02.
+  - The line of sight 0.58 ms a tick (up to 1.24 with 14 actors), 4.8
+    calls a tick, all with a ray (none ruled out by the PVS), 7.9 rays (the
+    mode's extra rays 0.16 ms); 59 us a ray: the objects part 38 (models
+    19, of it object bsps 14; the rest, 19, the loop over the clusters'
+    objects), the structure part 16 (45 bsp nodes); a ray 38 world units
+    long on median, 5.4 leaves, 1.3 clusters, 3.9 objects tested. The fog
+    0.00.
+  - Node matrices: the checks 0.08 ms a tick, the matrices 0.45.
+  - The frame 17.00 ms (58.9 frames per second), game ticks 5.40, render
+    9.40, the RSX 8.8. The play differs from the run before: the frames
+    are not comparable.
+- 2026-10-19: Next steps 1 to 3 (Matt: "Do 'em").
+  - 1, a path build timed inside (`[time] ai paths`, `actor_moving.c`):
+    the setup (`actor_path_input_new`, `path_state_new` with the debug
+    storage `ai_debug_get_path_storage` gives every build, the
+    destination), the search (`path_state_find`) with the nodes it made
+    (`node_count`), the path made from it (`path_state_build_path`); the
+    flying builds (`path_3d_build_path`) and the cached state's apart. A
+    timed call keeps its result (`PS3_MOVE_TIMED`, a GCC statement
+    expression; the call alone on the other builds).
+  - 2, the flying vector avoidance timed inside (`[time] ai avoidance`):
+    `actor_move_avoidance_setup` with the objects it found, the rays'
+    structure bsp tests (`collision_bsp_test_vector`, up to 2 a ray) and
+    their pill tests against those objects, with their counts; the rest.
+  - 3, the line-of-sight rays' loop over a cluster's objects (`[time] ai
+    line of sight objects`, `collisions.c`): the loop's time, its marks'
+    and object tests' time (the iterator: the difference); the objects
+    the copies' iterator walked (`ps3_bounds_walked`,
+    `object_bounds_cache.c`), those it passed, those tested.
+  - `check`: 0 `r2off`, `.got` 0x8430. Warnings (`-Wall`) in the changed
+    files: none in the new code. PKG of 19:38 in `build/ps3_spu/`. Not
+    tested on hardware.
+- 2026-10-19: Matt: "are we close at getting 60 stable FPS?". The answer,
+  from the PKG of 18:58's run: not yet; close in light play. 11 of 25
+  windows held 60, 7 were under 55. Two limits: a combat tick (13 to 16
+  ms; a tick and two renders must fit in 33.3 ms, so with renders of 8
+  to 10 ms a tick must stay under about 13 to 15 ms), and the RSX in
+  some views (13 to 17 ms a frame without actors). Only a30 measured;
+  the windows hide single slow frames.
+- 2026-10-19: PKG of 19:38 on hardware (Matt: "Done."; no fault reported;
+  our listener, from the boot): menus, a30, `[spu] vertices up`, `[spu]
+  mixer up`, `[vmx] exact`, no `SPU off`, `[ps3] exit 0`, `[spu] mixer
+  down` and `[spu] vertices down`. 30 timer windows of play, 3 under 45
+  frames per second; medians of all / under 45:
+  - The frame 16.80 / 25.70 ms (59.6 / 38.8 frames per second), game
+    ticks 5.65 / 4.10, render 9.00 / 11.70, the RSX 8.7 / 12.7. The
+    three under 45: the level's start (32.9), a view the RSX holds (40.9:
+    the RSX 17.8 ms a frame) and the heaviest combat (38.8: 19.0 ms a
+    tick, 0.77 ticks a frame as the game catches up; the objects 8.25 ms
+    a tick, of it vehicles 3.10, bipeds 1.74, node matrices 1.29; the AI
+    4.58 for 11.7 actors, of it decisions 1.66, perception 1.41;
+    collision 7.02 ms a frame for 958 tests; particles_update 2.21 ms a
+    frame for 492 particles). A window at 45.2 is the same combat (18.8
+    ms a tick).
+  - Path builds, in the 15 windows with searches: the setup 50 us, the
+    search (`path_state_find`) 1133 us (167 to 2300), the path made from
+    it (`path_state_build_path`) 1500 us (200 to 2800); 494 nodes a
+    search (11 to 977, of the 1024 a state holds); 0.2 builds a tick.
+  - The vector avoidance, in the 15 windows with calls: 310 us a call, 2
+    calls a tick: the 50 structure bsp tests 150 us (3.0 us each), the
+    rest 90 (the weights, the debug arrays it fills, the timers), the
+    setup 40 (1 object found on median, up to 9.7), the 25 pill tests 5.
+  - A line-of-sight ray, in the 24 windows with actors (11.1 rays a
+    tick): 61.7 us, its objects part 46.0, structure 14.0. The objects
+    loop 44.5 us a ray: the iterator 19.5 (122 objects walked a ray, 158
+    ns each: the cluster's list and the copies), the marks and object
+    tests 25.7 (5.2 objects tested a ray; 5.3 passed by the copies).
+  - The wind 0.54 us a call (0.14 ms a frame).
+- 2026-10-19: the checkpoint stutter (Matt: "There where also stutters when
+  it reached a "checkpoint". It happens at every level start."). Cause,
+  from every log of the day: `game_state_save` (game_state.c) writes the
+  whole game state, 20 MB (the native builds' larger state:
+  `HALO_PORT_GAME_STATE_SIZE`; the Xbox's was 3.3), to `z:\savegame.bin`
+  on the game thread (`game_state_write_to_file`, one `WriteFile`; the
+  game's clock stopped meanwhile): 1.30 to 1.50 s each (once 4.39 s),
+  about 15 MB/s, two in each a30 run (the level's start and its first
+  checkpoint). A revert reads the file back: 0.32 to 0.38 s. The fix to
+  offer: the state copied into a 20 MB buffer in main memory at the
+  checkpoint (a few ms), the file written from it by a thread of its
+  own, and a revert from the copy. Its cost: 20 MB of main memory (the
+  lowest free 41.7 MB in this run, 36 MB on 2026-10-16); the used part
+  of the state alone, if it is smaller.
+- 2026-10-19: Steps 1 to 5 (Matt: "Do it along all the steps you
+  mentioned, so we concretize the amount of things we test.").
+  - 5, the checkpoint (`game_state_xbox.c`, PS3): `game_state_write_to_file`
+    copies the state (20 MB) into a buffer of main memory (allocated at
+    the first checkpoint, kept) and returns; a thread of its own
+    (`CreateThread`) writes the file from the copy in parts of 256 KB (the
+    game's reads of its files between them) and logs `[halo] checkpoint:
+    ... written by the writer in N ms`; the copy logs `... copied in N
+    ms`. The next checkpoint and the file's close wait for the last write
+    first. A revert (`game_state_read_from_file`) takes the copy
+    (`game_state_image_accept` on it: the bytes the file holds; no 20 MB
+    read nor its 20 MB buffer). With no memory for the copy, the write is
+    as before; with no thread, the copy is written at once. A failed
+    write is reported at the next wait (as before, `match_vassert`), and
+    a revert still has the copy.
+  - 4, each cluster's kept block (`object_bounds_cache.c`, PS3): its
+    collideable objects in its list's order with their copies' spheres
+    (and whether each copy is known), 16 bytes a sphere, made at the
+    first ray of a generation (1 + the collideable partition's
+    `port_modification_count` + `object_bounds_writes`, the copies'
+    writes and invalidations; as the lights' kept lists,
+    `object_lights.c`), 4096 entries for all clusters; the VMX batches
+    read the block, not the list and the scattered copies. A cluster out
+    of range or past the entries: the list walked as before. PC check
+    (gcc, both forms from the sources: the plain walk with
+    `vector_missed`, the PS3 one with a scalar stand-in for the VMX test):
+    2,789,659 segments with VMX and 930,108 without, while objects move,
+    leave and join clusters, change datums (unknown copies) and the
+    copies are invalidated: 0 differ in the objects given and their
+    order; four faults (no list counter, no copy counter, known always,
+    a radius halved) each differ.
+  - 1, a path search timed inside (`[time] ai path search`, `path.c`): the
+    reset, the begin, the traverse (its heap pops, the surfaces' edges
+    (`build_path_edges_for_surface`, with the surfaces), the edges' loops
+    with their heap inserts, the closest points in them), the copy of the
+    state into the debug storage; the path made: `path_smooth`,
+    `path_avoid_obstacles`.
+  - 2, the vehicles (`[time] vehicles`, `vehicles.c`): `vehicle_update`'s
+    physics (`update_*_physics`, with the vehicles simulated), the effects
+    after it (slipping, suspension, crashing, airborne), the stopping, the
+    animation (with the vehicles).
+  - 3, the decisions by call (`[time] ai decisions`, `actors.c`):
+    `actor_situation_update`, `actor_emotion_update`, `actor_clear_orders`,
+    `actor_decision_loop` (its `actor_type_decide_action` and
+    `actor_action_perform`, with their calls); `[time] ai` gives their sum.
+  - Comments over 2 lines shortened: `path.c` (4), `vehicles.c` (7; the
+    symbol tables point to upstream's copy). Warnings (`-Wall`) in the
+    changed files: none in the new code. `check`: 0 `r2off`, `.got`
+    0x8450. PKG of 21:17 in `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-19: PKG of 21:17 on hardware (Matt: "Done. The fix for the
+  stutter worked, though"; no fault reported; our listener, from the
+  boot): menus, a30, `[spu]` and `[vmx]` as before, `[ps3] exit 0`. 36
+  timer windows of play, none under 45 frames per second; medians of
+  all:
+  - The checkpoints (the level's start and the first one): `[halo]
+    checkpoint: 20480 KB copied in 30 ms` and `29 ms` (the game thread),
+    `written by the writer in 1848 ms` and `1558 ms` (its own thread; the
+    whole write was 1.30 to 1.50 s on the game thread before). A revert
+    ("the saved game is taken") took the copy. Main memory: 45.6 MB free
+    before the first checkpoint, 23.6 MB after it (the copy kept), the
+    lowest 18.6 MB (t=225 s); the heap 46.8 to 73.5 MB.
+  - The rays' iterator, the AI's line-of-sight rays (29 windows with
+    actors): 9.3 us a ray (before 19.5), 93.2 objects a ray read from
+    kept blocks, 0.1 walked in the lists; the objects part 32.3 us a ray
+    (before 46.0), a ray 55.0 us (before 61.7).
+  - Path builds (11 windows with searches): a search 1367 us: the
+    traverse 1325 (pops 200, the surfaces' edges 467 for 576 surfaces,
+    the edges' loops 600, the closest points 0), the debug copy 225, the
+    reset and begin 0; 499 nodes. The path made 1550 us: its smoothing
+    (`path_smooth`) 1267, the obstacle avoidance 300.
+  - Vehicles (33 windows with vehicles): the physics 0.82 ms a tick (up
+    to 3.01), 2 simulated a tick, 400 us each (up to 1122); effects,
+    stopping and animation about 0.
+  - The decisions (lighter AI than before: 3 actors on median, up to 14):
+    the decision loop 21 us an actor (perform 11, decide 7), situation
+    3, emotion 3, orders 0; with 12 to 14 actors the loop 0.27 to 0.62 ms
+    a tick, most of it perform (0.16 to 0.49).
+  - The frame 16.80 ms (59.5 frames per second), game ticks 5.25, render
+    8.55, the RSX 8.1. The slowest: 46.7 and 47.4 (a tick 14.8 to 14.9
+    ms: the objects 6.86 with vehicles 3.12; the AI 3.48 for 13 actors)
+    and 48.5 and 49.7 (the RSX 16.5 to 17.8 ms, no actors).
+- 2026-10-19: Steps 1 to 5 (Matt: "Yeah, do all those. We're doing
+  great!").
+  - 1, the smoothing timed inside (`[time] ai path smoothing`,
+    `path_smoothing.c`): the pill tests from the current point to each
+    raw step (`structure_test_pill2d`), the turning points
+    (`find_turning_point`, both ways), the surface found and the point
+    projected; with their calls.
+  - 2, the search's debug copy (`path.c`, PS3): the 70 KB
+    `state->debug->path_state = *state` only while `ai_debug.path`,
+    `render_paths` or `render_paths_failed` is on: the only readers are
+    `ai_debug.c`'s `ai_debug_render_path_storage` (by those three) and
+    `ai_debug_render_paths_failed`; the rest of the debug storage as
+    before. (Paths searched while those were off show no search when one
+    is turned on, until searched again.)
+  - 3, the vehicles' physics timed inside (`[time] physics`,
+    `physics.c`): `physics_compute_new` (the forces, with the mass points
+    as their count), `physics_update_new` (the movement),
+    `physics_compute_unit_collisions`, `physics_update_old` (a physics
+    with a radius).
+  - 4, the surfaces' edges kept (`path.c`, PS3): `path_edges_kept_get`
+    keeps `build_path_edges_for_surface`'s edges by surface (1024 slots by
+    the surface's index, up to 8 edges: a ring has at most
+    `MAXIMUM_EDGES_PER_COLLISION_SURFACE`, 8), 270 KB; read only from the
+    structure bsp's tag data, they are kept while the structure bsp
+    (pointer and index) is the same, forgotten at a map's start and end
+    (`paths_initialize_for_new_map`, `paths_dispose_from_old_map`).
+    `[time] ai path search` gives the surfaces whose edges were kept. PC
+    check (gcc, both from the sources): 19,992,036 lookups (9,984,793
+    kept) over three random structure bsps, switched, reloaded at the
+    same place under another index, and new maps: 0 differ; faults (no
+    index test, no forgetting, a wrong slot test) each differ (with no
+    pointer test, none: an index is always the same data).
+  - 5, the checkpoint's copy (`game_state_xbox.c`, `game_state.c`, PS3):
+    only the state's used parts (`game_state_port_used_sizes`: the CPU
+    part's allocations from its start, the GPU part's from its end), once
+    the unused middle is checked to be zeroes (else the write as before);
+    the writer writes the used parts and zeroes between them (the same
+    bytes). A revert puts the parts over the game state, clears the
+    middle and checks it there (`game_state_image_accept` on the game
+    state itself, which no longer copies an image onto itself); a refusal
+    resets the map, as before. The log gives the parts' sizes.
+  - Comments over 2 lines shortened: `path_smoothing.c` (4),
+    `physics.c` (5), `game_state.c` (5), `game_state.h` (1). Warnings
+    (`-Wall`) in the changed files: none in the new code. `check`: 0
+    `r2off`, `.got` 0x8460. PKG of 22:08 in `build/ps3_spu/`. Not tested
+    on hardware.
+- 2026-10-19: PKG of 22:08 on hardware (Matt asked "Should I try a bigger
+  level than "Halo"?"; b40 proposed). The first load of b40 copied
+  `d:\maps\b40.map` (182,494 KB) into the map cache (`z:\cache001.map`)
+  in 43 s (read 6.2 s, the writes about 11 MB/s), the game's main loop
+  waiting and the picture still (Matt: "...Did the game freeze? Or is it
+  loading?"). Then at the level's first checkpoint: "EXCEPTION halt in
+  c:\halo\SOURCE\cseries\debug_memory.c,#165: Attempted an operation with
+  pointer at 0x0, outside of the valid pointer range. (source/saved
+  games/game_state_xbox.c:799)" (Matt: "Got a red screen."). Cause: the
+  compact checkpoint's `free(game_state_checkpoint.image)` before the
+  first copy was made: the game's `free` is `match_free`, which halts on
+  NULL. Fix: `free` only of a copy made. PKG of 22:24 in `build/ps3_spu/`.
+  Memory before the halt: 42.3 MB free at the lowest (b40, t=107 s).
+- 2026-10-19: PKG of 22:24 on hardware (b40; Matt: "Run's done!"; no
+  fault reported; our listener, from the boot): menus, b40 from the map
+  cache (no copy), `[ps3] exit 0`. 35 timer windows of play, 2 under 45
+  frames per second (the load's, 32.4; the last, 37.5). Medians of all /
+  under 45, and sums of the run for the costs of a call (each window's
+  ms a tick times its ticks):
+  - The frame 16.70 / 28.75 ms (59.9 / 35.0 frames per second), game
+    ticks 2.60 / 4.20 ms a frame (5.2 / 5.5 ms each), render 6.50 /
+    11.85, the RSX 11.80 / 14.15 (a30: 8.1).
+  - The checkpoints (the level's start and two more): `17942 KB of the
+    state's 20480 KB copied in 38 ms` (then 40, 39; the CPU part's 17,782
+    KB, the GPU part's 160 KB) on the game thread; a30's whole copy took
+    29 to 30. Written by the writer in 1785, 2033 and 1513 ms. A revert
+    ("the saved game is taken") took the copy. Main memory: 42.3 MB free
+    before the first checkpoint, 25.3 after it, the lowest 18.3 (t=218
+    s). The heap grows in play, its use not: 66.7 to 73.7 MB, in use
+    64.8 to 66.6 (a30: 68.8 to 73.5, in use 67.2 to 69.0).
+  - Path searches: 101,066 surfaces, their edges kept for 91%. A
+    surface's edges 1.07 us (a30, built: 0.82), the edges' loops 0.97
+    (1.05), the pops 0.24 (0.34); the debug copy 0 (a30: 0.45 us a
+    surface, 225 us a search). Windows with 96 to 99% kept: 0.81 to 1.24
+    us a surface; a least-squares fit over 25 windows: a kept surface
+    1.09 us, a built one 0.92. The kept copies are not faster than the
+    builds (cache misses in the 270 KB table as in the tag data). Most of
+    b40's search time is not `actor_path_refresh`'s (its 852 searches: 51
+    ms of the traverses' 253): `actor_firing_position.c` and
+    `action_flee.c` call `path_state_find` too.
+  - The smoothing 165 us a path made or cached (a30: 1158): its pill
+    tests (`structure_test_pill2d`) 10.1 us a call, 13.6 a path; the
+    turning points 1.2 us a call, 3.5 a path; the surfaces 0.
+  - Vehicles (18 windows with vehicles): 487 us a simulated vehicle (a30:
+    400), up to 0.73 ms a tick. Most of it the old physics
+    (`physics_update_old`): 364 us a call, 2,167 calls. The new (310
+    calls): the forces 150 us a call (5.5 mass points), the movement 105,
+    the units' collisions 5.
+  - The AI (5 actors a tick on median, up to 10): actors 0.86 / 0.73 ms a
+    tick; the heaviest 2.01 ms a tick (8.3 actors).
+  - The RSX by pass: the specular pass 4.80 / 2.45 ms a frame (a30:
+    0.70), 7.2 to 9.0 in the windows of 46.9 to 56.2 frames per second,
+    with the lights 1.6 to 6.7; the lightmaps 1.70 / 1.35, the diffuse
+    1.00 / 0.95.
+  - The slowest window (37.5): a tick 9.5 ms at 0.80 a frame (objects
+    5.10: node matrices 1.53, units 1.64; the AI 1.53 for 10 actors); the
+    game thread's render 18.4 ms a frame (effects 5.1: weather 2.30,
+    transparent 2.04; objects 3.5: models 2.72; its Direct3D draws 3.57);
+    the RSX 17.7. A window of 51.7: the particles 2.05 ms a frame (392
+    particles, 388 with physics: 1.71).
+- 2026-10-19: Steps 1 to 6 (Matt: "Go for it! Also, maybe we can delegate
+  the specular pass to one SPU.").
+  - 1, the kept edges taken out (`path.c`): a search builds a surface's
+    edges again (`build_path_edges_for_surface`, timed as before); 270 KB
+    back. `[time] ai path search` gives the surfaces only.
+  - 2, the checkpoint's copy (`game_state_xbox.c`, `ps3_vmx.c`): the copy
+    on a 128-byte line in its block; the unused middle checked and the
+    used parts copied with `ps3_vmx_zeroes` and `ps3_vmx_copy` (each
+    source line touched 1 KB ahead; each destination line zeroed in the
+    cache by `dcbz`, not read, then written whole with VMX, when the first
+    call finds that `dcbz` zeroes exactly the 128-byte line, else plain
+    stores); a revert with `ps3_vmx_copy` and `ps3_vmx_zero`. The log
+    line gives the copy's ms and the check's. PC check (gcc, the section
+    of `ps3_vmx.c` with stand-ins: `vec_ld` and `vec_st` drop an
+    address's low 4 bits, `dcbz` zeroes its block): 4,000 rounds each with
+    a `dcbz` of 128, 32 and 64 bytes (sizes to 3 MB, any alignment, guard
+    bytes around): 0 differ; faults (the head to 64 bytes, no source
+    alignment test, the zero test's head or last check dropped, `dcbz`
+    used whatever it zeroes) each differ.
+  - 3, the specular part (`render.c`) split in seven: `lights_render_specular`,
+    the specular lightmaps, the reflection masks, the mirrors, the
+    reflections, the transparent structure, the fog; each a split on the
+    game thread and the RSX, with the RSX's draws (`ps3_gpu.c` counts the
+    draws between splits). The window's specular part is their sum
+    (`[time] specular part`). In one frame of eight the RSX stamps each
+    draw of the part (`ps3_timers_draw_stamps`: a record for the Direct3D
+    thread; report slots 512 to 991); `d3d8_rsx.c` logs the eight pixel
+    shaders with the most RSX time, with their split, instructions,
+    registers, combiners, texture modes and the last draw's textures.
+    Timestamps a frame 32 to 48, their parts 16-bit.
+  - The SPU (Matt's question): the specular part's RSX time (4.8 ms a
+    frame on median on b40, up to 9.0) is the RSX's own pixel work. An
+    SPU cannot write the RSX's local memory (no DMA there) and is far
+    slower at pixels; it could take only the game thread's part (1.2 ms
+    a frame on median), the game's own loops and Direct3D calls. Step 3
+    names the split and the pixel shaders; the fix is then on the RSX
+    (the program, the textures, the pixels drawn).
+  - 4, the weather (`weather_particle_systems.c`: the update with its
+    particles, the sprites built with their count, their draw; the
+    visibility tests are the rest) and the transparent geometry
+    (`rasterizer_transparent_geometry.c`: the sort with the groups, the
+    groups' begin and end, each group by its shader's type, with the
+    groups).
+  - 5, the heap log (`ps3_heap.c`; the Makefile's `--wrap` of `malloc`,
+    `calloc`, `realloc`, `memalign`, `_sbrk_r`): each growth of newlib's
+    heap and each allocation of 64 KB or more, with the request and five
+    return addresses, at the `[mem]` heartbeat (`[heap]` lines). A request
+    holds newlib's (recursive) malloc lock around the call. The game's
+    allocations reach `calloc` through `debug_malloc`, `system_malloc`
+    and `GlobalAlloc` (`ppu-objdump`: 49 calls to `__wrap_malloc`;
+    `GlobalAlloc` calls `__wrap_calloc`, `_malloc_r` `__wrap__sbrk_r`).
+  - 6, the old physics (`physics.c`, `physics_update_old`): each mass
+    point's location (`scenario_location_from_point`), ground plane
+    (`compute_ground_plane`), water depth and antigravity probe
+    (`collision_test_vector`), then the object's move
+    (`scenario_location_from_line`, `object_translate`).
+  - Comments over 2 lines shortened: `weather_particle_systems.c` (4; the
+    symbol table points to upstream's copy), the Makefile (1). Warnings
+    (`-Wall`) in the changed files: none in the new code. `check`: 0
+    `r2off`, `.got` 0x85a8. PKG of 23:33 in `build/ps3_spu/`. Not tested
+    on hardware.
+- 2026-10-19: PKG of 23:33 on hardware (b40; Matt: "Done."; no fault
+  reported; our listener, from the boot, after Matt freed UDP 18194 from
+  the flycastPS3 session's listener): `[ps3] exit 0`. 33 timer windows
+  of play, 7 under 45 frames per second (the run went further into the
+  snow than the last). Medians of all / under 45, and sums of the run
+  for the costs of a call:
+  - The frame 17.80 / 23.70 ms (56.0 / 42.2 frames per second), game
+    ticks 3.70 / 6.50 ms a frame (7.0 / 8.7 each), render 11.70 / 16.50,
+    the RSX 13.50 / 17.00.
+  - The checkpoints: `[vmx] dcbz zeroes 128 bytes: whole lines written
+    with it`; three copies of 17,942 KB in 10.4, 11.5 and 11.9 ms (the
+    last run's 38 to 40), the unused 2,537 KB checked in 0.6 to 0.9 ms;
+    written by the writer in 1.7 to 2.3 s. A revert ("the saved game is
+    taken") took the copy (`ps3_vmx_copy`, `ps3_vmx_zero`) and a timer
+    window of play followed.
+  - The specular part on the RSX, ms a frame: reflections 1.79 / 1.53
+    (17.6 / 24.9 draws), lights 1.26 / 1.26 (11.9), fog 0.85 / 0.95,
+    reflection masks 0.61 / 0.63, transparent 0.05 / 0.05 (up to 2.07 in a
+    window), specular lightmaps and mirrors 0. On the game thread:
+    lights 0.39, reflections 0.37, masks 0.22, transparent 0.20, fog
+    0.19.
+  - Its pixel shaders over 1,237 stamped frames (ms and draws a stamped
+    frame): 61 (lights) 1.67, 13.8 draws: 96 instructions, 6 registers,
+    6 combiners; a 512x512 A8R8G8B8 bump map, a 32x32 3D texture, two
+    64x64 cube maps. 17 (reflections) 1.50, 16.4 draws: 66 instructions,
+    5 registers, 5 combiners; a 512x512 A8R8G8B8 map, two 64x64 cube
+    maps. 66 (fog) 0.60, 15.3 draws: 36 instructions for 2 combiners. 15
+    (reflection masks) 0.56, 19.0 draws: 14 instructions.
+  - The weather in the snow (under 45): its update 1.39 ms a frame for
+    364 particles (3.8 us each; their `point_physics_update` 0.86 ms for
+    365 calls, its rays 0.54), visibility 0.45, sprites 0.33 (113, 2.9 us
+    each), their draw 0 (queued: the transparent geometry draws them).
+  - The transparent geometry: the sort 0.17 / 0.36 ms (19.5 / 38.4
+    groups, 9 us a group), generic 0.18 / 0.31 (5.5 / 10.1 groups),
+    glass 0.15 / 0.27 (4.0 / 7.6), effect 0.11 / 0.22 (6.8 / 14.2).
+  - The old physics (the tank, 3,580 calls): 339 us a call; its ground
+    planes 257 (18.9 mass points, 13.6 us each), the locations 33, water
+    11, the move 10, the rest 28; no antigravity probes.
+  - The heap: 25.0 MB free at t=50 s (after the first copy), 16.5 at
+    t=200 s; the heap 66.5 to 75.4 MB, in use 65.2 to 65.6. Its large
+    allocations in play (`ppu-objdump`'s function starts name the
+    addresses): the sound streams' packet buffers, 64 KB each, 10 to 25
+    a second (`ps3_spu_buffer_allocate` from `stream_process`,
+    `dsound_ps3.c`: a `memalign` at each packet, freed once mixed); the
+    pixel shader translator's temporary buffers at each new shader (68
+    KB in `rsx_fragment_program_translate`, 45 KB in
+    `rsx_fragment_program_instructions`). Of the growths logged: the
+    streams' buffers 2.7 MB, the translator's 0.8 MB.

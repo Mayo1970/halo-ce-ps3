@@ -496,6 +496,11 @@ void ps3_collision_end(
 	{
 		ps3_collision_function_timers[function] += elapsed;
 		ps3_collision_function_calls[function]++;
+		if (PS3_COLLISION_LOS())
+		{
+			ps3_los_function_timers[function] += elapsed;
+			ps3_los_function_calls[function]++;
+		}
 	}
 	if (ps3_collision_depth)
 		return;

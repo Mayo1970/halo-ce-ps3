@@ -1,6 +1,4 @@
-/*
-OBJECTS.C
-*/
+/* OBJECTS.C */
 
 /* ---------- headers */
 
@@ -71,6 +69,7 @@ void first_person_legs_reset(void);
 /* port: the timer build's spans in objects_update, the type updates by kind (port/ps3/include/ps3_timers.h) */
 #define PS3_OBJECTS_SPAN(span) ((span) = ps3_timer_now())
 #define PS3_OBJECTS_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_OBJECTS_COUNT(timer, count) (ps3_timer_counts[(timer)] += (uint32_t)(count))
 #define PS3_OBJECTS_TYPE_TIMER(type) \
 	((FLAG(type) & _object_mask_unit) ? _ps3_timer_objects_units : \
 	(FLAG(type) & _object_mask_item) ? _ps3_timer_objects_items : \
@@ -78,27 +77,18 @@ void first_person_legs_reset(void);
 #else
 #define PS3_OBJECTS_SPAN(span) ((void)0)
 #define PS3_OBJECTS_ADD(timer, span) ((void)0)
+#define PS3_OBJECTS_COUNT(timer, count) ((void)0)
 #endif
 
-/* port: the garbage collection (objects_garbage_collection). With many
-players spread over a level and many bodies (co-op's extra enemies), every
-body was in some player's view, none could go, and the whole collection
-(every garbage object's visibility, the memory pool compacted) ran again
-every tick on the host. In network co-op only (single player and
-multiplayer keep the game's own collection), a player sees garbage no
-further off than GARBAGE_VISIBLE_DISTANCE (world units, about 90 metres),
-and a collection of active garbage that left too much is tried again only
-after GARBAGE_ACTIVE_RETRY_TICKS. Running short of memory or objects still
-collects at once. */
+/* port: network co-op only (many players and bodies made it run every tick): garbage past GARBAGE_VISIBLE_DISTANCE
+(about 90 m) is unseen, too much active garbage left waits GARBAGE_ACTIVE_RETRY_TICKS; short of memory, at once */
 #define GARBAGE_VISIBLE_DISTANCE 30.0f
 #define GARBAGE_ACTIVE_RETRY_TICKS TICKS_PER_SECOND
 
 
 // This is dangerous, bungie returns the same value regardless of whether the index is valid
-/* port: an index is 1-4 for the incoming functions and 5-8 for the outgoing
-ones (the Xbox read both through incoming_function_values, which the
-outgoing ones follow; retail uses up to 8). Anything else is a map's bad
-index, which reads no function: 0 */
+/* port: 1-4 are the incoming functions, 5-8 the outgoing (the Xbox read both through incoming_function_values,
+which they follow; retail uses up to 8); any other is a map's bad index and reads 0 */
 #define OBJECT_INCOMING_FUNCTION_GET_VALUE(object, index)	\
 ((unsigned long)((index)-1)>=NUMBER_OF_INCOMING_OBJECT_FUNCTIONS+NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS ? \
 0.f :														\
@@ -128,9 +118,8 @@ struct object_globals
 	} pvs_activation;
 };
 
-/* port: when a collection of active garbage may be tried again (NONE: at
-once); not in the game state, so a revert, which takes the clock back, puts
-it right (objects_garbage_active_due) */
+/* port: when a collection of active garbage may run again (NONE: at once); out of the game state, so a revert,
+which takes the clock back, puts it right (objects_garbage_active_due) */
 static long garbage_active_retry_time = NONE;
 
 struct object_memory_release_function
@@ -155,9 +144,8 @@ struct dump_datum
 
 /* ---------- prototypes */
 
-/* port/linux/game/network_objects.c's: a client of the distributed netcode
-makes the host's objects at the host's datum indices, and deletes them only
-on the host's word */
+/* port/linux/game/network_objects.c's: a distributed-netcode client makes the host's objects at the host's datum
+indices, and deletes them only on the host's word */
 long network_objects_new_object_index(void);
 boolean network_objects_creating_host_object(void);
 boolean network_objects_may_delete(long object_index);
@@ -1537,9 +1525,8 @@ void object_permute_region(
 					region_index,
 					struct model_region);
 
-				/* port: no more permutations than a region has room for (a map's
-				count, which a short counter would never reach; retail has up
-				to 12) */
+				/* port: no more permutations than a region has room for (a map's count, which a short counter
+				would never reach; retail has up to 12) */
 				for (permutation_index = 0; permutation_index<MIN(region->permutations.count, MAXIMUM_PERMUTATIONS_PER_MODEL_REGION); permutation_index++)
 				{
 					struct model_region_permutation *permutation = TAG_BLOCK_GET_ELEMENT(
@@ -1578,9 +1565,8 @@ boolean object_get_function_value(
 	{
 		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 1654, function_index>=0 && function_index<NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS);
 
-		/* port: a function the object can have (a map's index, from an
-		attachment, a widget or a shader; retail's are NONE or 0-3), or
-		it reads as off */
+		/* port: a function the object can have (a map's index, from an attachment, a widget or a shader;
+		retail's are NONE or 0-3), or it reads as off */
 		if (VALID_INDEX(function_index, NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS))
 		{
 			*value_reference = object->object.outgoing_function_values[function_index];
@@ -1865,10 +1851,8 @@ void object_reconnect_to_map(
 	}
 	else
 	{
-		/* location may point here after the if below: declared inside it,
-		the location would be read after its lifetime ended, which an
-		optimising compiler is free to break (release builds crashed placing
-		objects at level start, reading a stack slot reused meanwhile) */
+		/* location may point here after the if below: declared in it, it would be read after its lifetime (release
+		builds crashed placing objects at level start, reading a stack slot reused meanwhile) */
 		struct location bounding_sphere_location;
 
 		if (!location)
@@ -1934,9 +1918,8 @@ real_matrix4x3 *object_get_node_matrix(
 	short node_index)
 {
 	match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 1060, object_has_node(object_index, node_index));
-	/* port: a node the object has no matrix for (an index a map's data
-	gave) is its first node, which every object has, not whatever lies
-	past its matrices */
+	/* port: a node the object has no matrix for (an index a map's data gave) is its first node, which every
+	object has, not whatever lies past its matrices */
 	{
 		struct object_datum *object = object_get(object_index);
 
@@ -1974,10 +1957,8 @@ short object_get_marker_by_name(
 
 	struct object_datum const *object = object_get(object_index);
 	struct object_definition const *object_definition = object_definition_get(object->definition_index);
-	/* port: the matrices the renderer draws with, so a marker an effect, a
-	particle system or a contrail hangs off moves as the object does, between
-	the ticks too (port/linux/game/render_interpolation.c). While a tick runs,
-	which is when the game asks for markers, this is the same array. */
+	/* port: the renderer's matrices, so a marker an effect, particle system or contrail hangs off moves with the
+	object between ticks too (render_interpolation.c); during a tick, when markers are asked for, the same array */
 	real_matrix4x3 const *matrices = object_get_node_matrices(object_index);
 
 	marker = model_get_marker_by_name(
@@ -2481,16 +2462,22 @@ void object_compute_node_matrices(
 	real_matrix4x3 object_rotation_matrix;
 	real_point3d center;
 	real_matrix4x3 parent_node_matrix_no_scale_no_mirror;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
-	
+
 	real_matrix4x3 *object_nodes = (real_matrix4x3 *)object_header_block_get(object_index, &object->object.node_matrices);
 	real_orientation *node_orientations =
 		TEST_FLAG(_object_mask_cannot_interpolate, object->object.type) ?
 		cannot_interpolate_node_orientations_storage :
 		(real_orientation *)object_header_block_get(object_index, &object->object.node_orientations);
 
+	/* port: (the timer build's steps of this function) */
+	PS3_OBJECTS_SPAN(ps3_span);
+	PS3_OBJECTS_COUNT(_ps3_timer_nodes_orientations, 1);
 	/* port: a model without nodes is placed like no model (a map's count) */
 	if (object_definition->object.model.index!=NONE &&
 		model_definition_get(object_definition->object.model.index)->nodes.count>0)
@@ -2556,6 +2543,7 @@ void object_compute_node_matrices(
 		{
 			model_get_node_orientations(model, node_orientations);
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_nodes_orientations, ps3_span); /* port: (the timer build) */
 
 		if (object_definition->object.animation_graph.index!=NONE)
 		{
@@ -2570,9 +2558,8 @@ void object_compute_node_matrices(
 					overlay_index,
 					struct animation_graph_object_overlay);
 
-				/* port: an animation the graph has (a map's index), and a function
-				the object has room for (a map's index; NONE read before the
-				functions; retail's are 0-3) */
+				/* port: an animation the graph has (a map's index), and a function the object has room for
+				(a map's index; NONE read before the functions; retail's are 0-3) */
 				if (VALID_INDEX(overlay->animation_index, animation_graph->animations.count) &&
 					VALID_INDEX(overlay->function_index, MIN(object_definition->object.functions.count, NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS)))
 				{
@@ -2586,9 +2573,8 @@ void object_compute_node_matrices(
 						struct animation);
 					real value= object->object.outgoing_function_values[overlay->function_index];
 
-					/* port: no more nodes than the model has, which is all the
-					orientations hold (a map's animation; retail's overlays have
-					the model's count) */
+					/* port: no more nodes than the model has, all the orientations hold (a map's animation;
+					retail's overlays have the model's count) */
 					if (animation->node_count>model_node_count)
 					{
 						object_definition_data_error(object->definition_index, "overlay animation (more nodes than its model); it is skipped");
@@ -2685,6 +2671,7 @@ void object_compute_node_matrices(
 						object->object.up.k));
 			}
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_nodes_blends, ps3_span); /* port: (the timer build) */
 
 		node_index = 0;
 		node_count = 1;
@@ -2754,6 +2741,7 @@ void object_compute_node_matrices(
 						}
 
 						validated_parent_node_matrix = object_node_matrix;
+						PS3_OBJECTS_ADD(_ps3_timer_nodes_root, ps3_span); /* port: (the timer build) */
 						ocnm_parent_matrix_custom(
 							"c:\\halo\\SOURCE\\objects\\objects.c",
 							2871,
@@ -2763,6 +2751,7 @@ void object_compute_node_matrices(
 								"%s as parent node of %s",
 								tag_get_name(object_get(object->object.parent_object_index)->definition_index),
 								tag_get_name(object->definition_index)));
+						PS3_OBJECTS_ADD(_ps3_timer_nodes_checks, ps3_span); /* port: (the timer build) */
 
 
 						matrix4x3_multiply(object_node_matrix, &object_translation_matrix, &object_nodes[node_stack_index]);
@@ -2779,6 +2768,7 @@ void object_compute_node_matrices(
 				{
 					object_nodes[node_stack_index] = node_matrix;
 				}
+				PS3_OBJECTS_ADD(_ps3_timer_nodes_root, ps3_span); /* port: (the timer build) */
 
 				if (!valid_real_matrix4x3(&object_nodes[node_stack_index]))
 				{
@@ -2880,6 +2870,7 @@ void object_compute_node_matrices(
 						validated_root_node_matrix,
 						"object_compute_node_matrices root node matrix");
 				}
+				PS3_OBJECTS_ADD(_ps3_timer_nodes_checks, ps3_span); /* port: (the timer build) */
 			}
 			else
 			{
@@ -2898,6 +2889,7 @@ void object_compute_node_matrices(
 					&object_nodes[parent_node_index],
 					&object_nodes[node_stack_index],
 					&object_nodes[node_stack_index]);
+				PS3_OBJECTS_ADD(_ps3_timer_nodes_children, ps3_span); /* port: (the timer build) */
 			}
 
 			if (node_stack_index==0)
@@ -2909,6 +2901,7 @@ void object_compute_node_matrices(
 					char *string = name2;
 					match_assert_valid_real_matrix4x3_internal("c:\\halo\\SOURCE\\objects\\objects.c", 2935, final_matrix, string);
 				}
+				PS3_OBJECTS_ADD(_ps3_timer_nodes_checks, ps3_span); /* port: (the timer build) */
 			}
 
 			next_sibling_node_index = node->next_sibling_node_index;
@@ -2943,6 +2936,7 @@ void object_compute_node_matrices(
 				break;
 			}
 		}
+		PS3_OBJECTS_COUNT(_ps3_timer_nodes_children, node_count); /* port: (the timer build) */
 	}
 	else
 	{
@@ -2962,6 +2956,7 @@ void object_compute_node_matrices(
 	}
 	/* port: (and in the packed copy collision reads: object_bounds_cache.c) */
 	object_bounds_cache_update(object_index, &object->object.bounding_sphere_center, object->object.bounding_sphere_radius);
+	PS3_OBJECTS_ADD(_ps3_timer_nodes_bounds, ps3_span); /* port: (the timer build) */
 
 	return;
 }
@@ -2976,7 +2971,11 @@ static void object_postprocess_node_matrices(
 {
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
+	PS3_OBJECTS_SPAN(ps3_span); /* port: (the timer build) */
 	if (object_definition->object.model.index!=NONE &&
 		object_definition->object.animation_graph.index != NONE)
 	{
@@ -2985,6 +2984,7 @@ static void object_postprocess_node_matrices(
 				&object->object.node_matrices);
 		object_type_postprocess_node_matrices(object_index, matrices);
 	}
+	PS3_OBJECTS_ADD(_ps3_timer_nodes_postprocess, ps3_span); /* port: (the timer build) */
 
 	return;
 }
@@ -3466,9 +3466,8 @@ long object_new(
 		definition_index = game_engine_remap_object_definition(definition_index);
 	}
 
-	/* port: only an object whose type is its tag's group (a map's type, which
-	picks the datum's size, the type's functions and how the rest of the tag
-	is read; retail's all match). The object isn't made */
+	/* port: only an object whose type is its tag's group, else it isn't made (a map's type picks the datum's size,
+	the type's functions and how the rest of the tag is read; retail's all match) */
 	if (definition_index!=NONE &&
 		object_definition_index_to_object_type(definition_index)!=object_definition_get(definition_index)->object.type)
 	{
@@ -3567,11 +3566,8 @@ long object_new(
 			{
 				long model_node_count = model_definition_get(object_definition->object.model.index)->nodes.count;
 
-				/* port: the root's matrix at least, which the object always has
-				(a map's model with no nodes is placed like no model). And no
-				more nodes than a block's size, a short, can hold: past that the
-				size wrapped and the matrices overran the object (a map's count;
-				the object isn't made) */
+				/* port: the root's matrix at least (a map's model with no nodes is placed like no model), and no more nodes
+				than a block's short size holds: past it the size wrapped and the matrices overran (the object isn't made) */
 				if (model_node_count==0)
 				{
 					node_count = 1;
@@ -4043,9 +4039,8 @@ long object_new_by_name(
 	struct tag_block *palette;
 	struct scenario_object_datum *object;
 
-	/* port: a name that names no placement (one past the names, or whose
-	type has no placements or whose placement is not there: a map's) makes
-	no object, rather than one of whatever its fields read as */
+	/* port: a name of no placement (one past the names, or its type or placement missing: a map's) makes no
+	object, rather than one of whatever its fields read as */
 	if (!VALID_INDEX(name_index, scenario->object_names.count) ||
 		!VALID_INDEX(name->runtime_object_type, NUMBER_OF_OBJECT_TYPES) ||
 		object_type_definition_get(name->runtime_object_type)->placement_tag_block_offset == NONE ||
@@ -4103,9 +4098,8 @@ void object_delete_immediately(
 	return;
 }
 
-/* the active garbage limits are per 16 players: a session of up to 128
-keeps proportionally more garbage around, campaign and smaller games the
-Xbox's amount */
+/* the active garbage limits are per 16 players: a session of up to 128 keeps proportionally more garbage,
+campaign and smaller games the Xbox's amount */
 static long active_garbage_limit(
 	long limit_per_16_players)
 {
@@ -4356,9 +4350,8 @@ void objects_garbage_collection(
 					break;
 				}
 
-				/* (port: in network co-op as often as the warning, not every
-				tick: a host kept critical by many enemies wrote it to
-				debug.txt each tick) */
+				/* (port: in network co-op as often as the warning, not every tick: a host kept critical by many
+				enemies wrote it to debug.txt each tick) */
 				if ((status_still_critical || garbage_collection_after_first_attempt) &&
 					(garbage_should_warn || !network_coop_active()))
 				{
@@ -4671,9 +4664,8 @@ static void object_name_list_new(
 		4099,
 		name_index>=0 && name_index<MAXIMUM_OBJECT_NAMES_PER_SCENARIO);
 
-	/* port: only a name the scenario has and the name list holds (a map's
-	index; the lookup gave NONE for any other, so it came here; retail's
-	are below 448) */
+	/* port: only a name the scenario has and the name list holds (a map's index; the lookup gave NONE for
+	any other, so it came here; retail's are below 448) */
 	if (!VALID_INDEX(name_index, MIN(global_scenario_get()->object_names.count, MAXIMUM_OBJECT_NAMES_PER_SCENARIO)))
 	{
 		static boolean name_index_reported = FALSE;
@@ -4936,9 +4928,8 @@ static boolean object_select_random_region_permutations_by_variant(
 	struct object_datum *object = object_get(object_index);
 	boolean result = TRUE;
 
-	/* port: no more regions than the object's region_permutations holds (a
-	map's count; past them are the change colors and the node blocks; retail
-	has up to 8) */
+	/* port: no more regions than the object's region_permutations holds (a map's count; past them are the
+	change colors and the node blocks; retail has up to 8) */
 	for (region_index =0; region_index<MIN(model->regions.count, MAXIMUM_REGIONS_PER_OBJECT); region_index++)
 	{
 		struct model_region *region = TAG_BLOCK_GET_ELEMENT(&model->regions, region_index, struct model_region);

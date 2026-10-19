@@ -1,11 +1,13 @@
-/* DirectSound on the PS3 audio port (src/ps3_audio.c), after port/linux/src/dsound_sdl.c: a mixer thread decodes
-the packets and keeps the port's ring 43 ms ahead; packets complete on the game's thread (DoWork, Flush). */
+/* DirectSound on the PS3 audio port (src/ps3_audio.c), after port/linux/src/dsound_sdl.c: a mixer thread keeps the
+port's ring 43 ms ahead, an SPU decodes and mixes (ps3_spu.c); packets complete on the game's thread (DoWork, Flush). */
 
 #include "ps3_audio.h"
+#include "ps3_spu.h"
 #include "ps3_timers.h"
 #include "port_config.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -67,6 +69,15 @@ struct voice_packet
 	BOOL finished;
 };
 
+/* the per-chunk resampling step and gain ramp of one voice */
+struct mix_state
+{
+	unsigned long step_whole;
+	float step_fraction;
+	float left, right;
+	float ramp_left, ramp_right;
+};
+
 /* a packet as a mixer pass took it: a copy, as a flush during the pass can empty and refill the slot */
 struct mix_packet
 {
@@ -95,11 +106,12 @@ struct ps3_stream
 	/* with the lock: the flushes, which void a pass's results; a start from the first frame */
 	unsigned long generation;
 	BOOL restart;
-	/* the mixer's pass: the next stream, the generation and the packets it took */
+	/* the mixer's pass: the next stream, the generation, the packets it took, its step and gains */
 	struct ps3_stream *mix_next;
 	unsigned long mix_generation;
 	unsigned long mix_count;
 	struct mix_packet mix_packets[MIX_PACKETS];
+	struct mix_state mix_state;
 };
 
 /* the inanity buffer (dsound_fix_rear_speakers) and the loading screen's tones (progress_bar.c) */
@@ -115,14 +127,7 @@ struct ps3_buffer
 	BOOL looping;
 };
 
-/* the per-chunk resampling step and gain ramp of one voice */
-struct mix_state
-{
-	unsigned long step_whole;
-	float step_fraction;
-	float left, right;
-	float ramp_left, ramp_right;
-};
+typedef char spu_mixer_size_check[MIX_PACKETS == SPU_MIXER_PACKETS && MIX_CHUNK_FRAMES == SPU_MIXER_FRAMES ? 1 : -1];
 
 static struct ps3_host_lock *mixer_lock;
 static struct ps3_stream *streams;
@@ -658,14 +663,13 @@ static void packet_decode(const struct mixer_voice *voice, struct mix_packet *en
 	mixer_decode_microseconds += (unsigned long)(ps3_host_microseconds() - start);
 }
 
-/* (without the lock) the packets the pass took */
+/* (without the lock) the packets the pass took, with its step and gains */
 static void mix_stream(struct ps3_stream *stream, float *output, unsigned long count)
 {
 	struct mixer_voice *voice = &stream->voice;
-	struct mix_state state;
+	struct mix_state state = stream->mix_state;
 	unsigned long packet = 0, done = 0;
 
-	mix_begin(voice, count, &state);
 	while (packet < stream->mix_count && done < count)
 	{
 		struct mix_packet *entry = &stream->mix_packets[packet];
@@ -711,6 +715,77 @@ static void mix_buffer(struct ps3_buffer *buffer, float *output, unsigned long c
 	}
 }
 
+/* a stream's pass as an SPU voice; FALSE when an address does not fit the SPU's 32 bits */
+static BOOL spu_voice_fill(spu_mixer_voice *record, const struct ps3_stream *stream)
+{
+	const struct mix_state *state = &stream->mix_state;
+	unsigned long index;
+
+	record->channels = stream->voice.channels;
+	record->adpcm = stream->voice.adpcm ? 1 : 0;
+	record->packet_count = stream->mix_count;
+	record->index = stream->voice.index;
+	record->fraction = stream->voice.fraction;
+	record->step_whole = state->step_whole;
+	record->step_fraction = state->step_fraction;
+	record->left = state->left;
+	record->right = state->right;
+	record->ramp_left = state->ramp_left;
+	record->ramp_right = state->ramp_right;
+	for (index = 0; index < stream->mix_count; index++)
+	{
+		const struct mix_packet *entry = &stream->mix_packets[index];
+		spu_mixer_packet *packet = &record->packets[index];
+
+		if ((__uint64)(uintptr_t)entry->source > 0xffffffffu || (__uint64)(uintptr_t)entry->samples > 0xffffffffu)
+			return FALSE;
+		packet->source = (uint32_t)(uintptr_t)entry->source;
+		packet->size = entry->size;
+		packet->samples = (uint32_t)(uintptr_t)entry->samples;
+		packet->frames = entry->frames;
+		packet->flags = entry->decoded ? SPU_MIXER_DECODED : 0;
+	}
+	return TRUE;
+}
+
+/* the SPU's position, decodes and ends to the stream, as mix_stream leaves them */
+static void spu_voice_apply(const spu_mixer_voice *record, struct ps3_stream *stream)
+{
+	unsigned long index;
+
+	stream->voice.index = record->index;
+	stream->voice.fraction = record->fraction;
+	for (index = 0; index < stream->mix_count; index++)
+	{
+		stream->mix_packets[index].decoded = (record->packets[index].flags & SPU_MIXER_DECODED) != 0;
+		stream->mix_packets[index].finished = (record->packets[index].flags & SPU_MIXER_FINISHED) != 0;
+	}
+	packets_decoded += record->decoded;
+}
+
+/* (without the lock) the taken streams as one SPU job into the empty output; returns the first stream it did not mix,
+all of them when the SPU is off */
+static struct ps3_stream *spu_mix(struct ps3_stream *taken, float *output, unsigned long count)
+{
+	spu_mixer_job *job = ps3_spu_mixer_job();
+	struct ps3_stream *stream;
+	uint32_t voices;
+
+	if (!job)
+		return taken;
+	for (stream = taken, voices = 0; stream && voices < SPU_MIXER_VOICES; stream = stream->mix_next, voices++)
+	{
+		if (!spu_voice_fill(&job->voices[voices], stream))
+			return taken;
+	}
+	if (!ps3_spu_mixer_run(voices, count))
+		return taken;
+	memcpy(output, job->output, count * OUTPUT_CHANNELS * sizeof(float));
+	for (stream = taken, voices = 0; stream && voices < SPU_MIXER_VOICES; stream = stream->mix_next, voices++)
+		spu_voice_apply(&job->voices[voices], stream);
+	return stream;
+}
+
 /* a pass: the packets taken with the lock, decoded and mixed without it, their results given back with it */
 static void mix(float *output, unsigned long count)
 {
@@ -731,7 +806,10 @@ static void mix(float *output, unsigned long count)
 	}
 	*tail = NULL;
 	mixer_hold_end();
+	/* the steps and gains here; the decode and the mix on the SPU, or here when it is off */
 	for (stream = taken; stream; stream = stream->mix_next)
+		mix_begin(&stream->voice, count, &stream->mix_state);
+	for (stream = taken ? spu_mix(taken, output, count) : NULL; stream; stream = stream->mix_next)
 		mix_stream(stream, output, count);
 	mixer_hold_begin();
 	for (stream = taken; stream; stream = stream->mix_next)
@@ -818,6 +896,7 @@ static void audio_start(void)
 	master_volume = (float)config_real("audio.volume");
 	if (config_boolean("audio.enabled"))
 		audio_port = ps3_audio_init();
+	platform_log("DirectSound: the streams decode and mix on %s", ps3_spu_mixer_start() ? "an SPU" : "the PPE");
 	if (ps3_host_thread_create(mixer_thread, NULL, MIXER_STACK_SIZE, PS3_HOST_PRIORITY_NORMAL - 1, "dsound") != 0)
 		platform_log("DirectSound: cannot start the mixer thread");
 	else if (audio_port)
@@ -836,6 +915,8 @@ static void statistics_log(void)
 	unsigned long chunks, microseconds, maximum, decode, held, held_maximum, decoded;
 	unsigned long playing_streams = 0, playing_buffers = 0;
 	unsigned silent = 0, partial = 0;
+	struct ps3_spu_mixer_statistics spu;
+	char spu_text[256];
 	struct ps3_stream *stream;
 	struct ps3_buffer *buffer;
 
@@ -864,12 +945,22 @@ static void statistics_log(void)
 	mixer_leave();
 	if (audio_port)
 		ps3_audio_stats(&silent, &partial);
-	/* the mixer's lock: held twice a chunk (a pass) */
+	/* the SPU's time a job (a chunk), the mixer thread's waits for it, and how they ended */
+	ps3_spu_mixer_statistics(&spu);
+	if (spu.jobs)
+		snprintf(spu_text, sizeof(spu_text), "SPU %lu us a chunk, decoding %lu, the mixer's wait %lu; waits ended by "
+			"the event %lu, the 1 ms timeout %lu, errors %lu; events refused %lu", (unsigned long)(spu.busy_microseconds /
+			spu.jobs), (unsigned long)(spu.decode_microseconds / spu.jobs), (unsigned long)(spu.wait_microseconds /
+			spu.jobs), (unsigned long)spu.events, (unsigned long)spu.timeouts, (unsigned long)spu.receive_errors,
+			(unsigned long)spu.event_errors);
+	else
+		snprintf(spu_text, sizeof(spu_text), "SPU %s", spu.up ? "idle" : "off");
+	/* the mixer's lock: held twice a chunk (a pass); the mixer's time includes its wait for the SPU */
 	platform_log("DirectSound: %lu streams and %lu buffers playing, %lu packets decoded; mixer %lu us a chunk "
-		"(max %lu) of %d, decoding %lu, the lock held %lu (max %lu); port blocks %u silent, %u partial",
+		"(max %lu) of %d, decoding %lu, the lock held %lu (max %lu); port blocks %u silent, %u partial; %s",
 		playing_streams, playing_buffers, decoded, chunks ? microseconds / chunks : 0, maximum, MIX_CHUNK_MICROSECONDS,
 		chunks ? decode / chunks : 0, chunks ? held / chunks : 0, held_maximum, silent - last_silent,
-		partial - last_partial);
+		partial - last_partial, spu_text);
 	last_silent = silent;
 	last_partial = partial;
 }
@@ -1009,10 +1100,10 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 		return E_INVALIDARG;
 	if (stream->packet_count == MAXIMUM_STREAM_PACKETS)
 		return E_OUTOFMEMORY;
-	/* only the buffer here: the mixer decodes it (packet_decode) */
+	/* only the buffer here, which the SPU's DMA can write: the mixer decodes it (packet_decode) */
 	frames = input->pvBuffer ? decoded_frames(&stream->voice, input->dwMaxSize) : 0;
 	if (frames)
-		samples = malloc(frames * stream->voice.channels * sizeof(float));
+		samples = ps3_spu_buffer_allocate(frames * stream->voice.channels * sizeof(float));
 	mixer_enter();
 	entry = &stream->packets[(stream->packet_head + stream->packet_count) % MAXIMUM_STREAM_PACKETS];
 	entry->packet = *input;

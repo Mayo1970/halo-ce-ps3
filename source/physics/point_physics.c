@@ -1,6 +1,4 @@
-/*
-POINT_PHYSICS.C
-*/
+/* POINT_PHYSICS.C */
 
 /* ---------- headers */
 
@@ -14,6 +12,19 @@ POINT_PHYSICS.C
 #include "objects.h"
 #include "render_debug.h"
 #include "scenario.h"
+
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's point physics: its time, its wind, its rays, its calls (port/ps3/include/ps3_timers.h) */
+#define PS3_POINT_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_POINT_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_POINT_COUNT(timer) (ps3_timer_counts[(timer)]++)
+#else
+#define PS3_POINT_SPAN(span) ((void)0)
+#define PS3_POINT_ADD(timer, span) ((void)0)
+#define PS3_POINT_COUNT(timer) ((void)0)
+#endif
 
 /* ---------- constants */
 
@@ -75,7 +86,11 @@ unsigned long point_physics_update(
 	real dt)
 {
 	unsigned long result = 0;
+#ifdef HALO_PS3
+	uint64_t ps3_start, ps3_span;
+#endif
 
+	PS3_POINT_SPAN(ps3_start); /* port: (the timer build) */
 	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 185, position);
 	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 186, translational_velocity);
 	match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 187, !translational_force || valid_real_vector3d(translational_force));
@@ -114,6 +129,7 @@ unsigned long point_physics_update(
 		boolean underwater;
 		short i;
 
+		PS3_POINT_SPAN(ps3_span); /* port: (the timer build) */
 		wind_flags = 0;
 
 		SET_FLAG(wind_flags, _scenario_current_simple_bit, TEST_FLAG(definition->flags, _point_physics_simple_wind_bit));
@@ -128,6 +144,7 @@ unsigned long point_physics_update(
 		{
 			underwater = scenario_get_current(location, position, &wind_vector, wind_flags);
 		}
+		PS3_POINT_ADD(_ps3_timer_point_wind, ps3_span); /* port: (the timer build) */
 
 		if (underwater)
 		{
@@ -182,8 +199,10 @@ unsigned long point_physics_update(
 		match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 269, global_current_collision_user_depth < MAXIMUM_COLLISION_USER_STACK_DEPTH);
 		global_current_collision_users[global_current_collision_user_depth++] = _collision_user_point_physics;
 
+		PS3_POINT_SPAN(ps3_span); /* port: (the timer build) */
 		for (i = 0; dt != 0.0f && i < MAXIMUM_POINT_PHYSICS_COLLISIONS; i++)
 		{
+			PS3_POINT_COUNT(_ps3_timer_point_rays); /* port: (the timer build) */
 			delta.i = translational_velocity->i * dt;
 			delta.j = translational_velocity->j * dt;
 			delta.k = translational_velocity->k * dt;
@@ -236,6 +255,7 @@ unsigned long point_physics_update(
 
 			dt -= collision.t * dt;
 		}
+		PS3_POINT_ADD(_ps3_timer_point_rays, ps3_span); /* port: (the timer build) */
 
 		match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 312, global_current_collision_user_depth > 1);
 		--global_current_collision_user_depth;
@@ -245,6 +265,8 @@ unsigned long point_physics_update(
 	{
 		render_debug_point_physics(definition, position, radius);
 	}
+	PS3_POINT_ADD(_ps3_timer_point_total, ps3_start); /* port: (the timer build) */
+	PS3_POINT_COUNT(_ps3_timer_point_total); /* port: (the timer build) */
 
 	return result;
 }

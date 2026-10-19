@@ -1,68 +1,5 @@
-/*
-WEATHER_PARTICLE_SYSTEMS.C
-
-symbols in this file:
-000924D0 0040:
-	_weather_particle_system_get (0000)
-00092510 0050:
-	_weather_particle_system_get_type (0000)
-00092560 0030:
-	_weather_particle_systems_initialize (0000)
-00092590 0070:
-	_weather_particle_systems_initialize_for_new_map (0000)
-00092600 0020:
-	_weather_particle_systems_dispose_from_old_map (0000)
-00092620 0020:
-	_weather_particle_systems_dispose (0000)
-00092640 0030:
-	_weather_particle_system_type_delete_particle (0000)
-00092670 00a0:
-	_weather_particle_system_wrap_point (0000)
-00092710 0160:
-	_weather_particle_system_new (0000)
-00092870 0110:
-	_weather_particle_system_delete (0000)
-00092980 02c0:
-	_weather_particle_system_new_particle (0000)
-00092C40 0040:
-	_weather_particle_system_box_offset_from_point3d (0000)
-00092C80 02b0:
-	_weather_particle_update_physics (0000)
-00092F30 0100:
-	_weather_particle_system_build_clipping_planes (0000)
-00093030 0040:
-	_weather_particle_system_transform_clip_planes_to_box (0000)
-00093070 00b0:
-	_weather_polyhedra_find (0000)
-00093120 0130:
-	_weather_particle_system_update_particle_count (0000)
-00093250 0240:
-	_weather_particle_system_update (0000)
-00093490 0690:
-	_weather_particle_system_render (0000)
-00093B20 00e0:
-	_weather_particle_systems_render (0000)
-0025AAFC 0004:
-	_one_over_char_max (0000)
-0025AB00 0032:
-	??_C@_0DC@LLJNAPDG@c?3?2halo?2SOURCE?2effects?2weather_p@ (0000)
-0025AB34 003d:
-	??_C@_0DN@CIHCKGAO@type_index?$DO?$DN0?5?$CG?$CG?5type_index?$DMdefi@ (0000)
-0025AB74 0033:
-	??_C@_0DD@FLIDKJLH@couldn?8t?5allocate?5weather?5partic@ (0000)
-0025ABA8 0012:
-	??_C@_0BC@EPMBJEML@weather?5particles?$AA@ (0000)
-0025ABBC 001f:
-	??_C@_0BP@EMHAEIEA@system?9?$DOdefinition_index?$DN?$DNNONE?$AA@ (0000)
-0025ABDC 0024:
-	??_C@_0CE@MLAKBDEP@too?5many?5weather?5polyhedra?5visib@ (0000)
-0025AC00 003b:
-	??_C@_0DL@JLJDEDI@box_count?$DMMAXIMUM_NUMBER_OF_VISI@ (0000)
-002DDDAE 0001:
-	_weather (0000)
-0043D590 0274:
-	_weather_particle_system_globals (0000)
-*/
+/* WEATHER_PARTICLE_SYSTEMS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/effects/weather_particle_systems.c. */
 
 /* ---------- headers */
 
@@ -123,12 +60,23 @@ enum
 
 /* ---------- macros */
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of the render (port/ps3/include/ps3_timers.h) */
+#define PS3_WEATHER_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_WEATHER_ADD(timer, span) ((void)ps3_timer_add((timer), (span)))
+#define PS3_WEATHER_COUNT(timer, count) (ps3_timer_counts[(timer)] += (uint32_t)(count))
+#else
+#define PS3_WEATHER_SPAN(span) ((void)0)
+#define PS3_WEATHER_ADD(timer, span) ((void)0)
+#define PS3_WEATHER_COUNT(timer, count) ((void)0)
+#endif
+
 /* ---------- structures */
 
-/*
- * January's tag-definition consumer layout.  The 0x25C stride and every field
- * used below are independently corroborated by the HCEA symbols build.
- */
+/* January's tag-definition consumer layout: the 0x25C stride and every field used below are corroborated by
+the HCEA symbols build */
 struct weather_particle_type_definition
 {
 	char name[32];
@@ -227,11 +175,8 @@ typedef char weather_particle_size_assert[
 typedef char weather_particle_system_globals_size_assert[
 	sizeof(struct weather_particle_system_globals) == 0x274 ? 1 : -1];
 
-/*
- * These three tag-block element layouts are private here because their owner
- * headers do not publish them yet.  Their names, sizes, and accessed offsets
- * are corroborated by HCEA and sibling January consumers.
- */
+/* these three tag-block element layouts are private here (their owner headers do not publish them yet); their
+names, sizes and accessed offsets are corroborated by HCEA and sibling January consumers */
 struct structure_weather_palette_entry
 {
 	char name[32];
@@ -283,10 +228,8 @@ static void weather_particle_system_box_offset_from_point3d(
 	real box_width,
 	real_point3d const *point,
 	real_point3d *offset);
-/* A frame was a tick on the Xbox; the native builds draw several frames per
-tick (port/linux/game/render_interpolation.c). Weather particles turn their
-acceleration and drift once an update: turn once per 30 Hz tick, and drift by
-the frame's share of a tick. This is the ticks the current update crosses. */
+/* a frame was a tick on the Xbox, the native builds draw several a tick (render_interpolation.c): a particle
+turns once a 30 Hz tick and drifts by the frame's share of one; the ticks the current update crosses */
 static long weather_particle_update_ticks = 1;
 
 static void weather_particle_update_physics(
@@ -565,8 +508,13 @@ static void weather_particle_system_render(
 	struct weather_particle_system_definition *definition = weather_particle_system_definition_get(system->definition_index);
 	struct structure_bsp *structure = global_structure_bsp_get();
 	short type_index;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
+	PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
 	weather_particle_system_update(local_player_index);
+	PS3_WEATHER_ADD(_ps3_timer_weather_update, ps3_span); /* port: (the timer build) */
 
 	for (type_index = 0; type_index<weather_particle_system_type_count(definition); type_index++)
 	{
@@ -576,6 +524,7 @@ static void weather_particle_system_render(
 			type_index,
 			struct weather_particle_type_definition);
 
+		PS3_WEATHER_COUNT(_ps3_timer_weather_update, type->particle_count); /* port: (the timer build) */
 		if (type->particle_count)
 		{
 			real_plane3d clip_planes[NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES];
@@ -726,6 +675,7 @@ static void weather_particle_system_render(
 								direction = global_up3d;
 							}
 
+							PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
 							build_sprite(
 								&sprite_data,
 								type_definition->render_mode,
@@ -738,12 +688,16 @@ static void weather_particle_system_render(
 								&particle->color,
 								fade_in*fade_out,
 								0);
+							PS3_WEATHER_ADD(_ps3_timer_weather_sprites, ps3_span); /* port: (the timer build) */
+							PS3_WEATHER_COUNT(_ps3_timer_weather_sprites, 1); /* port: (the timer build) */
 						}
 					}
 				}
 			}
 
+			PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
 			build_sprites_end(&sprite_data);
+			PS3_WEATHER_ADD(_ps3_timer_weather_draw, ps3_span); /* port: (the timer build) */
 		}
 	}
 

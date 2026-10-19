@@ -1,76 +1,5 @@
-/*
-PARTICLES.C
-
-symbols in this file:
-0008FAF0 0030:
-	_particles_initialize (0000)
-0008FB20 0010:
-	_particles_initialize_for_new_map (0000)
-0008FB30 0010:
-	_particles_dispose_from_old_map (0000)
-0008FB40 0020:
-	_particles_dispose (0000)
-0008FB60 0020:
-	_particle_delete (0000)
-0008FB80 0070:
-	_particles_stop_on_first_person_weapon (0000)
-0008FBF0 0010:
-	_particles_disconnect_from_structure_bsp (0000)
-0008FC00 00d0:
-	_particles_reconnect_to_structure_bsp (0000)
-0008FCD0 0010:
-	_new_particle_is_visible (0000)
-0008FCE0 0040:
-	_particle_get_radius (0000)
-0008FD20 0060:
-	_valid_real_point3d (0000)
-0008FD80 0060:
-	_valid_real_argb_color (0000)
-0008FDE0 0150:
-	_particle_effect_new (0000)
-0008FF30 0050:
-	_particle_die (0000)
-0008FF80 0180:
-	_particle_next_sequence (0000)
-00090100 00d0:
-	_particle_next_frame (0000)
-000901D0 00d0:
-	_particle_update_frame_time (0000)
-000902A0 03a0:
-	_particle_update_physics (0000)
-00090640 05a0:
-	_particle_new (0000)
-00090BE0 0120:
-	_particles_update (0000)
-0025A8F0 0008:
-	??_C@_07GFBFDLBM@gravity?$AA@ (0000)
-0025A8F8 0008:
-	_particle_collision_effect_scale_bounds (0000)
-0025A900 0011:
-	??_C@_0BB@HHDONMHD@particles_update?$AA@ (0000)
-0025A914 0023:
-	??_C@_0CD@JPDMOBBK@couldn?8t?5allocate?5particle?5globa@ (0000)
-0025A938 0023:
-	??_C@_0CD@IKBENHKF@c?3?2halo?2SOURCE?2effects?2particles@ (0000)
-0025A95C 0009:
-	??_C@_08HIJBMAOA@?$CGdiffuse?$AA@ (0000)
-0025A968 0007:
-	??_C@_06IOIMBPOK@?$CGlight?$AA@ (0000)
-0025A970 0031:
-	??_C@_0DB@EEHLCDHM@?$CFs?3?5assert_valid_real_argb_color@ (0000)
-0025A9A4 000d:
-	??_C@_0N@MNPLGION@?$CGdata?9?$DOcolor?$AA@ (0000)
-0025A9B4 002a:
-	??_C@_0CK@EAOMHCPC@?$CFs?3?5assert_valid_real_point3d?$CI?$CFf@ (0000)
-0025A9E0 0010:
-	??_C@_0BA@IFGIHPJG@?$CGdata?9?$DOposition?$AA@ (0000)
-0025A9F0 002b:
-	??_C@_0CL@HMPNAHGK@?$CFs?3?5assert_valid_real_vector2d?$CI?$CF@ (0000)
-0025AA1C 0010:
-	??_C@_0BA@OHENJGHL@?$CGdata?9?$DOvelocity?$AA@ (0000)
-002DD7A0 0600:
-	_particles_update_section (0000)
-*/
+/* PARTICLES.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/effects/particles.c. */
 
 /* ---------- headers */
 
@@ -94,6 +23,22 @@ symbols in this file:
 #include "scenario/scenario.h"
 #include "sound/game_sound.h"
 #include "sound/sound_definitions.h"
+
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's particles, and their physics' time and calls (port/ps3/include/ps3_timers.h) */
+static uint64_t ps3_particles_physics_span;
+#define PS3_PARTICLES_COUNT(timer) (ps3_timer_counts[(timer)]++)
+#define PS3_PARTICLES_PHYSICS_BEGIN() (ps3_particles_physics_span = ps3_timer_now())
+#define PS3_PARTICLES_PHYSICS_END() \
+	(ps3_timer_add(_ps3_timer_particles_physics, ps3_particles_physics_span), \
+		ps3_timer_counts[_ps3_timer_particles_physics]++)
+#else
+#define PS3_PARTICLES_COUNT(timer) ((void)0)
+#define PS3_PARTICLES_PHYSICS_BEGIN() ((void)0)
+#define PS3_PARTICLES_PHYSICS_END() ((void)0)
+#endif
 
 /* ---------- constants */
 
@@ -208,12 +153,8 @@ static boolean particle_update_physics(
 static real const particle_collision_effect_scale_bounds[2] = {1.5f, 0.5f};
 
 static struct profile_section particles_update_section = {"particles_update", NONE, TRUE};
-/* A frame was a tick on the Xbox. The native builds draw several frames per
-tick (port/linux/game/render_interpolation.c), so what counted frames counts
-30 Hz ticks of game time instead: particles that animate once a frame step
-once a tick, and a particle is deleted once it has gone unrendered for
-MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT ticks, the frame index drawn at each
-of the last ones kept here. */
+/* a frame was a tick on the Xbox: with several frames a tick (render_interpolation.c) what counted frames counts
+30 Hz ticks (the animation steps, MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT): here, the frame drawn at each */
 static real particles_leftover_ticks = 0.f;
 static long particles_update_ticks = 0;
 static long particles_tick_frame_indices[MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT + 1];
@@ -230,9 +171,8 @@ static char const *particle_effect_marker_names[NUMBER_OF_PARTICLE_EFFECT_MARKER
 void particles_initialize(
 	void)
 {
-	/* the native builds' larger particle pool (halo_port_capacity.h);
-	render_particles sizes its unchecked list of visible particles by the same
-	value */
+	/* the native builds' larger particle pool (halo_port_capacity.h); render_particles sizes its unchecked list
+	of visible particles by the same value */
 	particle_data = game_state_data_new("particle", HALO_PORT_MAXIMUM_PARTICLES, 0x70);
 	if (!particle_data)
 		error(_error_immediate, "couldn't allocate particle globals");
@@ -1051,8 +991,13 @@ void particles_update(
 			}
 			else
 			{
+				PS3_PARTICLES_COUNT(_ps3_timer_particles_update); /* port: (the timer build) */
 				if (particle_update_frame_time(particle_index, dt))
+				{
+					PS3_PARTICLES_PHYSICS_BEGIN(); /* port: (the timer build) */
 					particle_update_physics(particle_index, dt);
+					PS3_PARTICLES_PHYSICS_END(); /* port: (the timer build) */
+				}
 			}
 		}
 	}

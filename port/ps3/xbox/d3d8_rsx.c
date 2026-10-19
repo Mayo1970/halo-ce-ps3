@@ -1,12 +1,15 @@
 /* d3d8_gl.c's Direct3D device on the RSX (ps3_gpu.c), vertex programs and combiners as runtime microcode (ps3_rsx_*.c).
 Resources: d3d8_resources.c. The game's thread records calls; the PPE's other thread (Direct3D thread) draws them. */
 
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
 #include "halo_ui_pointer.h"
 #include "port_config.h"
 #include "ps3_gpu.h"
+#include "ps3_spu.h"
+#include "ps3_system.h"
 #include "ps3_timers.h"
 
 #define SCREEN_WIDTH 640
@@ -235,6 +238,7 @@ enum
 	_record_draw_indexed,
 	_record_immediate,
 	_record_timestamp,
+	_record_draw_stamps,
 	_record_present
 };
 
@@ -303,6 +307,8 @@ static struct
 	unsigned long texture_uploads, texture_bytes;
 	/* vertex elements converted into the vertex cache and at draws; copies the cache had no room for */
 	unsigned long cached_elements, converted_elements, cache_refused;
+	/* the elements converted, by type (D3DVSDT_*) */
+	unsigned long type_elements[128];
 } statistics;
 
 static float dword_to_float(DWORD value)
@@ -1160,10 +1166,17 @@ static DWORD palette_load(int stage, DWORD palette[256])
 	return hash ? hash : 1;
 }
 
+/* (the timer build) the specular split the stamped draws are in, -1 with no span on (ps3_timers_draw_stamps); the
+textures bound for the draw while one is */
+static int draw_stamps_part = -1;
+static struct ps3_gpu_texture bound_textures[TEXTURE_STAGES];
+static uint8_t bound_texture_mask;
+
 static void bind_textures(struct rsx_fragment_key *key)
 {
 	int stage;
 
+	bound_texture_mask = 0;
 	for (stage = 0; stage < TEXTURE_STAGES; stage++)
 	{
 		struct stage_texture *texture = &device.stages[stage];
@@ -1222,6 +1235,11 @@ static void bind_textures(struct rsx_fragment_key *key)
 		ps3_gpu_set_texture(stage, &bound);
 		key->sampler_type[stage] = bound.cube ? _rsx_sampler_cube :
 			bound.dimension == GCM_TEXTURE_DIMS_3D ? _rsx_sampler_3d : _rsx_sampler_2d;
+		if (draw_stamps_part >= 0)
+		{
+			bound_textures[stage] = bound;
+			bound_texture_mask |= (uint8_t)(1 << stage);
+		}
 	}
 }
 
@@ -1234,12 +1252,21 @@ struct fragment_entry
 	struct rsx_fragment_key key;
 	struct rsx_fragment_program program;
 	BOOL translated;
+	/* (the timer build) its key for the stamped draws; its last stamped draw's specular split and textures */
+	uint16_t stamp_key;
+	uint8_t stamp_part;
+	uint8_t stamp_texture_mask;
+	struct ps3_gpu_texture stamp_textures[TEXTURE_STAGES];
 };
 
 #define FRAGMENT_BUCKETS 1024
+/* the stamped pixel shaders logged, most RSX time first */
+#define SHADERS_LOGGED 8
 
 static struct fragment_entry *fragment_buckets[FRAGMENT_BUCKETS];
 static unsigned long fragment_program_count;
+/* the last draw's (consecutive draws mostly use the same pixel shader) */
+static struct fragment_entry *fragment_last;
 
 typedef char fragment_key_size_check[sizeof(struct rsx_fragment_key) % 4 == 0 ? 1 : -1];
 
@@ -1255,13 +1282,11 @@ static DWORD hash_words(const void *data, unsigned long size)
 
 static const struct rsx_fragment_program *fragment_program_get(const struct rsx_fragment_key *key)
 {
-	/* consecutive draws mostly use the same pixel shader */
-	static struct fragment_entry *last;
 	struct fragment_entry **bucket, *entry;
 	DWORD hash;
 
-	if (last && !memcmp(&last->key, key, sizeof(*key)))
-		return last->translated ? &last->program : NULL;
+	if (fragment_last && !memcmp(&fragment_last->key, key, sizeof(*key)))
+		return fragment_last->translated ? &fragment_last->program : NULL;
 	hash = hash_words(key, sizeof(*key));
 	bucket = &fragment_buckets[hash % FRAGMENT_BUCKETS];
 	for (entry = *bucket; entry; entry = entry->next)
@@ -1278,6 +1303,8 @@ static const struct rsx_fragment_program *fragment_program_get(const struct rsx_
 		entry->key = *key;
 		entry->translated = rsx_fragment_program_translate(key, &entry->program) == 0;
 		fragment_program_count++;
+		entry->stamp_key = (uint16_t)(fragment_program_count < PS3_DRAW_STAMP_KEYS ? fragment_program_count :
+			PS3_DRAW_STAMP_KEYS - 1);
 		if (!entry->translated)
 			platform_log("Direct3D: cannot translate a pixel shader (%lu combiners, texture modes %05lx)",
 				(unsigned long)(key->combiner_count & 0xff), (unsigned long)key->texture_modes);
@@ -1286,10 +1313,95 @@ static const struct rsx_fragment_program *fragment_program_get(const struct rsx_
 				fragment_program_count, (unsigned long)(key->combiner_count & 0xff), (unsigned long)key->texture_modes,
 				(unsigned long)entry->program.word_count, (unsigned long)entry->program.uniform_count);
 		entry->next = *bucket;
+		/* (the game thread's shaders_log walks the buckets: the entry whole before it is seen) */
+		__sync_synchronize();
 		*bucket = entry;
 	}
-	last = entry;
+	fragment_last = entry;
 	return entry->translated ? &entry->program : NULL;
+}
+
+/* (the timer build) a draw's RSX time stamped by its pixel shader while a span is on (ps3_timers_draw_stamps) */
+static void draw_stamp(void)
+{
+	struct fragment_entry *entry = fragment_last;
+
+	if (draw_stamps_part < 0 || !entry)
+		return;
+	entry->stamp_part = (uint8_t)draw_stamps_part;
+	entry->stamp_texture_mask = bound_texture_mask;
+	memcpy(entry->stamp_textures, bound_textures, sizeof(bound_textures));
+	ps3_gpu_draw_stamp(entry->stamp_key);
+}
+
+/* the specular split the next draws are in: the first from the span's start, the next after each split */
+static void draw_stamps_split(int part)
+{
+	if (draw_stamps_part >= 0 && part >= _ps3_timer_specular_lights && part < _ps3_timer_specular_fog)
+		draw_stamps_part = part - _ps3_timer_specular_lights + 1;
+}
+
+/* ps3_timers.h: the stamped pixel shaders by their RSX time, most first, each with its program and last textures */
+static void shaders_log(void)
+{
+	static const char *const part_names[] =
+	{
+		"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog",
+	};
+	struct fragment_entry *top[SHADERS_LOGGED], *entry;
+	unsigned long bucket, count = 0, index;
+	double frames = ps3_draw_stamp_frames;
+
+	if (!ps3_draw_stamp_frames)
+		return;
+	for (bucket = 0; bucket < FRAGMENT_BUCKETS; bucket++)
+	{
+		for (entry = fragment_buckets[bucket]; entry; entry = entry->next)
+		{
+			uint64_t time = ps3_draw_stamp_nanoseconds[entry->stamp_key];
+
+			if (!ps3_draw_stamp_draws[entry->stamp_key] ||
+				(count == SHADERS_LOGGED && ps3_draw_stamp_nanoseconds[top[count - 1]->stamp_key] >= time))
+			{
+				continue;
+			}
+			index = count < SHADERS_LOGGED ? count++ : SHADERS_LOGGED - 1;
+			for (; index > 0 && ps3_draw_stamp_nanoseconds[top[index - 1]->stamp_key] < time; index--)
+				top[index] = top[index - 1];
+			top[index] = entry;
+		}
+	}
+	ps3_log_printf("[time] specular part's pixel shaders on the RSX, ms a stamped frame (%u frames stamped, %u draws "
+		"past their stamps)\n", (unsigned)ps3_draw_stamp_frames, (unsigned)ps3_draw_stamp_dropped);
+	for (index = 0; index < count; index++)
+	{
+		char textures[256];
+		unsigned long length = 0;
+		int stage;
+
+		entry = top[index];
+		textures[0] = 0;
+		for (stage = 0; stage < TEXTURE_STAGES && length < sizeof(textures); stage++)
+		{
+			const struct ps3_gpu_texture *texture = &entry->stamp_textures[stage];
+
+			if (!(entry->stamp_texture_mask & (1 << stage)))
+				continue;
+			length += (unsigned long)snprintf(textures + length, sizeof(textures) - length,
+				"%s %d %s %ux%u format %02x, %u levels, filters %u/%u, anisotropy %u", length ? ";" : "", stage,
+				texture->cube ? "cube" : texture->dimension == GCM_TEXTURE_DIMS_3D ? "3D" : "2D",
+				(unsigned)texture->width, (unsigned)texture->height, (unsigned)texture->format,
+				(unsigned)texture->levels, (unsigned)texture->minify, (unsigned)texture->magnify,
+				(unsigned)texture->anisotropy);
+		}
+		ps3_log_printf("[time] pixel shader %u (%s): %.2f ms, %.1f draws; %u instructions, %u registers, %u "
+			"combiners, texture modes %05x; textures:%s\n", (unsigned)entry->stamp_key,
+			entry->stamp_part < sizeof(part_names) / sizeof(part_names[0]) ? part_names[entry->stamp_part] : "?",
+			ps3_draw_stamp_nanoseconds[entry->stamp_key] / frames * 1.0e-6,
+			ps3_draw_stamp_draws[entry->stamp_key] / frames, (unsigned)(entry->program.word_count / 4),
+			(unsigned)entry->program.register_count, (unsigned)(entry->key.combiner_count & 0xff),
+			(unsigned)entry->key.texture_modes, length ? textures : " none");
+	}
 }
 
 static void fragment_key_build(struct rsx_fragment_key *key)
@@ -1890,6 +2002,123 @@ static void vertex_element_convert(unsigned char type, const unsigned char *sour
 	out[3] = w;
 }
 
+/* ---------- the conversions on an SPU (spu_vertices.c), which converts as vertex_element_convert does */
+
+typedef char spu_vertices_types_check[D3DVSDT_FLOAT1 == SPU_VERTICES_FLOAT1 && D3DVSDT_FLOAT2 == SPU_VERTICES_FLOAT2 &&
+	D3DVSDT_FLOAT3 == SPU_VERTICES_FLOAT3 && D3DVSDT_FLOAT4 == SPU_VERTICES_FLOAT4 &&
+	D3DVSDT_FLOAT2H == SPU_VERTICES_FLOAT2H && D3DVSDT_D3DCOLOR == SPU_VERTICES_D3DCOLOR &&
+	D3DVSDT_NORMSHORT1 == SPU_VERTICES_NORMSHORT1 && D3DVSDT_NORMSHORT2 == SPU_VERTICES_NORMSHORT2 &&
+	D3DVSDT_NORMSHORT3 == SPU_VERTICES_NORMSHORT3 && D3DVSDT_NORMSHORT4 == SPU_VERTICES_NORMSHORT4 &&
+	D3DVSDT_NORMPACKED3 == SPU_VERTICES_NORMPACKED3 && D3DVSDT_SHORT1 == SPU_VERTICES_SHORT1 &&
+	D3DVSDT_SHORT2 == SPU_VERTICES_SHORT2 && D3DVSDT_SHORT3 == SPU_VERTICES_SHORT3 &&
+	D3DVSDT_SHORT4 == SPU_VERTICES_SHORT4 && D3DVSDT_PBYTE1 == SPU_VERTICES_PBYTE1 &&
+	D3DVSDT_PBYTE2 == SPU_VERTICES_PBYTE2 && D3DVSDT_PBYTE3 == SPU_VERTICES_PBYTE3 &&
+	D3DVSDT_PBYTE4 == SPU_VERTICES_PBYTE4 ? 1 : -1];
+
+/* an element read from vertex data: vertex v's at base + v * stride */
+struct vertex_input
+{
+	const unsigned char *base;
+	unsigned long stride;
+	unsigned char type;
+	unsigned char bytes;
+	unsigned char reg;
+};
+
+static BOOL spu_address(const void *address)
+{
+	return ((__uint64)(uintptr_t)address >> 32) == 0;
+}
+
+/* count vertices of the inputs as float4s into out, a vertex's together: an SPU task, or here. The RSX reads the task's
+output only after it is done (ps3_gpu.c waits before each flush) */
+static void vertices_convert(const struct vertex_input *inputs, unsigned long slot_count, unsigned long count,
+	float *out)
+{
+	spu_vertices_task *task = NULL;
+	unsigned long vertex, slot;
+	BOOL addresses = spu_address(out);
+
+	for (slot = 0; slot < slot_count; slot++)
+	{
+		addresses = addresses && spu_address(inputs[slot].base);
+		statistics.type_elements[inputs[slot].type & 127] += count;
+	}
+	if (count && addresses && slot_count <= SPU_VERTICES_SLOTS)
+		task = ps3_spu_vertices_task();
+	if (task)
+	{
+		task->kind = SPU_VERTICES_CONVERT;
+		task->slot_count = (uint16_t)slot_count;
+		task->count = (uint32_t)count;
+		task->output = (uint32_t)(uintptr_t)out;
+		task->subtract = 0;
+		for (slot = 0; slot < slot_count; slot++)
+		{
+			task->slots[slot].source = (uint32_t)(uintptr_t)inputs[slot].base;
+			task->slots[slot].stride = (uint32_t)inputs[slot].stride;
+			task->slots[slot].type = inputs[slot].type;
+			task->slots[slot].bytes = inputs[slot].bytes;
+		}
+		ps3_spu_vertices_commit();
+		return;
+	}
+	for (vertex = 0; vertex < count; vertex++)
+	{
+		for (slot = 0; slot < slot_count; slot++, out += 4)
+			vertex_element_convert(inputs[slot].type, inputs[slot].base + vertex * inputs[slot].stride, out);
+	}
+}
+
+/* count indices less subtract into out, whose room is rounded up to 16 bytes: an SPU task, or here */
+static void indices_convert(const WORD *source, unsigned long count, unsigned long subtract, unsigned short *out)
+{
+	spu_vertices_task *task = NULL;
+	unsigned long index;
+
+	if (count && spu_address(source) && spu_address(out))
+		task = ps3_spu_vertices_task();
+	if (task)
+	{
+		task->kind = SPU_VERTICES_INDICES;
+		task->slot_count = 0;
+		task->count = (uint32_t)count;
+		task->output = (uint32_t)(uintptr_t)out;
+		task->subtract = (uint32_t)subtract;
+		task->slots[0].source = (uint32_t)(uintptr_t)source;
+		ps3_spu_vertices_commit();
+		return;
+	}
+	for (index = 0; index < count; index++)
+		out[index] = (unsigned short)(source[index] - subtract);
+}
+
+/* ps3_spu.c's fallback: a task the SPU left, run here */
+static void vertices_task_run(const spu_vertices_task *task)
+{
+	unsigned long index, slot;
+
+	if (task->kind == SPU_VERTICES_INDICES)
+	{
+		const WORD *source = (const WORD *)(uintptr_t)task->slots[0].source;
+		unsigned short *out = (unsigned short *)(uintptr_t)task->output;
+
+		for (index = 0; index < task->count; index++)
+			out[index] = (unsigned short)(source[index] - task->subtract);
+	}
+	else if (task->kind == SPU_VERTICES_CONVERT)
+	{
+		float *out = (float *)(uintptr_t)task->output;
+
+		for (index = 0; index < task->count; index++)
+		{
+			for (slot = 0; slot < task->slot_count; slot++, out += 4)
+				vertex_element_convert((unsigned char)task->slots[slot].type,
+					(const unsigned char *)(uintptr_t)task->slots[slot].source + index * task->slots[slot].stride, out);
+		}
+	}
+}
+
 /* a constant for an input the declaration leaves out: one value read by every vertex */
 static BOOL attribute_constant(unsigned long reg, const float *value)
 {
@@ -2044,8 +2273,8 @@ static const struct vertex_cache_entry *vertex_cache_get(const unsigned char *so
 	unsigned char type, unsigned long bytes, unsigned long first, unsigned long count, unsigned long extent)
 {
 	struct vertex_cache_entry **bucket, *entry;
-	unsigned long needed = first + count, vertex;
-	float *out;
+	unsigned long needed = first + count;
+	struct vertex_input input;
 
 	if (!static_vertices_end || source < static_vertices_begin ||
 		source + (needed - 1) * stride + bytes > static_vertices_end)
@@ -2095,9 +2324,13 @@ static const struct vertex_cache_entry *vertex_cache_get(const unsigned char *so
 		entry->capacity = capacity;
 		entry->count = 0;
 	}
-	/* only vertices no draw has read yet, in one pass into write-combined memory */
-	for (vertex = entry->count, out = entry->memory + vertex * 4; vertex < needed; vertex++, out += 4)
-		vertex_element_convert(type, source + vertex * stride, out);
+	/* only vertices no draw has read yet */
+	input.base = source + entry->count * stride;
+	input.stride = stride;
+	input.type = type;
+	input.bytes = (unsigned char)bytes;
+	input.reg = 0;
+	vertices_convert(&input, 1, needed - entry->count, entry->memory + entry->count * 4);
 	statistics.cached_elements += needed - entry->count;
 	entry->count = needed;
 	ps3_gpu_vertices_written();
@@ -2110,14 +2343,8 @@ static BOOL setup_vertices(const struct rsx_vertex_program *program, unsigned lo
 	unsigned long extent)
 {
 	const struct vertex_shader_object *declaration = device.vertex_shader;
-	struct
-	{
-		const unsigned char *base;
-		unsigned long stride;
-		unsigned char type;
-		unsigned char reg;
-	} inputs[VERTEX_ATTRIBUTE_COUNT];
-	unsigned long slot_count = 0, index, slot, vertex, stride;
+	struct vertex_input inputs[VERTEX_ATTRIBUTE_COUNT];
+	unsigned long slot_count = 0, index, slot, stride;
 	DWORD placed = 0;
 	uint32_t offset = 0;
 	float *out = NULL;
@@ -2144,6 +2371,7 @@ static BOOL setup_vertices(const struct rsx_vertex_program *program, unsigned lo
 		inputs[slot_count].stride = device.streams[element->stream].stride;
 		inputs[slot_count].base = source + first * inputs[slot_count].stride;
 		inputs[slot_count].type = element->type;
+		inputs[slot_count].bytes = element->bytes;
 		inputs[slot_count].reg = element->reg;
 		slot_count++;
 	}
@@ -2153,11 +2381,7 @@ static BOOL setup_vertices(const struct rsx_vertex_program *program, unsigned lo
 		out = ps3_gpu_scratch((uint32_t)(count * stride), 16, &offset);
 		if (!out)
 			return FALSE;
-		for (vertex = 0; vertex < count; vertex++)
-		{
-			for (slot = 0; slot < slot_count; slot++, out += 4)
-				vertex_element_convert(inputs[slot].type, inputs[slot].base + vertex * inputs[slot].stride, out);
-		}
+		vertices_convert(inputs, slot_count, count, out);
 		statistics.converted_elements += count * slot_count;
 	}
 	for (slot = 0; slot < slot_count; slot++)
@@ -2250,7 +2474,7 @@ static BOOL index_cache_offset(const WORD *source, unsigned long count, unsigned
 		free(entry);
 		return FALSE;
 	}
-	memcpy(copy, source, count * sizeof(WORD));
+	indices_convert(source, count, 0, copy);
 	entry->source = source;
 	entry->count = count;
 	entry->vertices = vertices;
@@ -2260,24 +2484,22 @@ static BOOL index_cache_offset(const WORD *source, unsigned long count, unsigned
 	return TRUE;
 }
 
-/* the indices into the scratch as they are, in one pass; FALSE if one reads past the buffer's vertices */
+/* the indices into the scratch as they are; FALSE if one reads past the buffer's vertices */
 static BOOL index_copy(const WORD *source, unsigned long count, unsigned long vertices, uint32_t *offset)
 {
-	unsigned short *indices = ps3_gpu_scratch((uint32_t)(count * sizeof(unsigned short)), 128, offset);
+	unsigned short *indices = ps3_gpu_scratch((uint32_t)((count * sizeof(unsigned short) + 15) & ~15UL), 128, offset);
 	unsigned long index;
 	unsigned int bits = 0;
 
 	if (!indices)
 		return FALSE;
-	for (index = 0; index < count; index++)
-	{
-		unsigned short value = source[index];
-
-		indices[index] = value;
-		bits |= value;
-	}
 	/* (their OR is at least the largest, without a branch an index; past the buffer: a closer look) */
-	return bits < vertices || largest_index(source, count) < vertices;
+	for (index = 0; index < count; index++)
+		bits |= source[index];
+	if (bits >= vertices && largest_index(source, count) >= vertices)
+		return FALSE;
+	indices_convert(source, count, 0, indices);
+	return TRUE;
 }
 
 static uint32_t primitive_type(D3DPRIMITIVETYPE type)
@@ -2383,6 +2605,7 @@ static void draw_vertices_run(const struct record_draw *draw)
 	}
 	ps3_gpu_draw(primitive_type((D3DPRIMITIVETYPE)draw->primitive), 0, draw->count);
 	statistics.draws++;
+	draw_stamp();
 }
 
 static void draw_indexed_run(const struct record_draw *draw)
@@ -2413,6 +2636,7 @@ static void draw_indexed_run(const struct record_draw *draw)
 		{
 			ps3_gpu_draw_indexed(primitive_type((D3DPRIMITIVETYPE)draw->primitive), offset, vertex_count);
 			statistics.draws++;
+			draw_stamp();
 			return;
 		}
 		span = ps3_timer_now();
@@ -2436,16 +2660,16 @@ static void draw_indexed_run(const struct record_draw *draw)
 	/* index i is vertex base + i; the converted vertices start at the smallest index */
 	ready = setup_vertices(program, base_vertex_index + minimum, maximum - minimum + 1, extent);
 	span = ps3_timer_add(_ps3_timer_draw_vertices, span);
-	if (!ready || !(indices = ps3_gpu_scratch(vertex_count * sizeof(unsigned short), 128, &offset)))
+	if (!ready || !(indices = ps3_gpu_scratch((vertex_count * sizeof(unsigned short) + 15) & ~15UL, 128, &offset)))
 	{
 		statistics.skipped_scratch++;
 		return;
 	}
-	for (index = 0; index < vertex_count; index++)
-		indices[index] = (unsigned short)(index_data[index] - minimum);
+	indices_convert(index_data, vertex_count, minimum, indices);
 	ps3_timer_add(_ps3_timer_draw_indices, span);
 	ps3_gpu_draw_indexed(primitive_type((D3DPRIMITIVETYPE)draw->primitive), offset, vertex_count);
 	statistics.draws++;
+	draw_stamp();
 }
 
 static void immediate_run(const struct record_immediate *immediate)
@@ -2491,6 +2715,7 @@ static void immediate_run(const struct record_immediate *immediate)
 		ps3_gpu_set_attribute((uint32_t)regs[index], offset + (uint32_t)(index * 16), (uint32_t)(reg_count * 16), 4);
 	ps3_gpu_draw(primitive_type((D3DPRIMITIVETYPE)immediate->primitive), 0, (uint32_t)count);
 	statistics.draws++;
+	draw_stamp();
 }
 
 static void clear_run(const struct record *record)
@@ -3185,6 +3410,11 @@ static void record_execute(const struct record *record)
 		break;
 	case _record_timestamp:
 		ps3_gpu_timestamp((int)record->a);
+		draw_stamps_split((int)record->a);
+		break;
+	case _record_draw_stamps:
+		draw_stamps_part = record->a ? 0 : -1;
+		ps3_gpu_draw_stamps((int)record->a);
 		break;
 	case _record_present:
 		present_run();
@@ -3204,16 +3434,76 @@ static DWORD record_draw_number(const struct record *record)
 	return 0;
 }
 
+/* the records before position are run, and their room given back */
+static void consumed_advance(uint64_t position)
+{
+	if (ring.consumed == position)
+		return;
+	ring.consumed = position;
+	__sync_synchronize();
+	if (ring.producers_waiting)
+	{
+		ps3_host_lock_enter(ring.lock);
+		ps3_host_condition_broadcast(ring.progress);
+		ps3_host_lock_leave(ring.lock);
+	}
+}
+
+/* the records whose SPU tasks (which read their vertices) are not known done: the room from start on waits for the
+SPU's tail to pass head. In order; the Direct3D thread's */
+#define PENDING_RECORDS 1024
+
+static struct
+{
+	uint64_t start;
+	uint32_t head;
+} pending_records[PENDING_RECORDS];
+static unsigned long pending_first, pending_count;
+
+static void pending_add(uint64_t start, uint32_t head)
+{
+	if (pending_count == PENDING_RECORDS)
+	{
+		ps3_spu_vertices_wait();
+		pending_count = 0;
+	}
+	pending_records[(pending_first + pending_count) % PENDING_RECORDS].start = start;
+	pending_records[(pending_first + pending_count) % PENDING_RECORDS].head = head;
+	pending_count++;
+}
+
+/* the room that can come back now, without a wait: up to the first record whose tasks are not done */
+static uint64_t room_returnable(uint64_t position)
+{
+	while (pending_count && ps3_spu_vertices_done(pending_records[pending_first].head))
+	{
+		pending_first = (pending_first + 1) % PENDING_RECORDS;
+		pending_count--;
+	}
+	return pending_count ? pending_records[pending_first].start : position;
+}
+
+/* a record's room comes back after its SPU tasks: while the game's thread waits for room, as far as they are done;
+when this thread goes idle, all of it after a wait */
 static void direct3d_thread(void *unused)
 {
+	uint64_t position = 0;
+
 	(void)unused;
 	ring.consumer = ps3_host_thread_id();
 	for (;;)
 	{
 		uint64_t published = ring.published, span;
 
-		if (ring.consumed == published)
+		if (position == published)
 		{
+			if (ring.consumed != position)
+			{
+				ps3_spu_vertices_wait();
+				pending_count = 0;
+				consumed_advance(position);
+				continue;
+			}
 			if (ring.stop)
 				break;
 			ps3_host_lock_enter(ring.lock);
@@ -3228,24 +3518,22 @@ static void direct3d_thread(void *unused)
 		/* the records after the position that showed them */
 		__asm__ volatile("lwsync" : : : "memory");
 		span = ps3_timer_now();
-		while (ring.consumed != published)
+		while (position != published)
 		{
-			const struct record *record = (const struct record *)(ring.memory + ring.consumed % RING_BYTES);
+			const struct record *record = (const struct record *)(ring.memory + position % RING_BYTES);
 			DWORD draw = record_draw_number(record);
+			uint32_t head = ps3_spu_vertices_head();
 
 			record_execute(record);
 			/* the record read before its room is given back */
 			__asm__ volatile("lwsync" : : : "memory");
 			if (draw)
 				ring.completed_draws = draw;
-			ring.consumed += record->bytes;
-			__sync_synchronize();
-			if (ring.producers_waiting)
-			{
-				ps3_host_lock_enter(ring.lock);
-				ps3_host_condition_broadcast(ring.progress);
-				ps3_host_lock_leave(ring.lock);
-			}
+			if (ps3_spu_vertices_head() != head)
+				pending_add(position, ps3_spu_vertices_head());
+			position += record->bytes;
+			if (ring.producers_waiting || !pending_count)
+				consumed_advance(room_returnable(position));
 		}
 		ps3_timer_add(_ps3_timer_thread_busy, span);
 	}
@@ -3370,9 +3658,10 @@ static void record_commit(void)
 		return;
 	if (ring.current_inline)
 	{
-		/* after the records before it */
+		/* after the records before it; the next inline record reuses its memory, which the SPU reads first */
 		direct3d_drain();
 		record_execute(record);
+		ps3_spu_vertices_wait();
 		return;
 	}
 	ring.written += record->bytes;
@@ -3476,6 +3765,16 @@ uint64_t ps3_timers_rsx_wait(int part)
 	return ps3_timer_now();
 }
 
+/* ps3_timers.h: the draws from here stamped or not, in the records' order */
+void ps3_timers_draw_stamps(int on)
+{
+	if (device.created)
+	{
+		record_begin(_record_draw_stamps, 0, on ? 1u : 0u, 0);
+		record_commit();
+	}
+}
+
 /* ---------- device creation */
 
 Direct3D *WINAPI Direct3DCreate8(UINT sdk_version)
@@ -3530,6 +3829,8 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 			device.attributes[index][3] = front.attributes[index][3] = front.recorded_attributes[index][3] = 1.0f;
 		for (index = 0; index < 256; index++)
 			byte_floats[index] = index / 255.0f;
+		platform_log("Direct3D: vertex and index conversions on %s",
+			ps3_spu_vertices_start(vertices_task_run) ? "an SPU" : "the PPE");
 		device.viewport.Width = width;
 		device.viewport.Height = height;
 		device.viewport.MaxZ = 1.0f;
@@ -3572,6 +3873,7 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 		/* (its first read sets the screen up: before the Direct3D thread can make one) */
 		halo_screen_width();
 		device.created = TRUE;
+		ps3_timers_shaders_log = shaders_log;
 		if (device.gpu_ready)
 			direct3d_start();
 		platform_log("Direct3D: %lux%lu on the RSX%s, back buffer at 0x%08lx; %s", width, height,
@@ -3919,6 +4221,27 @@ static void present_run(void)
 			"cache %lu arrays, %lu of %lu KB, %lu refused", device.frame, statistics.cached_elements,
 			statistics.converted_elements, vertex_cache_arrays, vertex_arena.used / 1024,
 			(unsigned long)(VERTEX_ARENA_BYTES / 1024), statistics.cache_refused);
+		{
+			struct ps3_spu_vertices_statistics spu;
+			unsigned long frames = device.frame == 1 ? 1 : STATISTICS_FRAMES, type;
+			char types[512];
+			size_t used = 0;
+
+			ps3_spu_vertices_statistics(&spu);
+			platform_log("Direct3D: frame %lu: the conversions' SPU %s: %lu tasks, %lu elements, %lu indices, %lu us a "
+				"frame (its waits for input %lu, for output %lu); the waits that found tasks not done: %lu, %lu us a "
+				"frame", device.frame, spu.up ? "on" : "off", (unsigned long)spu.tasks, (unsigned long)spu.elements,
+				(unsigned long)spu.indices, (unsigned long)(spu.busy_microseconds / frames),
+				(unsigned long)(spu.input_wait_microseconds / frames), (unsigned long)(spu.output_wait_microseconds / frames),
+				(unsigned long)spu.waits, (unsigned long)(spu.wait_microseconds / frames));
+			for (type = 0; type < 128 && used < sizeof(types) - 32; type++)
+			{
+				if (statistics.type_elements[type])
+					used += (size_t)snprintf(types + used, sizeof(types) - used, "%s0x%02lx %lu", used ? ", " : "", type,
+						statistics.type_elements[type]);
+			}
+			platform_log("Direct3D: frame %lu: the elements converted by type: %s", device.frame, used ? types : "none");
+		}
 		memset(&statistics, 0, sizeof(statistics));
 	}
 }

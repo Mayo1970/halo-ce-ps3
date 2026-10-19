@@ -26,6 +26,19 @@ enum
 
 /* ---------- macros */
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of the draw (port/ps3/include/ps3_timers.h) */
+#define PS3_TRANSPARENT_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_TRANSPARENT_ADD(timer, span) ((void)ps3_timer_add((timer), (span)))
+#define PS3_TRANSPARENT_COUNT(timer, count) (ps3_timer_counts[(timer)] += (uint32_t)(count))
+#else
+#define PS3_TRANSPARENT_SPAN(span) ((void)0)
+#define PS3_TRANSPARENT_ADD(timer, span) ((void)0)
+#define PS3_TRANSPARENT_COUNT(timer, count) ((void)0)
+#endif
+
 /* ---------- structures */
 
 /* January's assert strings name this type and its sorted_index field, and pin
@@ -72,6 +85,10 @@ typedef char transparent_geometry_group_cortana_hack_offset_assert[
 /* ---------- prototypes */
 static void rasterizer_sort_external(
 	void);
+#ifdef HALO_PS3
+static int ps3_transparent_timer(
+	struct transparent_geometry_group const *group);
+#endif
 
 /* ---------- globals */
 
@@ -459,6 +476,9 @@ void rasterizer_transparent_geometry_draw(
 	long profile = water
 		? _rasterizer_profile_water
 		: _rasterizer_profile_queued_transparents;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	rasterizer_profile_begin((short)profile);
 	if (transparent_geometry_group_count > 0)
@@ -467,7 +487,10 @@ void rasterizer_transparent_geometry_draw(
 
 		if (water)
 		{
+			PS3_TRANSPARENT_SPAN(ps3_span); /* port: (the timer build) */
 			rasterizer_sort_external();
+			PS3_TRANSPARENT_ADD(_ps3_timer_transparent_sort, ps3_span); /* port: (the timer build) */
+			PS3_TRANSPARENT_COUNT(_ps3_timer_transparent_sort, transparent_geometry_group_count); /* port: (the timer build) */
 			transparent_geometry_group_index = 0;
 			if (global_window_parameters.window_index != NONE)
 			{
@@ -475,7 +498,9 @@ void rasterizer_transparent_geometry_draw(
 			}
 		}
 
+		PS3_TRANSPARENT_SPAN(ps3_span); /* port: (the timer build) */
 		rasterizer_transparent_geometry_groups_begin();
+		PS3_TRANSPARENT_ADD(_ps3_timer_transparent_begin_end, ps3_span); /* port: (the timer build) */
 		rasterizer_debug_options.transparent_pixel_counter_active = FALSE;
 		while (transparent_geometry_group_index < transparent_geometry_group_count)
 		{
@@ -525,7 +550,10 @@ void rasterizer_transparent_geometry_draw(
 					!first_person_flag);
 			}
 
+			PS3_TRANSPARENT_SPAN(ps3_span); /* port: (the timer build) */
 			rasterizer_transparent_geometry_group_draw(group, FALSE);
+			PS3_TRANSPARENT_ADD(ps3_transparent_timer(group), ps3_span); /* port: (the timer build) */
+			PS3_TRANSPARENT_COUNT(ps3_transparent_timer(group), 1); /* port: (the timer build) */
 			transparent_geometry_group_index++;
 		}
 
@@ -533,7 +561,9 @@ void rasterizer_transparent_geometry_draw(
 		{
 			rasterizer_debug_options.transparent_pixel_counter_active = TRUE;
 		}
+		PS3_TRANSPARENT_SPAN(ps3_span); /* port: (the timer build) */
 		rasterizer_transparent_geometry_groups_end();
+		PS3_TRANSPARENT_ADD(_ps3_timer_transparent_begin_end, ps3_span); /* port: (the timer build) */
 		rasterizer_debug_options.transparent_pixel_counter_active = FALSE;
 		if (first_person_flag)
 		{
@@ -545,3 +575,17 @@ void rasterizer_transparent_geometry_draw(
 
 	return;
 }
+
+#ifdef HALO_PS3
+/* port: (the timer build) a group's timer by its shader's type: screen, effect, decal, environment, model, generic,
+chicago, water, glass, meter, plasma */
+static int ps3_transparent_timer(
+	struct transparent_geometry_group const *group)
+{
+	static const unsigned char timers[] = { 8, 0, 8, 8, 1, 2, 3, 4, 5, 6, 7 };
+	short type = group->shader ? group->shader->base.type : NONE;
+
+	return _ps3_timer_transparent_effect + (type >= 0 && type < (short)sizeof(timers) ? timers[type] :
+		_ps3_timer_transparent_other - _ps3_timer_transparent_effect);
+}
+#endif

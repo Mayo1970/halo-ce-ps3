@@ -24,6 +24,14 @@ enum
 	_ps3_timer_window_effects,
 	_ps3_timer_window_interface,
 	_ps3_timer_window_end,
+	/* the specular part's splits in order (render.c); the window's specular part is their sum */
+	_ps3_timer_specular_lights,
+	_ps3_timer_specular_lightmaps,
+	_ps3_timer_specular_masks,
+	_ps3_timer_specular_mirrors,
+	_ps3_timer_specular_reflections,
+	_ps3_timer_specular_transparent,
+	_ps3_timer_specular_fog,
 	/* the game ticks (game.c, game_time.c): each part, logged in ms a tick */
 	_ps3_timer_tick_units,
 	_ps3_timer_tick_ai,
@@ -41,6 +49,130 @@ enum
 	_ps3_timer_frame_widgets,
 	_ps3_timer_frame_sound,
 	_ps3_timer_frame_other,
+	/* the particles' part of it: particles_update (its particles' physics, with the particles and those with physics:
+	ps3_timer_counts; particles.c), contrails_update, particle_systems_update */
+	_ps3_timer_particles_update,
+	_ps3_timer_particles_physics,
+	_ps3_timer_contrails_update,
+	_ps3_timer_particle_systems_update,
+	/* point_physics_update at every call (point_physics.c), ms a frame: its whole time, its wind, its rays; its calls
+	and rays (ps3_timer_counts) */
+	_ps3_timer_point_total,
+	_ps3_timer_point_wind,
+	_ps3_timer_point_rays,
+	/* ai_update's parts (ai.c), ms a tick; an actor's update by step, the decisions and control by call (actors.c),
+	with the actors (ps3_timer_counts) */
+	_ps3_timer_ai_conversations,
+	_ps3_timer_ai_encounters,
+	_ps3_timer_ai_actors,
+	_ps3_timer_ai_other,
+	_ps3_timer_actor_general,
+	_ps3_timer_actor_perception,
+	_ps3_timer_actor_situation,
+	_ps3_timer_actor_emotion,
+	_ps3_timer_actor_orders,
+	_ps3_timer_actor_decision_loop,
+	_ps3_timer_actor_actions,
+	_ps3_timer_actor_clear_output,
+	_ps3_timer_actor_action_control,
+	_ps3_timer_actor_communication,
+	_ps3_timer_actor_conversation,
+	_ps3_timer_actor_destination,
+	_ps3_timer_actor_look_movement,
+	_ps3_timer_actor_move,
+	_ps3_timer_actor_look_combat,
+	_ps3_timer_actor_unit,
+	/* actor_perception_update's parts (actor_perception.c): the refresh, the danger zone, the props' loop with its
+	props (ps3_timer_counts) and, in it, the props' position and status refreshes with their count */
+	_ps3_timer_perception_refresh,
+	_ps3_timer_perception_danger,
+	_ps3_timer_perception_props,
+	_ps3_timer_perception_prop_refresh,
+	/* ai_test_line_of_sight (ai.c): its whole time and calls, the first ray and its calls, the fog, the mode's rays;
+	the first rays' length in hundredths of a world unit (a count only) */
+	_ps3_timer_los_total,
+	_ps3_timer_los_first_ray,
+	_ps3_timer_los_fog,
+	_ps3_timer_los_mode_rays,
+	_ps3_timer_los_length,
+	/* actor_action_control by the actor's action, with its calls (actions.c), in the order of the game's actions */
+	_ps3_timer_action_none,
+	_ps3_timer_action_sleep,
+	_ps3_timer_action_alert,
+	_ps3_timer_action_fight,
+	_ps3_timer_action_flee,
+	_ps3_timer_action_uncover,
+	_ps3_timer_action_guard,
+	_ps3_timer_action_search,
+	_ps3_timer_action_wait,
+	_ps3_timer_action_vehicle,
+	_ps3_timer_action_charge,
+	_ps3_timer_action_obey,
+	_ps3_timer_action_converse,
+	_ps3_timer_action_avoid,
+	/* actor_move_update's parts (actor_moving.c): the flying vector avoidance, the movement (in it the pathfinding
+	location and the line test), the firing positions; actor_path_refresh wherever it runs, its path builds; calls */
+	_ps3_timer_move_avoidance,
+	_ps3_timer_move_movement,
+	_ps3_timer_move_location,
+	_ps3_timer_move_line,
+	_ps3_timer_move_firing_positions,
+	_ps3_timer_path_refresh,
+	_ps3_timer_path_build,
+	/* a path build's parts (actor_moving.c): the setup (input, state, debug storage), the search (path_state_find) and
+	the nodes it made (a count only), the path made from it; a flying path, a cached state's path; calls */
+	_ps3_timer_path_setup,
+	_ps3_timer_path_search,
+	_ps3_timer_path_nodes,
+	_ps3_timer_path_make,
+	_ps3_timer_path_flying,
+	_ps3_timer_path_cached,
+	/* the flying vector avoidance's parts (actor_moving.c): the setup with the objects it found as its count, the
+	rays' structure tests and their tests against the objects' pills, with their counts */
+	_ps3_timer_avoid_setup,
+	_ps3_timer_avoid_structure,
+	_ps3_timer_avoid_objects,
+	/* path_state_find's parts (path.c): the reset, the begin, the traverse (in it the heap's pops, the surfaces' edges
+	with the surfaces as their count, the edges' loop, the closest points in it), the debug copy */
+	_ps3_timer_path_reset,
+	_ps3_timer_path_begin,
+	_ps3_timer_path_traverse,
+	_ps3_timer_path_pop,
+	_ps3_timer_path_edges,
+	_ps3_timer_path_edge_loop,
+	_ps3_timer_path_closest,
+	_ps3_timer_path_debug_copy,
+	/* path_state_build_path's parts (path.c): the smoothing, the obstacle avoidance */
+	_ps3_timer_path_smooth,
+	_ps3_timer_path_obstacles,
+	/* path_smooth's parts (path_smoothing.c): the pill tests to the raw steps, the turning points, the surface found
+	and the point projected; with their counts */
+	_ps3_timer_smooth_pills,
+	_ps3_timer_smooth_turning,
+	_ps3_timer_smooth_surface,
+	/* physics_update's parts (physics.c): the forces (with the mass points as their count), the movement, the units'
+	collisions, the old physics; with their calls */
+	_ps3_timer_physics_compute,
+	_ps3_timer_physics_mass_points,
+	_ps3_timer_physics_move,
+	_ps3_timer_physics_unit_collisions,
+	_ps3_timer_physics_old,
+	/* physics_update_old's parts (physics.c): each mass point's location (the mass points as its count), ground plane,
+	water depth and antigravity probe (with the probes), then the object's move */
+	_ps3_timer_old_location,
+	_ps3_timer_old_ground,
+	_ps3_timer_old_water,
+	_ps3_timer_old_antigrav,
+	_ps3_timer_old_translate,
+	/* vehicle_update's parts (vehicles.c): the physics with the vehicles simulated as its count, the effects after it
+	(slipping, suspension, crashing, airborne), the stopping, the animation with the vehicles as its count */
+	_ps3_timer_vehicle_physics,
+	_ps3_timer_vehicle_effects,
+	_ps3_timer_vehicle_stopping,
+	_ps3_timer_vehicle_animation,
+	/* actor_decision_loop's parts (actors.c): the decisions and the actions performed, with their counts */
+	_ps3_timer_decision_decide,
+	_ps3_timer_decision_perform,
 	/* objects_update (objects.c), in ms a tick: the type updates by kind, then the other steps of an object */
 	_ps3_timer_objects_units,
 	_ps3_timer_objects_items,
@@ -52,6 +184,15 @@ enum
 	_ps3_timer_objects_values,
 	_ps3_timer_objects_activation,
 	_ps3_timer_objects_cleanup,
+	/* object_compute_node_matrices's steps at every call (objects.c), in ms a tick, with its calls and nodes
+	(ps3_timer_counts); the matrices: the first node's, the validity checks, the other nodes', the bounding sphere */
+	_ps3_timer_nodes_orientations,
+	_ps3_timer_nodes_blends,
+	_ps3_timer_nodes_root,
+	_ps3_timer_nodes_checks,
+	_ps3_timer_nodes_children,
+	_ps3_timer_nodes_bounds,
+	_ps3_timer_nodes_postprocess,
 	/* the render's objects pass before render_objects (render.c), and in it (render_objects.c) */
 	_ps3_timer_render_sky,
 	_ps3_timer_render_first_person,
@@ -67,6 +208,24 @@ enum
 	_ps3_timer_effects_transparent,
 	_ps3_timer_effects_decals,
 	_ps3_timer_effects_detail,
+	/* the weather's render (weather_particle_systems.c): the particles' update with the particles as its count, the
+	sprites built with their count, their draw; the rest is the visibility tests */
+	_ps3_timer_weather_update,
+	_ps3_timer_weather_sprites,
+	_ps3_timer_weather_draw,
+	/* the transparent geometry's draw (rasterizer_transparent_geometry.c): the sort with the groups as its count, the
+	groups' begin and end, each group (with those it draws first) by its shader's type, with the groups */
+	_ps3_timer_transparent_sort,
+	_ps3_timer_transparent_begin_end,
+	_ps3_timer_transparent_effect,
+	_ps3_timer_transparent_model,
+	_ps3_timer_transparent_generic,
+	_ps3_timer_transparent_chicago,
+	_ps3_timer_transparent_water,
+	_ps3_timer_transparent_glass,
+	_ps3_timer_transparent_meter,
+	_ps3_timer_transparent_plasma,
+	_ps3_timer_transparent_other,
 	/* sound_render's steps (sound_manager.c), game_sound_update's (game_sound.c), the waits for the mixer's lock */
 	_ps3_timer_sound_listener,
 	_ps3_timer_sound_looping,
@@ -141,10 +300,12 @@ enum
 	_ps3_timer_draw_colours,
 	_ps3_timer_draw_vertices,
 	_ps3_timer_draw_indices,
-	/* waits in the present: two flips pending (d3d8_rsx.c), the display flips and the RSX (ps3_gpu.c) */
+	/* waits in the present: two flips pending (d3d8_rsx.c), the display flips and the RSX (ps3_gpu.c); the
+	conversions' SPU (ps3_spu.c) */
 	_ps3_timer_vblank_wait,
 	_ps3_timer_flip_wait,
 	_ps3_timer_rsx_wait,
+	_ps3_timer_spu_wait,
 	/* RSX splits only (ps3_rsx_timers): the frame's start, before each window, after the render */
 	_ps3_timer_rsx_previous,
 	_ps3_timer_rsx_before,
@@ -185,13 +346,42 @@ extern uint64_t ps3_collision_function_timers[PS3_COLLISION_FUNCTIONS];
 extern uint32_t ps3_collision_function_calls[PS3_COLLISION_FUNCTIONS];
 extern uint32_t ps3_collision_nodes[PS3_COLLISION_FUNCTIONS];
 extern uint32_t ps3_collision_objects;
+/* the same for the AI's line-of-sight rays alone (collision_usage.h), with their leaves and the clusters whose
+objects they walked (collisions.c) */
+extern uint64_t ps3_los_function_timers[PS3_COLLISION_FUNCTIONS];
+extern uint32_t ps3_los_function_calls[PS3_COLLISION_FUNCTIONS];
+extern uint32_t ps3_los_nodes[PS3_COLLISION_FUNCTIONS];
+extern uint32_t ps3_los_objects;
+extern uint32_t ps3_los_leaves;
+extern uint32_t ps3_los_clusters;
+/* their loop over a cluster's objects (collisions.c): its time, its marks' and object tests' time, the objects the
+copies passed, the objects the copies' iterator walked; ps3_bounds_walked counts every ray's (object_bounds_cache.c) */
+extern uint64_t ps3_los_loop_time;
+extern uint64_t ps3_los_test_time;
+extern uint32_t ps3_los_candidates;
+extern uint32_t ps3_los_walked;
+extern uint32_t ps3_bounds_walked;
+/* the objects the iterator read from a cluster's kept block (object_bounds_cache.c): every ray's, the AI's rays' */
+extern uint32_t ps3_bounds_read;
+extern uint32_t ps3_los_read;
 /* the sounds' obstruction (game_sound.c): the calls, and those computed (not from the cache) */
 extern uint32_t ps3_obstruction_calls;
 extern uint32_t ps3_obstruction_computed;
-/* the RSX's nanoseconds from each split to the next, from its timestamps (ps3_gpu.c), and per frame */
+/* the RSX's nanoseconds from each split to the next, from its timestamps (ps3_gpu.c), and per frame; the draws in
+each split's part */
 extern uint64_t ps3_rsx_timers[_ps3_timer_count];
 extern uint64_t ps3_rsx_frame_nanoseconds;
 extern uint32_t ps3_rsx_frames;
+extern uint32_t ps3_rsx_draws[_ps3_timer_count];
+/* the stamped draws (ps3_timers_draw_stamps): the RSX's nanoseconds and the draws by the Direct3D device's key for
+the draw's pixel shader; the frames stamped, the draws past a frame's stamps */
+#define PS3_DRAW_STAMP_KEYS 1024
+extern uint64_t ps3_draw_stamp_nanoseconds[PS3_DRAW_STAMP_KEYS];
+extern uint32_t ps3_draw_stamp_draws[PS3_DRAW_STAMP_KEYS];
+extern uint32_t ps3_draw_stamp_frames;
+extern uint32_t ps3_draw_stamp_dropped;
+/* the Direct3D device's lines of the stamped pixel shaders, at each log (d3d8_rsx.c); NULL: none */
+extern void (*ps3_timers_shaders_log)(void);
 
 /* the timebase, read again while its low word is 0 (PSL1GHT's __gettime: a Cell erratum) */
 static inline uint64_t ps3_timer_now(void)
@@ -224,5 +414,8 @@ void ps3_timers_frame(void);
 /* a split of the RSX's frame: a timestamp report in the Direct3D thread's order (d3d8_rsx.c), which ps3_gpu.c
 reads two frames on (no stall); returns the time now, the start of a next span */
 uint64_t ps3_timers_rsx_wait(int part);
+/* the draws from here stamped on the RSX (on) or not, in the Direct3D thread's order (d3d8_rsx.c), in one frame of
+eight: each draw's time by its pixel shader */
+void ps3_timers_draw_stamps(int on);
 
 #endif

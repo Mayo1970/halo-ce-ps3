@@ -24,8 +24,7 @@ upstream halo-ce-universal copy of source/physics/collisions.c. */
 #include "scenario/scenario.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/bipeds.h"
-/* port: object_bounds_cache.c's */
-boolean object_bounds_cache_out_of_reach(long object_index, real_point3d const *point, real radius);
+#include "object_bounds_cache.h" /* port: port/linux/game/object_bounds_cache.c */
 
 #undef REAL_MATH_EXTERNAL_POINT_FROM_LINE3D
 
@@ -490,6 +489,7 @@ boolean collision_test_vector(
 		collision_log_end_time(
 			_collision_function_vector_structure,
 			collision_usage_times.vector_structure.QuadPart);
+		PS3_COLLISION_LEAVES(bsp_result.leaf_count); /* port: (the timer build) */
 
 		if (TEST_FLAG(flags, _collision_test_media_bit) &&
 			collision->location.cluster_index != NONE)
@@ -572,13 +572,22 @@ boolean collision_test_vector(
 
 				if (structure_cluster_mark(cluster_index))
 				{
-					long reference_index;
+					/* port: the cluster's objects but those whose bounding sphere's copy the segment misses, in order
+					(object_bounds_cache.c): they fail their own test, and their mark only stops one that fails too */
+					struct object_bounds_vector_iterator bounds;
 					long object_index;
+#ifdef HALO_PS3
+					boolean ps3_los = PS3_COLLISION_LOS();
+					uint32_t ps3_walked = ps3_bounds_walked, ps3_read = ps3_bounds_read;
+					uint64_t ps3_loop = ps3_los ? ps3_timer_now() : 0, ps3_test = 0;
+#endif
 
-					for (object_index = cluster_get_first_collideable_object(&reference_index, cluster_index);
+					PS3_COLLISION_CLUSTER(); /* port: (the timer build) */
+					for (object_index = object_bounds_cache_first_vector(&bounds, (short)cluster_index, point, vector);
 						object_index != NONE;
-						object_index = cluster_get_next_collideable_object(&reference_index))
+						object_index = object_bounds_cache_next_vector(&bounds))
 					{
+						PS3_COLLISION_TEST_BEGIN(ps3_los, ps3_test); /* port: (the timer build) */
 						if (object_mark_function(object_index) &&
 							object_test_vector(
 								object_index,
@@ -591,7 +600,9 @@ boolean collision_test_vector(
 						{
 							hit = TRUE;
 						}
+						PS3_COLLISION_TEST_END(ps3_los, ps3_test); /* port: (the timer build) */
 					}
+					PS3_COLLISION_LOOP_END(ps3_los, ps3_loop, ps3_walked, ps3_read); /* port: (the timer build) */
 				}
 			}
 			object_marker_end();

@@ -258,6 +258,8 @@ static uint64_t ps3_timer_window;
 	((void)ps3_timer_add((timer), ps3_timer_window), ps3_timer_window = ps3_timers_rsx_wait(timer))
 /* port: a part of a split, timed on the CPU alone (the RSX's stamp stays the split's) */
 #define PS3_TIMER_PART(timer) ((void)(ps3_timer_window = ps3_timer_add((timer), ps3_timer_window)))
+/* port: the draws stamped on the RSX by pixel shader from here (1) or not (0) */
+#define PS3_TIMER_DRAW_STAMPS(on) ps3_timers_draw_stamps(on)
 /* port: the interface pass's share of the game thread's Direct3D draws and constants (d3d8_rsx.c's frame timers) */
 static uint64_t ps3_interface_draws, ps3_interface_constants;
 #define PS3_TIMER_INTERFACE_BEGIN() ((void)(ps3_interface_draws = ps3_timers[_ps3_timer_front_draws], \
@@ -269,6 +271,7 @@ static uint64_t ps3_interface_draws, ps3_interface_constants;
 #define PS3_TIMER_WINDOW_BEGIN() ((void)0)
 #define PS3_TIMER_SPLIT(timer) ((void)0)
 #define PS3_TIMER_PART(timer) ((void)0)
+#define PS3_TIMER_DRAW_STAMPS(on) ((void)0)
 #define PS3_TIMER_INTERFACE_BEGIN() ((void)0)
 #define PS3_TIMER_INTERFACE_END() ((void)0)
 #endif
@@ -363,14 +366,22 @@ static void render_window(
 		rasterizer_decals_end();
 		PS3_TIMER_SPLIT(_ps3_timer_window_diffuse);
 
+		PS3_TIMER_DRAW_STAMPS(1);
 		lights_render_specular();
+		PS3_TIMER_SPLIT(_ps3_timer_specular_lights);
 		structure_render_specular_lightmaps();
+		PS3_TIMER_SPLIT(_ps3_timer_specular_lightmaps);
 		structure_render_reflection_lightmap_masks();
+		PS3_TIMER_SPLIT(_ps3_timer_specular_masks);
 		structure_render_reflection_mirrors();
+		PS3_TIMER_SPLIT(_ps3_timer_specular_mirrors);
 		structure_render_reflections();
+		PS3_TIMER_SPLIT(_ps3_timer_specular_reflections);
 		structure_render_transparent_geometry();
+		PS3_TIMER_SPLIT(_ps3_timer_specular_transparent);
 		structure_render_fog();
-		PS3_TIMER_SPLIT(_ps3_timer_window_specular);
+		PS3_TIMER_SPLIT(_ps3_timer_specular_fog);
+		PS3_TIMER_DRAW_STAMPS(0);
 		game_engine_post_rasterize_objects();
 		weather_particle_systems_render();
 		PS3_TIMER_PART(_ps3_timer_effects_weather);

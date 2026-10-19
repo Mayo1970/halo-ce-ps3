@@ -1,38 +1,5 @@
-/*
-WIND.C
-
-symbols in this file:
-0017F740 0010:
-	_wind_dispose_from_old_map (0000)
-0017F750 00e0:
-	_wind_variance_get (0000)
-0017F830 0260:
-	_wind_update (0000)
-0017FA90 0140:
-	_scenario_get_current_from_weather_palette (0000)
-0017FBD0 0180:
-	_wind_variance_initialize (0000)
-0017FD50 0050:
-	_wind_initialize_for_new_map (0000)
-0017FDA0 0120:
-	_scenario_get_current (0000)
-0017FEC0 0020:
-	_scenario_get_wind (0000)
-0017FEE0 0020:
-	_scenario_get_water_current (0000)
-002A07CC 0004:
-	__real@4b000000 (0000)
-002A07D0 0004:
-	__real@bc23d70a (0000)
-002A07D4 0019:
-	??_C@_0BJ@MOOMLFGA@wind_globals?4initialized?$AA@ (0000)
-002A07F0 001f:
-	??_C@_0BP@GCGLBDOK@c?3?2halo?2SOURCE?2scenario?2wind?4c?$AA@ (0000)
-002A0810 001a:
-	??_C@_0BK@OAAHBDPL@?$CBwind_globals?4initialized?$AA@ (0000)
-0030E7FC 0004:
-	_global_environment_index (0000)
-*/
+/* WIND.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/scenario/wind.c. */
 
 /* ---------- headers */
 
@@ -92,6 +59,34 @@ typedef char structure_weather_palette_entry_wind_offset_assert[
 typedef char structure_weather_palette_entry_direction_offset_assert[
 	offsetof(struct structure_weather_palette_entry, wind_direction) == 0x90 ? 1 : -1];
 
+#ifdef HALO_PS3
+/* port: scenario_get_current's lookups for a cluster: its weather palette entry, its fog region's (in effect below the
+fog plane, if any: scenario_get_fog_region_index) with the fog's water flag, the plane and the water's distance */
+struct wind_cluster_lookup
+{
+	short cluster_index;
+	short weather_palette_index;
+	short region_weather_palette_index;
+	boolean region_water;
+	real_plane3d const *plane;
+	real plane_distance;
+};
+
+/* port: the lookups of one tick (wind_update's time), structure bsp and map, by cluster (direct mapped) and by weather
+palette entry; and the time as a real, made once a tick */
+struct wind_lookups
+{
+	boolean valid;
+	short structure_bsp_index;
+	long time;
+	struct structure_bsp *structure_bsp;
+	struct wind_cluster_lookup clusters[32];
+	struct wind_definition *definitions[32];
+	long real_time_source;
+	real real_time;
+};
+#endif
+
 /* ---------- prototypes */
 
 static void wind_variance_get(
@@ -110,6 +105,16 @@ void uniform_cubic_spline_vector3d(
 	real t0,
 	real h,
 	real t);
+#ifdef HALO_PS3
+static real wind_real_time(
+	void);
+static void wind_lookups_refresh(
+	struct structure_bsp *structure_bsp);
+static struct wind_cluster_lookup const *wind_cluster_lookup(
+	short cluster_index);
+static struct wind_definition *wind_definition_lookup(
+	short weather_palette_index);
+#endif
 
 /* ---------- globals */
 
@@ -127,12 +132,19 @@ typedef char wind_globals_size_assert[
 
 long global_environment_index = NONE;
 
+#ifdef HALO_PS3
+static struct wind_lookups wind_lookups;
+#endif
+
 /* ---------- public code */
 
 void wind_dispose_from_old_map(
 	void)
 {
 	wind_globals.initialized = FALSE;
+#ifdef HALO_PS3
+	wind_lookups.valid = FALSE; /* port: (wind_lookups_refresh) */
+#endif
 
 	return;
 }
@@ -143,9 +155,43 @@ static void wind_variance_get(
 	real local_variation_rate,
 	real maximum_magnitude)
 {
+#ifdef HALO_PS3
+	/* port: in the program's data: built on the stack at each call, it was stored and read back at once */
+	static real const axis_scale[3] = { 0.1f, 0.2f, 0.07f };
+#else
 	real const axis_scale[3] = { 0.1f, 0.2f, 0.07f };
+#endif
 	real magnitude = maximum_magnitude * (1.f / 3.f);
 	long axis_index;
+#ifdef HALO_PS3
+	real wind_time = wind_real_time();
+	union
+	{
+		real value[3];
+		long bits[3];
+	} sample_keys;
+
+	/* port: the three keys made first, then stored and read once, with fabs for the mask: on the PPE each store read
+	back at once stalls (the same answer: fabs clears the sign bit, as the mask did) */
+	for (axis_index = 0; axis_index < 3; axis_index++)
+	{
+		sample_keys.value[axis_index] =
+			(real)fabs(((axis_scale[axis_index] * wind_time * local_variation_rate) + position->n[axis_index]) * 8.f) +
+			8388608.f;
+	}
+	__asm__ volatile("" : : "r"(&sample_keys) : "memory");
+
+	*wind = *global_zero_vector3d;
+	for (axis_index = 0; axis_index < 3; axis_index++)
+	{
+		real_vector3d const *sample =
+			&wind_globals.variance[axis_index][(short)((byte)sample_keys.bits[axis_index] & 0x3F)];
+
+		wind->i += sample->i;
+		wind->j += sample->j;
+		wind->k += sample->k;
+	}
+#else
 	long axes_remaining = 3;
 
 	*wind = *global_zero_vector3d;
@@ -173,6 +219,7 @@ static void wind_variance_get(
 		axis_index++;
 	}
 	while (--axes_remaining);
+#endif
 
 	wind->i *= magnitude;
 	wind->j *= magnitude;
@@ -284,6 +331,10 @@ void scenario_get_current_from_weather_palette(
 		state = &wind_globals.wind_states[weather_palette_index];
 		if (state->valid)
 		{
+#ifdef HALO_PS3
+			/* port: the entry's wind definition kept for the tick (wind_definition_lookup) */
+			struct wind_definition *definition = wind_definition_lookup(weather_palette_index);
+#else
 			struct structure_weather_palette_entry *weather_palette =
 				TAG_BLOCK_GET_ELEMENT(
 					&global_structure_bsp_get()->weather_palette,
@@ -291,6 +342,7 @@ void scenario_get_current_from_weather_palette(
 					struct structure_weather_palette_entry);
 			struct wind_definition *definition =
 				wind_definition_get(weather_palette->wind.index);
+#endif
 			real local_variation_weight =
 				TEST_FLAG(flags, _scenario_current_simple_bit)
 					? 0.f
@@ -341,6 +393,9 @@ void wind_initialize_for_new_map(
 	memset(&wind_globals, 0, sizeof(wind_globals));
 	wind_globals.initialized = TRUE;
 	wind_variance_initialize();
+#ifdef HALO_PS3
+	wind_lookups.valid = FALSE; /* port: (wind_lookups_refresh) */
+#endif
 
 	return;
 }
@@ -353,7 +408,35 @@ boolean scenario_get_current(
 {
 	boolean in_water = FALSE;
 	short weather_palette_index = NONE;
+#ifdef HALO_PS3
+	struct wind_cluster_lookup const *lookup =
+		location->cluster_index != NONE ? wind_cluster_lookup(location->cluster_index) : NULL;
 
+	/* port: the cluster's lookups kept for the tick (wind_cluster_lookup), the fog plane's test made at each call;
+	the same answer as below */
+	if (lookup)
+	{
+		weather_palette_index = lookup->weather_palette_index;
+		if (lookup->region_weather_palette_index != NONE &&
+			(TEST_FLAG(flags, _scenario_current_force_water_bit) || !position || !lookup->plane ||
+				plane3d_distance_to_point(lookup->plane, position) + lookup->plane_distance < 0.0f))
+		{
+			if (lookup->region_water)
+			{
+				if (!TEST_FLAG(flags, _scenario_current_force_no_water_bit))
+				{
+					weather_palette_index = lookup->region_weather_palette_index;
+					in_water = TRUE;
+				}
+			}
+			else if (!TEST_FLAG(flags, _scenario_current_force_water_bit))
+			{
+				weather_palette_index = lookup->region_weather_palette_index;
+			}
+		}
+	}
+	else
+#endif
 	if (location->cluster_index != NONE)
 	{
 		struct structure_bsp *structure_bsp = global_structure_bsp_get();
@@ -491,3 +574,150 @@ static void wind_variance_initialize(
 
 	return;
 }
+
+#ifdef HALO_PS3
+/* port: wind_globals.time as a real, converted once a tick: on the PPE the conversion stores and reads back (the
+same value as each call's) */
+static real wind_real_time(
+	void)
+{
+	if (wind_lookups.real_time_source != wind_globals.time)
+	{
+		wind_lookups.real_time_source = wind_globals.time;
+		wind_lookups.real_time = (real)wind_globals.time;
+	}
+
+	return wind_lookups.real_time;
+}
+
+/* port: the lookups hold for one tick (wind_update's time), one structure bsp and one map (wind_dispose_from_old_map,
+wind_initialize_for_new_map); a lookup reads only the map's tag data and the wind's states, which change only so */
+static void wind_lookups_refresh(
+	struct structure_bsp *structure_bsp)
+{
+	if (!wind_lookups.valid || wind_lookups.time != wind_globals.time ||
+		wind_lookups.structure_bsp != structure_bsp || wind_lookups.structure_bsp_index != global_structure_bsp_index)
+	{
+		short index;
+
+		for (index = 0; index < NUMBEROF(wind_lookups.clusters); index++)
+			wind_lookups.clusters[index].cluster_index = NONE;
+		for (index = 0; index < NUMBEROF(wind_lookups.definitions); index++)
+			wind_lookups.definitions[index] = NULL;
+		wind_lookups.valid = TRUE;
+		wind_lookups.time = wind_globals.time;
+		wind_lookups.structure_bsp = structure_bsp;
+		wind_lookups.structure_bsp_index = global_structure_bsp_index;
+	}
+
+	return;
+}
+
+/* port: scenario_get_current's lookups for a cluster the structure bsp has (else NULL: the code as it was, which
+reports the bad index), made once a tick; the fog region as scenario_get_fog_region_index gives it with no point */
+static struct wind_cluster_lookup const *wind_cluster_lookup(
+	short cluster_index)
+{
+	struct structure_bsp *structure_bsp = global_structure_bsp_get();
+	struct wind_cluster_lookup *lookup;
+
+	if (cluster_index < 0 || cluster_index >= structure_bsp->clusters.count || !structure_bsp->clusters.address)
+		return NULL;
+
+	wind_lookups_refresh(structure_bsp);
+	lookup = &wind_lookups.clusters[cluster_index & (NUMBEROF(wind_lookups.clusters) - 1)];
+	if (lookup->cluster_index != cluster_index)
+	{
+		struct structure_cluster *cluster = TAG_BLOCK_GET_ELEMENT(
+			&structure_bsp->clusters,
+			cluster_index,
+			struct structure_cluster);
+		struct location location;
+		short fog_region_index;
+
+		location.leaf_index = NONE;
+		location.cluster_index = cluster_index;
+		lookup->cluster_index = cluster_index;
+		lookup->weather_palette_index = cluster->weather_palette_index;
+		lookup->region_weather_palette_index = NONE;
+		lookup->region_water = FALSE;
+		lookup->plane = NULL;
+		lookup->plane_distance = 0.0f;
+		fog_region_index = scenario_get_fog_region_index(&location, NULL);
+		if (fog_region_index != NONE)
+		{
+			struct structure_fog_region *fog_region = TAG_BLOCK_GET_ELEMENT(
+				&structure_bsp->fog_regions,
+				fog_region_index,
+				struct structure_fog_region);
+
+			if (VALID_INDEX(fog_region->fog_palette_index, structure_bsp->fog_palette.count) &&
+				fog_region->weather_palette_index != NONE)
+			{
+				struct structure_fog_palette_entry *fog_palette = TAG_BLOCK_GET_ELEMENT(
+					&structure_bsp->fog_palette,
+					fog_region->fog_palette_index,
+					struct structure_fog_palette_entry);
+
+				if (fog_palette->fog.index != NONE)
+				{
+					lookup->region_weather_palette_index = fog_region->weather_palette_index;
+					lookup->region_water = TEST_FLAG(fog_definition_get(fog_palette->fog.index)->flags, 0);
+				}
+			}
+
+			/* a fog plane's region holds only below the plane, raised by its water's distance */
+			if (TEST_FLAG((word)cluster->fog_reference, 15))
+			{
+				struct structure_fog_plane *fog_plane = TAG_BLOCK_GET_ELEMENT(
+					&structure_bsp->fog_planes,
+					cluster->fog_reference & SHORT_MAX,
+					struct structure_fog_plane);
+				long fog_index = scenario_fog_region_get_fog_index(fog_plane->region_index);
+
+				lookup->plane = &fog_plane->plane;
+				if (fog_index != NONE)
+				{
+					struct fog_definition *fog = fog_definition_get(fog_index);
+
+					if (TEST_FLAG(fog->flags, 0))
+						lookup->plane_distance = fog->plane_distance;
+				}
+			}
+		}
+	}
+
+	return lookup;
+}
+
+/* port: a weather palette entry's wind definition, looked up once a tick when the structure bsp has the entry; else
+as scenario_get_current_from_weather_palette did, at each call */
+static struct wind_definition *wind_definition_lookup(
+	short weather_palette_index)
+{
+	struct structure_bsp *structure_bsp = global_structure_bsp_get();
+	struct wind_definition *definition;
+
+	if (weather_palette_index < 0 || weather_palette_index >= structure_bsp->weather_palette.count ||
+		!structure_bsp->weather_palette.address || weather_palette_index >= NUMBEROF(wind_lookups.definitions))
+	{
+		return wind_definition_get(TAG_BLOCK_GET_ELEMENT(
+			&structure_bsp->weather_palette,
+			weather_palette_index,
+			struct structure_weather_palette_entry)->wind.index);
+	}
+
+	wind_lookups_refresh(structure_bsp);
+	definition = wind_lookups.definitions[weather_palette_index];
+	if (!definition)
+	{
+		definition = wind_definition_get(TAG_BLOCK_GET_ELEMENT(
+			&structure_bsp->weather_palette,
+			weather_palette_index,
+			struct structure_weather_palette_entry)->wind.index);
+		wind_lookups.definitions[weather_palette_index] = definition;
+	}
+
+	return definition;
+}
+#endif
