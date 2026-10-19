@@ -1,61 +1,5 @@
-/*
-RENDER.C
-
-symbols in this file:
-001743B0 0020:
-	_render_effects (0000)
-001743D0 0010:
-	_render_initialize (0000)
-001743E0 0010:
-	_render_initialize_for_new_map (0000)
-001743F0 0010:
-	_render_dispose_from_old_map (0000)
-00174400 0010:
-	_render_dispose (0000)
-00174410 0110:
-	_render_nonplayer_frame (0000)
-00174520 00f0:
-	_render_frame_pregame (0000)
-00174610 0020:
-	_render_frame_present (0000)
-00174630 0070:
-	_render_location_visible (0000)
-001746A0 0050:
-	_rendered_cluster_get (0000)
-001746F0 03f0:
-	_render_window (0000)
-00174AE0 03f0:
-	_render_player_frame (0000)
-00174ED0 00f0:
-	_render_frame (0000)
-0029F44C 001f:
-	??_C@_0BP@JNDFGHKA@c?3?2halo?2SOURCE?2render?2render?4c?$AA@ (0000)
-0029F470 0061:
-	??_C@_0GB@NHJDHKGO@location?9?$DOcluster_index?$DO?$DN0?5?$CG?$CG?5lo@ (0000)
-0029F4D8 0052:
-	??_C@_0FC@DLFICDJP@rendered_cluster_index?$DO?$DN0?5?$CG?$CG?5ren@ (0000)
-0029F530 0052:
-	??_C@_0FC@NBMIPGBN@window?9?$DOrender_camera?4viewport_b@ (0000)
-0029F588 0051:
-	??_C@_0FB@IDPOBHAJ@window?9?$DOrender_camera?4viewport_b@ (0000)
-0029F5DC 002c:
-	??_C@_0CM@LKHLGDKF@window?9?$DOrender_camera?4viewport_b@ (0000)
-0029F608 002c:
-	??_C@_0CM@HBCHLAAA@window?9?$DOrender_camera?4viewport_b@ (0000)
-0029F638 006d:
-	??_C@_0GN@PKELCNNH@?$CBmemcmp?$CI?$CGwindow?9?$DOrender_camera?4w@ (0000)
-0029F6A8 0071:
-	??_C@_0HB@BCLIBPGM@?$CBmemcmp?$CI?$CGwindow?9?$DOrender_camera?4v@ (0000)
-0029F720 0048:
-	??_C@_0EI@NGOLLMDP@?$CD?$CD?$CD?5ERROR?5something?5is?5wrong?5wit@ (0000)
-0030D4D2 0004:
-	_render_contrails_enabled (0000)
-	_render_particles_enabled (0001)
-	_render_particle_systems_enabled (0002)
-	_render_weather_particle_systems_enabled (0003)
-004B8B22 0001:
-	_render_invalid_fog_warning_displayed (0000)
-*/
+/* RENDER.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/render/render.c. */
 
 /* ---------- headers */
 
@@ -312,9 +256,21 @@ static uint64_t ps3_timer_window;
 #define PS3_TIMER_WINDOW_BEGIN() (ps3_timer_window = ps3_timers_rsx_wait(_ps3_timer_rsx_before))
 #define PS3_TIMER_SPLIT(timer) \
 	((void)ps3_timer_add((timer), ps3_timer_window), ps3_timer_window = ps3_timers_rsx_wait(timer))
+/* port: a part of a split, timed on the CPU alone (the RSX's stamp stays the split's) */
+#define PS3_TIMER_PART(timer) ((void)(ps3_timer_window = ps3_timer_add((timer), ps3_timer_window)))
+/* port: the interface pass's share of the game thread's Direct3D draws and constants (d3d8_rsx.c's frame timers) */
+static uint64_t ps3_interface_draws, ps3_interface_constants;
+#define PS3_TIMER_INTERFACE_BEGIN() ((void)(ps3_interface_draws = ps3_timers[_ps3_timer_front_draws], \
+	ps3_interface_constants = ps3_timers[_ps3_timer_front_constants]))
+#define PS3_TIMER_INTERFACE_END() \
+	((void)(ps3_timers[_ps3_timer_interface_draws] += ps3_timers[_ps3_timer_front_draws] - ps3_interface_draws, \
+	ps3_timers[_ps3_timer_interface_constants] += ps3_timers[_ps3_timer_front_constants] - ps3_interface_constants))
 #else
 #define PS3_TIMER_WINDOW_BEGIN() ((void)0)
 #define PS3_TIMER_SPLIT(timer) ((void)0)
+#define PS3_TIMER_PART(timer) ((void)0)
+#define PS3_TIMER_INTERFACE_BEGIN() ((void)0)
+#define PS3_TIMER_INTERFACE_END() ((void)0)
 #endif
 
 static void render_window(
@@ -353,8 +309,11 @@ static void render_window(
 	{
 		build_sprite_prepare_for_window();
 		render_sky();
+		PS3_TIMER_PART(_ps3_timer_render_sky);
 		first_person_weapon_render_update();
+		PS3_TIMER_PART(_ps3_timer_render_first_person);
 		lights_preprocess_scene();
+		PS3_TIMER_PART(_ps3_timer_render_lights);
 		render_objects();
 		PS3_TIMER_SPLIT(_ps3_timer_window_objects);
 		structure_render_preprocess();
@@ -414,10 +373,14 @@ static void render_window(
 		PS3_TIMER_SPLIT(_ps3_timer_window_specular);
 		game_engine_post_rasterize_objects();
 		weather_particle_systems_render();
+		PS3_TIMER_PART(_ps3_timer_effects_weather);
 		render_particles();
 		particle_systems_render();
+		PS3_TIMER_PART(_ps3_timer_effects_particles);
 		render_contrails_normal();
+		PS3_TIMER_PART(_ps3_timer_effects_contrails);
 		rasterizer_transparent_geometry_draw(TRUE);
+		PS3_TIMER_PART(_ps3_timer_effects_transparent);
 
 		rasterizer_decals_begin(_decal_layer_water);
 		for (rendered_cluster_index = 0;
@@ -427,11 +390,15 @@ static void render_window(
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
 		}
 		rasterizer_decals_end();
+		PS3_TIMER_PART(_ps3_timer_effects_decals);
 
 		structure_render_detail_objects();
+		PS3_TIMER_PART(_ps3_timer_effects_detail);
 		rasterizer_transparent_geometry_draw(FALSE);
 		rasterizer_transparent_geometry_stop();
+		PS3_TIMER_PART(_ps3_timer_effects_transparent);
 		PS3_TIMER_SPLIT(_ps3_timer_window_effects);
+		PS3_TIMER_INTERFACE_BEGIN();
 		structure_render_fog_screen();
 		rasterizer_lens_flares_draw();
 		/* port: the 3D view antialiased (display.anti_aliasing), before the
@@ -444,11 +411,16 @@ static void render_window(
 				rasterizer_camera->viewport_bounds.x1,
 				rasterizer_camera->viewport_bounds.y1);
 		}
+		PS3_TIMER_PART(_ps3_timer_hud_fog_flares);
 		interface_draw_screen();
+		PS3_TIMER_PART(_ps3_timer_hud_screen);
 		rasterizer_screen_flash();
+		PS3_TIMER_PART(_ps3_timer_hud_flash);
 		halo_screen_ui_offset(TRUE);
 		render_ui_widgets(local_player_index, &rasterizer_camera->viewport_bounds);
 		halo_screen_ui_offset(FALSE);
+		PS3_TIMER_PART(_ps3_timer_hud_widgets);
+		PS3_TIMER_INTERFACE_END();
 		PS3_TIMER_SPLIT(_ps3_timer_window_interface);
 	}
 

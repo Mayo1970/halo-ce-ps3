@@ -313,6 +313,8 @@ volatile unsigned long ps3_main_loop_count = 0;
 #define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
 /* port: the timer build's spans (port/ps3/include/ps3_timers.h) */
 static uint64_t ps3_timer_loop, ps3_timer_sound;
+/* port: the frames drawn since the sound's last update (main_game_render) */
+static long ps3_frames_without_sound = 0;
 #define PS3_TIMER_BEGIN(span) ((span) = ps3_timer_now())
 #define PS3_TIMER_END(timer, span) ((void)ps3_timer_add((timer), (span)))
 #else
@@ -2925,7 +2927,17 @@ static void main_game_render(
 	collision_log_continue_period(TRUE);
 	PS3_MAIN_STEP(501);
 	PS3_TIMER_BEGIN(ps3_timer_sound);
+#ifdef HALO_PS3
+	/* port: with the frames between ticks, the sound at the ticks' rate, as on the Xbox (a frame a tick);
+	every second frame while no tick runs (paused) */
+	if (!halo_interpolation_enabled() || game_time_get_elapsed() > 0 || ++ps3_frames_without_sound >= 2)
+	{
+		ps3_frames_without_sound = 0;
+		sound_render();
+	}
+#else
 	sound_render();
+#endif
 	PS3_TIMER_END(_ps3_timer_sound, ps3_timer_sound);
 	PS3_MAIN_STEP(502);
 	force_single_screen = game_engine_force_single_screen();

@@ -1,93 +1,5 @@
-/*
-MOTION_SENSOR.C
-
-symbols in this file:
-000CA160 00b0:
-	_tiny_point2d_set (0000)
-000CA210 0050:
-	_tiny_point2d_get (0000)
-000CA260 0160:
-	_blip_type_get (0000)
-000CA3C0 0060:
-	_motion_sensor_blip_set_type_and_size (0000)
-000CA420 0010:
-	_blip_size_get (0000)
-000CA430 0040:
-	_get_motion_sensor_data (0000)
-000CA470 0050:
-	_motion_sensor_initialize (0000)
-000CA4C0 0010:
-	_motion_sensor_dispose (0000)
-000CA4D0 0060:
-	_motion_sensor_initialize_for_new_map (0000)
-000CA530 0010:
-	_motion_sensor_dispose_from_old_map (0000)
-000CA540 0020:
-	_should_track_object (0000)
-000CA560 0070:
-	_blip_begin (0000)
-000CA5D0 00e0:
-	_should_draw_object (0000)
-000CA6B0 0190:
-	_render_blip (0000)
-000CA840 0490:
-	_motion_sensor_update (0000)
-000CACD0 0360:
-	_update_motion_sensor (0000)
-000CB030 0300:
-	_render_motion_sensor (0000)
-000CB330 0050:
-	_motion_sensor_draw_screen (0000)
-000CB380 0070:
-	_motion_sensor_tick (0000)
-002703E0 0054:
-	_blip_colors (0000)
-00270434 003e:
-	??_C@_0DO@GOKNGPMD@fabs?$CIposition?9?$DOy?$CJ?5?$DM?5hud_globals?9@ (0000)
-00270474 003e:
-	??_C@_0DO@HNEGEKG@fabs?$CIposition?9?$DOx?$CJ?5?$DM?5hud_globals?9@ (0000)
-002704B4 0029:
-	??_C@_0CJ@LFAICIPE@c?3?2halo?2SOURCE?2interface?2motion_@ (0000)
-002704E0 0004:
-	__real@3c010204 (0000)
-002704E4 000b:
-	??_C@_0L@KEKONIMN@c_dropship?$AA@ (0000)
-002704F0 0016:
-	??_C@_0BG@PHBPOBKD@motion_sensor_globals?$AA@ (0000)
-00270508 0016:
-	??_C@_0BG@KNHDKBCC@motion?5sensor?5?$CIradar?$CJ?$AA@ (0000)
-00270520 000c:
-	??_C@_0M@EFNLDGJP@sensor?5data?$AA@ (0000)
-0027052C 000a:
-	??_C@_09KJONPCOF@reference?$AA@ (0000)
-00270538 0008:
-	__real@3fd5555555555555 (0000)
-00270540 0004:
-	__real@3dd6774d (0000)
-00270544 0004:
-	__real@3c800000 (0000)
-00270548 001d:
-	??_C@_0BN@LEDPOOMI@_blip_type_none?5?$CB?$DN?5blip_type?$AA@ (0000)
-00270568 001c:
-	??_C@_0BM@FMFNPKOG@blip_index?$DMMAX_CUSTOM_BLIPS?$AA@ (0000)
-00270588 0008:
-	__real@401c000000000000 (0000)
-00270590 0008:
-	__real@400c000000000000 (0000)
-00270598 0003:
-	??_C@_02BPBMPCEP@pt?$AA@ (0000)
-0027059C 0004:
-	__real@40026666 (0000)
-002705A0 0008:
-	__real@4000ccccc0000000 (0000)
-002E4C6C 0018:
-	_scale (0000)
-00453AC8 000d:
-	_next_vertex_index (0000)
-	_motion_sensor_globals (0004)
-	_sweep_theta (0008)
-	_debug_motion_sensor_draw_all_units (000c)
-*/
+/* MOTION_SENSOR.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/interface/motion_sensor.c. */
 
 /* ---------- headers */
 
@@ -329,12 +241,8 @@ static void motion_sensor_update(
 	}
 	else
 	{
-		/* port: each local player's blip count, by local player, and the
-		local players in scan order, as two arrays of four. The Xbox's kept
-		both in one array of four (the counts first, the order from 2) and
-		had two camera positions, all it needed for its two player co-op;
-		three or four local players (split screen) wrote past both and into
-		stack_buffer ("corrupt stack at 0") */
+		/* port: the blip counts and the scan order of the local players in two arrays of four: the Xbox's one array
+		(counts first, order from 2) served two players; three or four wrote into stack_buffer ("corrupt stack at 0") */
 		short blip_counts[MAXIMUM_LOCAL_PLAYERS] = { 0 };
 		short scan_players[MAXIMUM_LOCAL_PLAYERS];
 		short player_count = local_player_count();
@@ -433,11 +341,8 @@ static void motion_sensor_update(
 								center.z -
 								camera_positions[scan_player_index].z;
 
-							/* test the range before taking a blip slot in multiplayer
-							too: with the native builds' larger sessions, units out of
-							range would otherwise fill the slots (update_motion_sensor
-							only drops them later) and crowd nearby ones out. Like that
-							test, the multiplayer range ignores height. */
+							/* test the range before taking a blip slot in multiplayer too: in larger sessions far units would
+							fill the slots (update_motion_sensor drops them later) and crowd near ones out; height ignored */
 							if (game_engine_running())
 								displacement.k = 0.0f;
 
@@ -764,11 +669,26 @@ stack_buffer_checked_render_motion_sensor:
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans of the motion sensor's draw (port/ps3/include/ps3_timers.h) */
+#define PS3_SENSOR_SPAN(span) ((void)((span) = ps3_timer_now()))
+#define PS3_SENSOR_ADD(timer, span) ((void)((span) = ps3_timer_add((timer), (span))))
+#else
+#define PS3_SENSOR_SPAN(span) ((void)0)
+#define PS3_SENSOR_ADD(timer, span) ((void)0)
+#endif
+
 void motion_sensor_draw_screen(
 	short local_player_index,
 	boolean in_multiplayer,
 	point2d const *pt)
 {
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
+
 	match_assert(
 		"c:\\halo\\SOURCE\\interface\\motion_sensor.c",
 		476,
@@ -776,8 +696,11 @@ void motion_sensor_draw_screen(
 
 	if (local_player_index != NONE)
 	{
+		PS3_SENSOR_SPAN(ps3_span);
 		update_motion_sensor(local_player_index);
+		PS3_SENSOR_ADD(_ps3_timer_hud_sensor_update, ps3_span);
 		render_motion_sensor(local_player_index, in_multiplayer, pt);
+		PS3_SENSOR_ADD(_ps3_timer_hud_sensor_render, ps3_span);
 	}
 
 	return;
@@ -801,9 +724,8 @@ void motion_sensor_tick(
 		sweep_theta = 0.4f;
 	}
 
-	/* The HUD is drawn once a frame, several frames per tick
-	(port/linux/game/render_interpolation.c), and each update moves the
-	blip history on a step: update once a tick, as on the Xbox. */
+	/* The HUD is drawn several frames a tick (port/linux/game/render_interpolation.c), and each update moves the
+	blip history a step: update once a tick, as on the Xbox. */
 	if (motion_sensor_globals->last_update_time != game_time_get())
 	motion_sensor_update();
 
@@ -984,10 +906,8 @@ static boolean should_track_object(
 	return result;
 }
 
-/* January's only caller (render_motion_sensor) pushes a zero dword for the
- * second parameter and this body never reads it; its original name and
- * type are not recoverable (a long 0 and a real 0.0f emit identical bytes).
- * The parameter name is provisional and describes that evidence. */
+/* January's only caller (render_motion_sensor) pushes a zero dword for the unread second parameter: its name and
+type are not recoverable (a long 0 and a real 0.0f are the same bytes); the name here is provisional. */
 static void blip_begin(
 	real_point2d const *reference,
 	long unused,

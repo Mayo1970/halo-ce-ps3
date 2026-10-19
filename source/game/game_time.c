@@ -93,6 +93,18 @@ enum
 
 /* ---------- macros */
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans of a tick's interpolation and netcode steps (port/ps3/include/ps3_timers.h) */
+static uint64_t ps3_timer_step;
+#define PS3_STEP_BEGIN() (ps3_timer_step = ps3_timer_now())
+#define PS3_STEP_END(timer) ((void)ps3_timer_add((timer), ps3_timer_step))
+#else
+#define PS3_STEP_BEGIN() ((void)0)
+#define PS3_STEP_END(timer) ((void)0)
+#endif
+
 /* ---------- structures */
 
 struct game_time_globals_struct
@@ -479,11 +491,15 @@ void game_time_update(
 					for (update_index = 0; update_index < server_updates; update_index++)
 					{
 						game_tick();
+						PS3_STEP_BEGIN();
 						profile_scope(game_time_render_interpolation_tick_section, render_interpolation_tick();)
+						PS3_STEP_END(_ps3_timer_tick_interpolation);
 						game_time_globals->server_time++;
 						game_time_globals->local_time++;
 						/* the distributed netcode's per-tick state */
+						PS3_STEP_BEGIN();
 						profile_scope(game_time_network_distributed_tick_section, network_distributed_tick();)
+						PS3_STEP_END(_ps3_timer_tick_network);
 					}
 				}
 

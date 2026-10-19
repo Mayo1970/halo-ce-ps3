@@ -20,6 +20,11 @@ void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t h
 void ps3_gpu_wait_idle(void);
 /* the display's size, and whether it is 16:9 */
 void ps3_gpu_display(uint32_t *width, uint32_t *height, int *widescreen);
+/* the RSX's time at this split of the frame, without a stall: a timestamp report, read two frames on */
+void ps3_gpu_timestamp(int part);
+/* the thread that draws ends at stop_drawing (the process ends, or the display thread takes the RSX back) */
+void ps3_gpu_set_stop_hook(void (*hook)(void));
+void ps3_gpu_stop_drawing(void);
 
 /* ---------- memory */
 

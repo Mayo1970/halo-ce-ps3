@@ -196,6 +196,21 @@ void network_actors_drive(void);
 
 /* ---------- macros */
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's splits of a tick and of a frame's game part (port/ps3/include/ps3_timers.h) */
+static uint64_t ps3_timer_game;
+#define PS3_GAME_BEGIN() (ps3_timer_game = ps3_timer_now())
+#define PS3_GAME_SPLIT(timer) (ps3_timer_game = ps3_timer_add((timer), ps3_timer_game))
+/* port: the time and the frames since the game's sounds last updated (game_frame) */
+static real ps3_game_sound_dt = 0.f;
+static long ps3_frames_without_game_sound = 0;
+#else
+#define PS3_GAME_BEGIN() ((void)0)
+#define PS3_GAME_SPLIT(timer) ((void)0)
+#endif
+
 /* ---------- structures */
 
 struct game_options
@@ -333,6 +348,7 @@ void game_tick(
 	real seconds_per_tick;
 
 	profile_tick_start();
+	PS3_GAME_BEGIN();
 	collision_log_begin_period(0);
 	real_math_reset_precision();
 	profile_enter(game_update_section);
@@ -354,7 +370,9 @@ void game_tick(
 	profile_scope(game_tick_cheats_enforce_section, cheats_network_client_enforce();)
 	profile_scope(game_tick_remove_quitting_players_section, remove_quitting_players_from_game();)
 	profile_scope(game_tick_allegiance_section, game_allegiance_update();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_other);
 	profile_scope(game_tick_units_section, units_update();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_units);
 	/* (the host's actors drive the host's units, which a client of the
 	distributed netcode has from the host: its own would fight the host's
 	positions, and could place objects of their own) */
@@ -362,12 +380,15 @@ void game_tick(
 		profile_scope(game_tick_ai_section, ai_update();)
 	else
 		profile_scope(game_tick_actors_drive_section, network_actors_drive();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_ai);
 	profile_scope(game_tick_players_before_section, players_update_before_game();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_players);
 
 	seconds_per_tick = game_globals->players_are_double_speed
 		? 1.0f / (2 * TICKS_PER_SECOND)
 		: 1.0f / TICKS_PER_SECOND;
 	profile_scope(game_tick_effects_section, effects_update(seconds_per_tick);)
+	PS3_GAME_SPLIT(_ps3_timer_tick_effects);
 	/* An antenna's chain is a simulation of the Xbox's own step, an update a
 	tick: stepped a frame at a time, its springs, its carry and its points'
 	physics act against the frames' own movement of it, and a vehicle at
@@ -379,24 +400,32 @@ void game_tick(
 		rumble_update();
 		first_person_weapons_update();
 		unlock_global_random_seed();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_first_person);
 	profile_scope(game_tick_game_engine_section, game_engine_update();)
 	profile_scope(game_tick_editor_section, editor_update();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_other);
 	/* port: in network co-op only the host runs the scripts. A client running
 	them would place the map's actors and objects a second time and make
 	decisions that belong to the host. */
 	if (!(network_game_distributed_client() && network_coop_active()))
 		profile_scope(game_tick_hs_section, hs_update();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_scripts);
 	profile_scope(game_tick_recorded_animations_section, recorded_animations_update();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_other);
 	profile_scope(game_tick_objects_section, objects_update();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_objects);
 	profile_scope(game_tick_players_after_section, players_update_after_game();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_players);
 	profile_scope(game_tick_hud_section, hud_update();)
 	profile_scope(game_tick_player_effect_section, player_effect_update();)
+	PS3_GAME_SPLIT(_ps3_timer_tick_hud);
 	/* port: and at its end, before the frame draws the lights */
 	game_state_check_data_arrays();
 	lights_port_recover();
 
 	profile_exit(game_update_section);
 	collision_log_end_period();
+	PS3_GAME_SPLIT(_ps3_timer_tick_other);
 	profile_tick_end();
 
 	return;
@@ -962,14 +991,31 @@ void game_frame(
 		game_globals->active);
 
 	collision_log_begin_period(1);
+	PS3_GAME_BEGIN();
 	particles_update(frame_dt);
 	contrails_update(frame_dt);
 	particle_systems_update(frame_dt);
+	PS3_GAME_SPLIT(_ps3_timer_frame_particles);
 	widgets_update(frame_dt);
+	PS3_GAME_SPLIT(_ps3_timer_frame_widgets);
+#ifdef HALO_PS3
+	/* port: with the frames between ticks, the game's sounds at the ticks' rate, as main.c's sound_render (as on the
+	Xbox, a frame a tick); every second frame while no tick runs */
+	ps3_game_sound_dt += frame_dt;
+	if (!halo_interpolation_enabled() || game_time_get_elapsed() > 0 || ++ps3_frames_without_game_sound >= 2)
+	{
+		game_sound_update(ps3_game_sound_dt);
+		ps3_game_sound_dt = 0.f;
+		ps3_frames_without_game_sound = 0;
+	}
+#else
 	game_sound_update(frame_dt);
+#endif
+	PS3_GAME_SPLIT(_ps3_timer_frame_sound);
 	scenario_frame_update(frame_dt);
 	rasterizer_frame_update(frame_dt);
 	numeric_countdown_timer_update();
+	PS3_GAME_SPLIT(_ps3_timer_frame_other);
 	collision_log_end_period();
 
 	return;

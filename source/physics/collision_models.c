@@ -1,6 +1,4 @@
-/*
-COLLISION_MODELS.C
-*/
+/* COLLISION_MODELS.C */
 
 /* ---------- headers */
 
@@ -57,9 +55,8 @@ boolean collision_model_instance_new(
 		instance->region_permutation_indices = object->object.region_permutations;
 		instance->matrices = object_get_node_matrices(object_index);
 
-		/* port: a collision model (from the map) with more nodes than its
-		object has node matrices (its model's nodes: the retail collision
-		models have no more) tests only those the object has */
+		/* port: a collision model (from the map) with more nodes than its object has node matrices (its
+		model's nodes: the retail collision models have no more) tests only those the object has */
 		node_count = object->object.node_matrices.size / (long)sizeof(real_matrix4x3);
 		if (instance->model->nodes.count > node_count)
 		{
@@ -133,6 +130,7 @@ boolean collision_model_test_point(
 	short perm;
 	real_point3d transformed_point;
 
+	PS3_COLLISION_BEGIN();
 	/* port: (instance->node_count, collision_node_region_valid) */
 	for (i = 0; i < instance->node_count; i++)
 	{
@@ -154,6 +152,7 @@ boolean collision_model_test_point(
 
 					if (bsp3d_test_point(&collision_bsp->bsp3d, 0, &transformed_point) == NONE)
 					{
+						PS3_COLLISION_END(_ps3_collision_point);
 						return TRUE;
 					}
 				}
@@ -161,6 +160,7 @@ boolean collision_model_test_point(
 		}
 	}
 
+	PS3_COLLISION_END(_ps3_collision_point);
 	return FALSE;
 }
 
@@ -243,6 +243,7 @@ boolean collision_model_test_pill(
 	boolean return_val;
 	real scaled_radius;
 
+	PS3_COLLISION_BEGIN();
 	result->bsp_result.t = FLT_MAX;
 
 	return_val = FALSE;
@@ -289,6 +290,7 @@ boolean collision_model_test_pill(
 		}
 	}
 
+	PS3_COLLISION_END(_ps3_collision_pill);
 	return return_val;
 }
 
@@ -397,9 +399,8 @@ void render_debug_collision_model(
 
 /* ---------- private code */
 
-/* port: whether a collision node is tested: one of no region (NONE) is
-not, as before, nor is one whose region (from the map) is none of an
-object's MAXIMUM_REGIONS_PER_OBJECT (the retail ones are at most 4) */
+/* port: whether a collision node is tested: not one of no region (NONE), as before, nor one whose region
+(from the map) is none of an object's MAXIMUM_REGIONS_PER_OBJECT (the retail ones are at most 4) */
 static boolean collision_node_region_valid(
 	struct collision_node const *collision_node)
 {

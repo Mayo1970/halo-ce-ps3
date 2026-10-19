@@ -77,6 +77,17 @@ enum
 #define object_render_state_get(index) \
 	((struct object_render_state *)datum_get(cached_object_render_states, (index)))
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans in render_objects (port/ps3/include/ps3_timers.h) */
+#define PS3_RENDER_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_RENDER_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#else
+#define PS3_RENDER_SPAN(span) ((void)0)
+#define PS3_RENDER_ADD(timer, span) ((void)0)
+#endif
+
 /* ---------- structures */
 
 struct object_render_data
@@ -262,11 +273,16 @@ void render_objects(
 {
 	struct object_render_data data;
 	boolean first_person_pass = FALSE;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	profile_enter(render_objects_section);
 
+	PS3_RENDER_SPAN(ps3_span);
 	rasterizer_models_begin(FALSE);
 	find_rendered_objects();
+	PS3_RENDER_ADD(_ps3_timer_render_find, ps3_span);
 
 	data.shadow = FALSE;
 
@@ -275,10 +291,13 @@ void render_objects(
 		if (first_person_pass != rasterizer_debug_options.draw_first_person_weapon_first)
 		{
 			first_person_weapon_draw();
+			PS3_RENDER_ADD(_ps3_timer_render_first_person_draw, ps3_span);
 		}
 		else
 		{
+			/* (render_object times its lighting and models) */
 			process_rendered_objects(&data);
+			PS3_RENDER_SPAN(ps3_span);
 		}
 
 		first_person_pass = !first_person_pass;
@@ -1093,7 +1112,11 @@ static void render_object(
 		{
 			struct object_definition *definition =
 				object_definition_get(object->definition_index);
+#ifdef HALO_PS3
+			uint64_t ps3_span;
+#endif
 
+			PS3_RENDER_SPAN(ps3_span);
 			if (needs_lighting)
 			{
 				data->lighting = object_get_cached_render_lighting(
@@ -1104,6 +1127,7 @@ static void render_object(
 			{
 				data->lighting = NULL;
 			}
+			PS3_RENDER_ADD(_ps3_timer_render_lighting, ps3_span);
 
 			if (editor_preprocess_rendered_object(data->object_index, data->lighting))
 			{
@@ -1123,6 +1147,7 @@ static void render_object(
 
 				render_object_list(data, &model_effect, data->object_index);
 			}
+			PS3_RENDER_ADD(_ps3_timer_render_models, ps3_span);
 		}
 	}
 

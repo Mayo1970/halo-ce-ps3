@@ -1,8 +1,4 @@
-/*
-COLLISION_USAGE.H
-
-header included in hcex build.
-*/
+/* COLLISION_USAGE.H: header included in hcex build. */
 
 #ifndef __COLLISION_USAGE_H
 #define __COLLISION_USAGE_H
@@ -60,9 +56,33 @@ enum
 
 /* ---------- macros */
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's collision tests (collision_usage.c): by user and kind (the outermost test), by logged
+function; the bsp nodes a test entered (collision_bsp.c), the objects a ray tested (collisions.c) */
+#define PS3_COLLISION_BEGIN() ps3_collision_begin()
+#define PS3_COLLISION_END(kind) ps3_collision_end((kind), NONE)
+#define PS3_COLLISION_NODES(function, count) ((void)(ps3_collision_nodes[(function)] += (uint32_t)(count)))
+#define PS3_COLLISION_OBJECT() ((void)ps3_collision_objects++)
+#else
+#define PS3_COLLISION_BEGIN() ((void)0)
+#define PS3_COLLISION_END(kind) ((void)0)
+#define PS3_COLLISION_NODES(function, count) ((void)0)
+#define PS3_COLLISION_OBJECT() ((void)0)
+#endif
+
 /* ---------- structures */
 
 /* ---------- prototypes/COLLISION_USAGE.C */
+
+#ifdef HALO_PS3
+void ps3_collision_begin(
+	void);
+void ps3_collision_end(
+	short kind,
+	short function);
+#endif
 
 void collision_log_initialize(
 	void);

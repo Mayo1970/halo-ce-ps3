@@ -29,7 +29,33 @@ Rules:
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done. The pads (XInput) work: hardware SUCCESS 2026-10-05 on run 1. Matt moved the sound to G6. See "G5 progress". |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7). Matt (2026-10-05): "G6. Go for the sound." The sound works: hardware SUCCESS 2026-10-05 on run 1. a10 runs at 30 frames per second (ROADMAP.md). See "G6 progress". |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress. Analysis done 2026-10-06, steps proposed: ROADMAP.md ("G7 analysis"). Step 1, the measurement build, built 2026-10-06. The save items of step 2 (the real free space, `fsync` at the close of a written file) built 2026-10-06 in the same PKG. Hardware SUCCESS 2026-10-06 (the measurement run, a30; results in ROADMAP.md, "G7 analysis"). Step 3, system link on the LAN with the PC builds (Winsock and XNet on the PSL1GHT sockets, the PC's wire order), built 2026-10-06, not tested (ROADMAP.md, "G7 analysis", "System link"). |
-| G8 60 frames per second and 720p: the frames between the 30 Hz ticks (`render_interpolation.c`), each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p | In progress. Matt (2026-10-06) added it as the last goal; 720p added 2026-10-18. Analysis done 2026-10-18; the fixes built 2026-10-19 (Matt: fixes first, then measure), with VIDEO SETTINGS (WIDESCREEN, FRAME RATE) inside SETTINGS. On hardware 2026-10-19 (after the timestamp fix): menus 60 frames per second, a30 calm 54 to 60, heavy combat 33 to 37. ROADMAP.md ("G8 analysis"). |
+| G8 60 frames per second and 720p: the frames between the 30 Hz ticks (`render_interpolation.c`), each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p | In progress. Matt (2026-10-06) added it as the last goal; 720p added 2026-10-18. Analysis done 2026-10-18; the fixes built 2026-10-19 (Matt: fixes first, then measure), with VIDEO SETTINGS (WIDESCREEN, FRAME RATE) inside SETTINGS. On hardware 2026-10-19 (after the timestamp fix): menus 60 frames per second, a30 calm 54 to 60, heavy combat 33 to 37. Step 5 (the Direct3D thread on the PPE's other hardware thread) built 2026-10-19; on hardware the same day: it runs, a30 heavy combat 38 to 47. Measurements 2026-10-19: the game thread sets the rate (the RSX about 10 ms a frame); the sound, the units' physics and the HUD timed, medians in ROADMAP.md's Log. Matt chose all three next steps (2026-10-19): the collision tests' time by user, the sound's decode on the mixer's thread with short lock holds, the screen quads' timers; run on hardware the same day: `sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame, the collision tests 3.63 / 5.89 ms a frame (the sounds' obstruction rays 1.60 / 1.94). Next steps 1 to 3 (the obstruction kept up to 4 ticks; the rays and the HUD timed inside) run on hardware the same day: the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91 ms a frame; each HUD element 40 to 140 us outside its draw. The SPEs and VMX: see below. The next step is Matt's choice of four (ROADMAP.md, "Now"). ROADMAP.md ("G8 analysis"). |
+
+## SPEs and VMX (candidates)
+
+Matt (2026-10-19): "Write the SPEs parts and the vmx inside GOALS and
+ROADMAPS in case. Those are extremely worth checking out." The details and
+the measured costs are in ROADMAP.md ("G8 analysis", "SPEs and VMX").
+
+- The rule: the simulation (the game ticks: objects, units, vehicles, AI,
+  projectiles, damage, scripts, and their collision tests) must give the
+  PC builds' floats, for network play. The sound, the drawing, the HUD,
+  the particles and contrails (visual, each frame), loads and conversions
+  are free to differ.
+- SPEs: `spu-gcc` 7.2 and PSL1GHT's SPU libraries are in the image. Their
+  single precision rounds toward zero, without denormals: not for the
+  simulation. flycastPS3 (`E:\Users\Matteo\Desktop\Dreamcast\flycastPS3`,
+  `ps3/spu/`, `ps3/ps3_spe.cpp`) has a working SPU set-up to copy.
+- VMX: every unit builds with `-mno-altivec`. Exact for the simulation only
+  with adds, subtracts and unfused multiplies (`vmaddfp` with -0.0), no
+  estimates for division or square root, and VSCR's NJ bit 0; anything
+  that only draws or plays sound can use all of it.
+- Candidates, the largest first: the DirectSound mixer on an SPE (about 9 %
+  of the PPE thread that the game and the Direct3D thread share); the
+  Direct3D thread's vertex, colour and index conversions (SPU jobs or VMX);
+  the particles (an SPU job with the collision data by DMA); exact VMX in
+  the rays' objects part, the node matrices and the BSP traversal, each
+  with a PC check bit for bit against the scalar code.
 
 ## G1 progress
 

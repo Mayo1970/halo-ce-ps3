@@ -65,6 +65,21 @@ void first_person_legs_reset(void);
 
 #define MAXIMUM_DUMPS 1024
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans in objects_update, the type updates by kind (port/ps3/include/ps3_timers.h) */
+#define PS3_OBJECTS_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_OBJECTS_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_OBJECTS_TYPE_TIMER(type) \
+	((FLAG(type) & _object_mask_unit) ? _ps3_timer_objects_units : \
+	(FLAG(type) & _object_mask_item) ? _ps3_timer_objects_items : \
+	(type) == _object_type_projectile ? _ps3_timer_objects_projectiles : _ps3_timer_objects_others)
+#else
+#define PS3_OBJECTS_SPAN(span) ((void)0)
+#define PS3_OBJECTS_ADD(timer, span) ((void)0)
+#endif
+
 /* port: the garbage collection (objects_garbage_collection). With many
 players spread over a level and many bodies (co-op's extra enemies), every
 body was in some player's view, none could go, and the whole collection
@@ -3828,6 +3843,9 @@ static boolean object_update(
 	struct object_header_datum *header = object_header_get(object_index);
 	struct object_datum *object = object_get(object_index);
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	boolean result = TRUE;
 	if (!TEST_FLAG(header->flags, _object_header_do_not_update_bit))
@@ -3847,21 +3865,27 @@ static boolean object_update(
 			}
 		}
 
+		PS3_OBJECTS_SPAN(ps3_span);
 		object_type_update(object_index);
+		PS3_OBJECTS_ADD(PS3_OBJECTS_TYPE_TIMER(object->object.type), ps3_span);
 		if (object_definition->object.collision_model.index!=NONE)
 		{
 			object_damage_update(object_index);
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_objects_damage, ps3_span);
 
 		object_type_export_function_values(object_index);
+		PS3_OBJECTS_ADD(_ps3_timer_objects_values, ps3_span);
 
 		if (!TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
 		{
 			object_compute_node_matrices(object_index);
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_objects_nodes, ps3_span);
 
 		object_compute_function_values(object_index);
 		object_compute_change_colors(object_index);
+		PS3_OBJECTS_ADD(_ps3_timer_objects_values, ps3_span);
 
 		if (
 			TEST_FLAG(object->object.flags, _object_dynamic_lighting_recompute_bit) &&
@@ -3873,6 +3897,7 @@ static boolean object_update(
 		{
 			object_connect_lights(object_index, TRUE, TRUE);
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_objects_lights, ps3_span);
 
 		// Update children (if we have any)
 		if (object->object.first_child_object_index!=NONE)
@@ -3888,7 +3913,9 @@ static boolean object_update(
 			}
 		}
 
+		PS3_OBJECTS_SPAN(ps3_span);
 		object_postprocess_node_matrices(object_index);
+		PS3_OBJECTS_ADD(_ps3_timer_objects_nodes, ps3_span);
 	}
 
 	return result;
@@ -4445,10 +4472,14 @@ void objects_update(
 	short cluster_count;
 	short i;
 	struct object_header_datum *object_header;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	boolean dont_update_object = ((game_time_get()&1)!=0) && game_players_are_double_speed();
 
 	profile_enter(section);
+	PS3_OBJECTS_SPAN(ps3_span);
 
 	object_globals->active_garbage_object_count = 0;
 	
@@ -4501,6 +4532,7 @@ void objects_update(
 			active_cluster_bits,
 			cluster_count);
 	}
+	PS3_OBJECTS_ADD(_ps3_timer_objects_activation, ps3_span);
 
 	object_header = (struct object_header_datum *)object_header_data->data;
 	for (i = 0; i<object_header_data->count; ++object_header)
@@ -4549,7 +4581,9 @@ void objects_update(
 		++i;
 	}
 
+	PS3_OBJECTS_SPAN(ps3_span);
 	objects_garbage_collection();
+	PS3_OBJECTS_ADD(_ps3_timer_objects_cleanup, ps3_span);
 
 	profile_exit(section);
 

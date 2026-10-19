@@ -367,6 +367,17 @@ enum
 #define BIPED_CLIMBING_SNAP_ANGLE ((real)(10.0*M_PI/180.0))
 #define MINIMUM_SLIPPING_FOOTSTEP_VELOCITY_SQUARED (1.f/900.f)
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans of biped_update's steps (port/ps3/include/ps3_timers.h) */
+#define PS3_BIPED_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_BIPED_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#else
+#define PS3_BIPED_SPAN(span) ((void)0)
+#define PS3_BIPED_ADD(timer, span) ((void)0)
+#endif
+
 /* ---------- structures */
 
 struct biped_contact_point
@@ -4228,11 +4239,15 @@ boolean biped_update(
 	struct biped_datum *biped = biped_get(biped_index);
 	struct biped_definition *definition = biped_definition_get(biped->definition_index);
 	struct unit_animation_update_data animation;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	if (debug_biped_skip_update)
 		return TRUE;
 
 	profile_enter(biped_update_section);
+	PS3_BIPED_SPAN(ps3_span);
 	biped_verify_object_vectors(biped_index, "pre-update");
 
 	animation.state_desired = _unit_state_idle;
@@ -4324,14 +4339,17 @@ boolean biped_update(
 			_unit_control_crouch_modifier_bit);
 
 		biped_verify_object_vectors(biped_index, "pre-turning");
+		PS3_BIPED_ADD(_ps3_timer_biped_rest, ps3_span);
 		if (!TEST_FLAG(biped->object.damage_flags, _object_dead_bit))
 		{
 			biped_update_turning(biped_index, &animation);
 			biped_verify_object_vectors(biped_index, "post-turning");
 		}
+		PS3_BIPED_ADD(_ps3_timer_biped_turning, ps3_span);
 
 		biped_update_moving(biped_index, &animation);
 		biped_verify_object_vectors(biped_index, "post-moving");
+		PS3_BIPED_ADD(_ps3_timer_biped_moving, ps3_span);
 
 		if (TEST_FLAG(biped->object.damage_flags, _object_dead_bit))
 		{
@@ -4351,6 +4369,7 @@ boolean biped_update(
 		}
 
 		biped_verify_object_vectors(biped_index, "post-dead/air/land/slip");
+		PS3_BIPED_ADD(_ps3_timer_biped_state, ps3_span);
 
 		if (!biped->biped.player_melee_ticks)
 		{
@@ -4416,9 +4435,11 @@ boolean biped_update(
 		biped_falling_danger(biped_index);
 		biped_check_discard(biped_index);
 	}
+	PS3_BIPED_ADD(_ps3_timer_biped_rest, ps3_span);
 
 	if (unit_update_animation(biped_index, &animation)==1)
 		biped_jump(biped_index);
+	PS3_BIPED_ADD(_ps3_timer_biped_animation, ps3_span);
 
 	if (TEST_FLAG(biped->object.damage_flags, _object_dead_bit) &&
 		TEST_FLAG(biped->object.flags, _object_at_rest_bit))
@@ -4431,6 +4452,7 @@ boolean biped_update(
 	}
 
 	biped_verify_object_vectors(biped_index, "post-update");
+	PS3_BIPED_ADD(_ps3_timer_biped_rest, ps3_span);
 	profile_exit(biped_update_section);
 
 	return TRUE;

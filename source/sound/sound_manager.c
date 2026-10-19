@@ -3741,17 +3741,29 @@ static void detail_sound_random_offset(
 }
 
 #ifdef HALO_PS3
+#include "ps3_timers.h"
+
 /* port: the main loop's place, for the PS3's heartbeat (main.c) */
 extern volatile long ps3_main_loop_step;
 #define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
+/* port: the timer build's spans of sound_render's steps (port/ps3/include/ps3_timers.h) */
+#define PS3_SOUND_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_SOUND_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
 #else
 #define PS3_MAIN_STEP(step)
+#define PS3_SOUND_SPAN(span) ((void)0)
+#define PS3_SOUND_ADD(timer, span) ((void)0)
 #endif
 
 void sound_render(
 	void)
 {
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
+
 	profile_enter(sound_render_section);
+	PS3_SOUND_SPAN(ps3_span);
 
 	if (sound_manager_globals.initialized && sound_manager_globals.enabled)
 	{
@@ -3780,14 +3792,19 @@ void sound_render(
 			}
 			PS3_MAIN_STEP(512);
 			refresh_listener();
+			PS3_SOUND_ADD(_ps3_timer_sound_listener, ps3_span);
 			PS3_MAIN_STEP(513);
 			process_looping_sounds();
+			PS3_SOUND_ADD(_ps3_timer_sound_looping, ps3_span);
 			PS3_MAIN_STEP(514);
 			refresh_sounds();
+			PS3_SOUND_ADD(_ps3_timer_sound_refresh, ps3_span);
 			PS3_MAIN_STEP(515);
 			prioritize_sounds();
+			PS3_SOUND_ADD(_ps3_timer_sound_prioritize, ps3_span);
 			PS3_MAIN_STEP(516);
 			update_channels();
+			PS3_SOUND_ADD(_ps3_timer_sound_channels, ps3_span);
 			PS3_MAIN_STEP(517);
 			sound_manager_globals.flip_flop = !sound_manager_globals.flip_flop;
 		}
@@ -3800,6 +3817,7 @@ void sound_render(
 	{
 		sound_cache_idle();
 	}
+	PS3_SOUND_ADD(_ps3_timer_sound_cache, ps3_span);
 	PS3_MAIN_STEP(519);
 
 	profile_exit(sound_render_section);

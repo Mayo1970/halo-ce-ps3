@@ -1102,6 +1102,14 @@ long scenario_tags_load(
 		tag_cache_base_address = physical_memory_get_tag_cache_base_address();
 		if (cache_file_header_verify(&cache_file_globals.header, scenario_name, TRUE))
 		{
+#ifdef HALO_PS3
+			/* port: the Direct3D thread's draws read the tag cache until they are done (port/ps3/xbox/d3d8_rsx.c) */
+			{
+				extern void d3d8_tag_cache_loading(void);
+
+				d3d8_tag_cache_loading();
+			}
+#endif
 			csmemset(tag_cache_base_address, 0xCD, 0x01600000);
 			cache_file_read(
 				NONE,
@@ -1256,6 +1264,14 @@ boolean scenario_structure_bsp_load(
 	}
 
 	tag_cache_base_address = physical_memory_get_tag_cache_base_address();
+#ifdef HALO_PS3
+	/* port: the Direct3D thread's draws read the tag cache until they are done (port/ps3/xbox/d3d8_rsx.c) */
+	{
+		extern void d3d8_tag_cache_loading(void);
+
+		d3d8_tag_cache_loading();
+	}
+#endif
 	if (!custom_edition_cache_tags_loaded())
 	{
 		csmemset(

@@ -1397,17 +1397,32 @@ static void temporary_hud_draw(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans of hud_draw_screen (port/ps3/include/ps3_timers.h) */
+#define PS3_HUD_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_HUD_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#else
+#define PS3_HUD_SPAN(span) ((void)0)
+#define PS3_HUD_ADD(timer, span) ((void)0)
+#endif
+
 void hud_draw_screen(
 	void)
 {
 	long player_index = local_player_get_player_index(render.local_player_index);
 	director_perspective perspective = director_get_perspective(render.local_player_index);
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	rasterizer_hud_begin();
 	if (player_index != NONE)
 	{
 		struct player_datum *player = player_get(player_index);
 
+		PS3_HUD_SPAN(ps3_span);
 		if ((!game_engine_running() || game_engine_display_team_indicators()) &&
 			!cinematic_in_progress())
 		{
@@ -1423,12 +1438,14 @@ void hud_draw_screen(
 		/* port: the network co-op vote to skip a cinematic */
 		if (cinematic_in_progress())
 			coop_skip_vote_draw(render.local_player_index);
+		PS3_HUD_ADD(_ps3_timer_hud_players, ps3_span);
 
 		if (!game_time_get_paused() &&
 			render.local_player_index == local_player_get_next(NONE))
 		{
 			motion_sensor_tick();
 		}
+		PS3_HUD_ADD(_ps3_timer_hud_motion_sensor, ps3_span);
 
 		if (hud_scripted_globals->show_hud)
 		{
@@ -1437,11 +1454,14 @@ void hud_draw_screen(
 				player->unit_index != NONE)
 			{
 				hud_render_weapon_interface(player);
+				PS3_HUD_ADD(_ps3_timer_hud_weapon, ps3_span);
 				hud_show_action_response(player_index);
 				hud_play_unit_sounds(player, hud_scripted_globals->show_hud);
 				hud_render_unit_interface(player);
+				PS3_HUD_ADD(_ps3_timer_hud_unit, ps3_span);
 				hud_render_nav_points(render.local_player_index);
 				hud_render_damage_indicators(render.local_player_index);
+				PS3_HUD_ADD(_ps3_timer_hud_navigation, ps3_span);
 			}
 			else
 			{
@@ -1453,8 +1473,10 @@ void hud_draw_screen(
 		{
 			hud_play_unit_sounds(player, FALSE);
 		}
+		PS3_HUD_ADD(_ps3_timer_hud_unit, ps3_span);
 
 		hud_messaging_update(render.local_player_index);
+		PS3_HUD_ADD(_ps3_timer_hud_messages, ps3_span);
 	}
 
 	rasterizer_hud_end();

@@ -49,8 +49,23 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
    keep the "why". When you edit a file, shorten its longer comments too.
 8. Commits and PRs: no co-author line, no AI attribution.
 
-## Now (2026-10-06)
+## Now (2026-10-19)
 
+- Handoff (2026-10-19, end of the session; Matt: "Update ROADMAP and
+  GOALS. I'll start a new session."): G8 is in progress. The last PKG is
+  11:40 in `build/ps3_g8/` (run on hardware: a clean exit, no sound
+  fault). Not committed since `efa94804` ("Widescreen + 60 FPS"): step 5
+  (the Direct3D thread), the sound off the game thread, the obstruction
+  cache of 4 ticks and all the timers (33 files in `git status`). The
+  listener on UDP 18194 is stopped. Next, Matt's choice: 1. the HUD timed
+  inside an element (`hud_draw_static_element`, `hud_draw_meter`,
+  `hud_draw_numbers`: 40 to 140 us each outside the draw); 2. the rays'
+  objects part (1.07 / 2.91 ms a frame): the objects out of a ray's way
+  passed over on a packed copy of their bounding spheres (exact, as
+  `object_bounds_cache.c`), or exact VMX; 3. the first SPE task, the
+  DirectSound mixer, on flycastPS3's SPU set-up; 4. the obscurer ray
+  (`rasterizer_models_begin`) once a tick. The SPEs and VMX: "G8 analysis"
+  ("SPEs and VMX") and GOALS.md ("SPEs and VMX (candidates)").
 - 2026-10-19: G8, the fixes (Matt: "Just go with the fixes. We'll measure
   from top-down then."; WIDESCREEN and FRAME RATE in the video settings,
   "Inside SETTINGS", defaults widescreen and 60): built, not tested. 60
@@ -68,7 +83,49 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   per second; a30 54 to 60 calm, 33 to 37 in heavy combat (game thread
   about 28 ms: ticks 11 to 16 ms each, render 15 to 20; RSX 14 to 18 ms).
   No change of WIDESCREEN or FRAME RATE in the log. Clean PKG (diagnostic
-  off) of 01:14 in `build/ps3_g8/`, not tested. Step 5 waits for Matt.
+  off) of 01:14 (committed by Matt, "Widescreen + 60 FPS"). Step 5 (Matt:
+  "Let's go with Step 5."): the Direct3D thread. Hardware: runs, a30 heavy
+  combat 38 to 47 (Matt: "The framerate still feels sluggish."). Not to
+  the SPEs or VMX (network results must match the PC's; VMX later, for
+  loops that only draw). Built, not tested (Matt: "Do the measurement.
+  Also build the audio on tick frames."): the tick's timers and the sound
+  at the ticks' rate, PKG of 02:25: tested (the tick's parts below, Log).
+  Built, not tested (Matt: "update the sound then expand the measurements
+  for the objects_update, and the render's objects and effects passes."):
+  `game_sound_update` at the ticks' rate, DirectSound's settings without
+  the mixer's lock, the timers of `objects_update` and of the two passes;
+  PKG of 02:50: tested (Log). Built, not tested (Matt: "Make the immediate
+  mode cheaper."): immediate mode keeps each vertex's written registers
+  only; PKG of 03:16: tested, the HUD's time the same (Log). Built, not
+  tested (Matt: "Prepare the measurements for 1, 2 and 3, so we can
+  investigate all 3 issues and have a median."): the timers in the sound,
+  the units' update and the interface pass; medians of the play windows
+  after the run. PKG of 03:42 in `build/ps3_g8/`: tested, medians in the
+  Log. Next: Matt's choice of three steps (Matt: "I'll get back to it
+  tomorrow morning."). See "G8 analysis" ("The measurements after step
+  5"). Matt chose all three (his answer to the choice). 1: the
+  collision tests' time by user and by kind; 2: the stream packets
+  decoded on the mixer's thread, and the mixer's lock held only to take
+  and give back a pass's packets (not for a whole chunk); 3: the screen
+  quads' parts and the interface pass's Direct3D calls. PKG of 10:59 in
+  `build/ps3_g8/`: run on hardware (Matt: "Done."), a30, no halt, a clean
+  exit, 0 silent or partial port blocks; `sound_render` 0.30 / 0.70 ms a
+  frame (before 1.10 / 2.15); the collision tests 3.63 / 5.89 ms a frame,
+  of it the sounds' obstruction rays 1.60 / 1.94; the screen quads only
+  0.36 of the HUD's 1.83 ms. Medians in the Log. No sound fault (Matt: "I
+  didn't hear any sound faults."). Next steps 1 to 3 (Matt: "Go with 1-3.
+  Be aware that we can also delegate tasks to the SPEs."). 1: a source
+  that has not moved keeps its obstruction up to 4 ticks; 2: the rays
+  timed inside (each logged collision function, the bsp nodes, the
+  objects tested); 3: the HUD's parts timed with their quads. PKG of
+  11:40 in `build/ps3_g8/`: run on hardware (Matt: "Done."), a clean
+  exit; the sounds' rays 0.58 / 0.93 ms a frame (before 1.60 / 1.94); the
+  rays' objects part 1.07 / 2.91 ms a frame (1235 / 5655 objects tested);
+  each HUD element 40 to 140 us outside its quad's draw. Medians in the
+  Log. Matt: "Write the SPEs parts and the vmx inside GOALS and ROADMAPS
+  in case. Those are extremely worth checking out.": see "G8 analysis"
+  ("SPEs and VMX") and GOALS.md. Next: Matt's choice. See "G8 analysis"
+  ("Steps 1 to 3 of 2026-10-19" and "The next steps 1 to 3").
 - 2026-10-18: Invite codes (Matt: "Yes. Let's go with this."): hardware
   SUCCESS (Matt: "it works as intended"). 8 digits that stand for an invite link, sealed on the MQTT brokers
   for 30 minutes. INTERNET PLAY: Y (ENTER CODE) types one; the PS3 host's
@@ -231,6 +288,17 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     screen's depth); `[vid] display buffer N tiled`; `[gpu] frame N`: the
     vertex programs uploaded and switched; `menus: ... SETTINGS has VIDEO
     SETTINGS`.
+  - G8 steps 1 to 3 (2026-10-19): `[time] collision` (the outermost
+    collision tests' ms a frame by kind: vector, sphere, pill, point, move;
+    the tests a frame) and `[time] collision by user` (ms a frame and tests
+    a frame for each of the game's 22 users); `[time] screen quads` (the
+    quads a frame, the parts of a quad, the interface pass's Direct3D draws
+    and constants); in `[time] sound`, the game thread's waits for
+    DirectSound's lock; in `DirectSound:`, the mixer's decoding and its
+    lock holds (us a chunk, the longest hold). Then `[time] collision by
+    function` (each logged function at any depth, the BSP nodes, the
+    objects tested), `[time] HUD parts` (with their quads), and the
+    obstruction calls and computations in `[time] sound`.
   - The G7 measurement build (Matt, 2026-10-06):
     - Two `[mem]` lines every 10 s (`ps3_main.c` `memory_heartbeat`). The
       first: the free main memory from lv2 syscall 352 (`ps3_memory_user`,
@@ -264,7 +332,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
-| G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 waits (see "G8 analysis") |
+| G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the next step is Matt's choice |
 
 ## G8 analysis (2026-10-18)
 
@@ -426,6 +494,256 @@ logged data. No code change.
     stages included; the checker models H registers and scaled lookups);
     the changed units compile with GCC's warnings (none new); `check`: 0
     `r2off`, `.got` 0x7f80. PKG of 00:13 in `build/ps3_g8/`.
+- Step 5, the Direct3D thread (2026-10-19, Matt: "Let's go with Step 5."):
+  a30's heavy combat at 33 to 37 frames per second, the game thread about
+  28 ms (Direct3D draws 6 to 8 of it). On hardware 2026-10-19: it runs,
+  a30's heavy combat 38 to 47 frames per second (Matt: "The framerate
+  still feels sluggish."):
+  - `d3d8_rsx.c`: the game's thread records each call in a 4 MB ring
+    (`record_begin`, `record_commit`); a thread of priority 1000
+    (`direct3d_thread`, the PPE's other hardware thread) runs the records
+    with the old draw code, one frame behind (`D3DDevice_Present` waits
+    for the frame before). The game's thread keeps its own state
+    (`front`); the draw's prologue records the render and texture stage
+    states changed since the last record (a diff: the XDK's inline setters
+    write `D3D__RenderState`), the vertex registers, the targets' and the
+    textures' words. Records: states, attributes, texture, vertex shader,
+    constants, constant mode, viewport, render target, menu offset, clear,
+    draw, indexed draw, immediate draw, RSX timestamp, present.
+  - Data: vertices and indices out of the tag cache are copied into the
+    record (as the Xbox put indices in its push buffer; the dynamic
+    buffers are written again each frame); the tag cache's are read where
+    they are, and `d3d8_tag_cache_loading` (`cache_files.c`, before each
+    load) waits for the draws. A texture's `Lock` holds its last draw:
+    `D3DResource_IsBusy` and `BlockUntilNotBusy` (`d3d8_resources.c`)
+    follow the Direct3D thread, so the texture cache evicts a texture only
+    after its draws (trap 34, 49); other resources wait for every record.
+  - A record larger than 1 MB, or every record when the thread does not
+    start (`DIRECT3D_THREAD` 0), runs on the game's thread. The screen's
+    change and the tag cache's loads drain the ring first. The exit and
+    the halt stop the thread (`ps3_gpu_stop_drawing`).
+  - `[time] Direct3D thread`: its busy time, and the game thread's waits
+    for it; the draw timers are its own.
+  - `check`: 0 `r2off`, `.got` 0x7fa0. PKG of 01:58 in `build/ps3_g8/`.
+- The measurements after step 5 (2026-10-19, the PKGs of 02:25, 02:50,
+  03:16 and 03:42; the numbers in the Log). Medians of a30's 300-frame
+  windows of play, all of them / those under 45 frames per second:
+  - The game thread sets the rate: the frame 19.9 / 27.1 ms, the RSX 9.9.
+  - The sound, ms a frame: `game_sound_update` 1.50 / 1.92, nearly all of
+    it the looping sounds' loop; the likely cost (not timed yet) is
+    `compute_sound_obstruction`'s ray test through the BSP and the objects
+    for each audible sound. `sound_render` 1.10 / 2.15: `begin_scene`
+    (`DirectSoundDoWork`: the mixer's lock, the stream packets' decode on
+    the game thread), refresh, channels. The mixer holds its lock for a
+    whole chunk (0.14 to 0.54 ms, 2.0 at most).
+  - The units, ms a tick: the biped's moving (`biped_update_physics`) 0.56
+    / 1.32, the vehicle 0.42 / 1.70, the unit part 0.28 / 0.42.
+  - The interface 1.9 ms in every frame of play: the weapon HUD 0.92, the
+    unit HUD 0.80. The cheaper immediate mode did not change it.
+  - Also: AI 1.91 / 4.38 ms a tick, the particles (update 1.32 / 1.96,
+    draw 0.92 / 1.28 ms a frame), the models 2.24 / 1.91.
+  - Not to the SPEs or VMX for the simulation: network results must match
+    the PC's (Matt: "We'll consider the vmx approach later.").
+  - Next, open for Matt's choice: 1. the collision tests' time by user, from
+    the game's collision-user stack (sounds, bipeds, vehicles, AI,
+    projectiles); 2. the sound: the stream packets' decode off the game
+    thread (the mixer's thread or an SPU), and the mixer's lock not held
+    for a whole chunk; 3. the HUD's own draws and state calls timed in the
+    interface pass.
+- Steps 1 to 3 of 2026-10-19 (Matt chose all three). Built, not tested on
+  the PS3:
+  - 1, collision by user: `collision_usage.c` times the outermost
+    collision test (a depth count: a test inside another is the outer
+    one's time) and gives it to the user on top of the game's
+    collision-user stack at its end (`collision_move_pill` and
+    `collision_fix_pill` push "biped" for every caller). The tests: the
+    logged ones (`collision_log_start_time` and `_end_time`: vector and
+    sphere tests of the structure, the objects and the models), and
+    `collision_test_vector`, `_test_point`, `_test_sphere`, `_test_pill`,
+    `_test_pill_new`, `_move_point`, `_move_pill`, `_fix_pill`
+    (`collisions.c`), `collision_model_test_point` and `_test_pill`
+    (`collision_models.c`). Two `mftb` reads a test: about 0.1 ms a frame
+    more in heavy scenes (estimate).
+  - 2, the sound (`dsound_ps3.c`): `Process` only allocates the packet's
+    float buffer; the mixer decodes it when it first mixes it. A pass
+    takes the streams' unfinished packets with the lock (a copy of each),
+    decodes and mixes without it, and gives the decodes and the finished
+    packets back with it (the buffers then); a flush voids the pass's
+    results for its stream (a count), and the buffers of the packets it
+    takes from a pass are freed after the pass. A release waits for the
+    pass's end. The play state (position, gains) is the mixer's; a flush
+    or a dry stream's new packet asks for a restart. GetStatus, the voice
+    status and the reference counts take no lock; `DirectSoundDoWork`
+    takes it only when the mixer finished a packet. The mixer thread keeps
+    its priority (1000). A PC check (Docker, gcc 13; the session's
+    scratchpad): the game's use of 24 streams (4 packets, refills from the
+    callback, flushes) against the version before, one thread, 40000
+    chunks: the same output bit for bit and the same completions; with the
+    mixer thread, 317075 packets with AddressSanitizer: 0 errors, every
+    packet completed once and in order; ThreadSanitizer: no race on the
+    streams or the buffers (left: the statistics counters and the
+    finished count's lock-free read, as meant).
+  - 3, the screen quads (`rasterizer_xbox_dynavobgeom.c`
+    `_rasterizer_psuedo_dynamic_screen_quad_draw`, the HUD's draw): their
+    count, and the time of their render states, vertex constants,
+    textures (the texture cache's lookup and the stage states), shaders
+    (vertex shader, the pixel shader's states) and draw (immediate mode);
+    `render.c`: the interface pass's share of the game thread's Direct3D
+    draws and constants.
+  - The changed files' comments over 2 lines are shortened; the symbol
+    tables of `collision_usage.c`, `collisions.c` and `render.c` point to
+    upstream's copy (as `sound_manager.c`'s); the code without comments
+    differs only by the timers.
+  - `check`: 0 `r2off`, `.got` 0x8048. PKG of 10:59 in `build/ps3_g8/`.
+  - The run (Matt: "Done."; the numbers in the Log), medians of a30's
+    windows of play, all / under 45 frames per second:
+    - The sound off the game thread works: `sound_render` 0.30 / 0.70 ms a
+      frame (before 1.10 / 2.15), the game thread's lock waits 0.00, no
+      underrun. The mixer thread: 484 us a chunk of 5333 (decoding 202,
+      about 0.49 ms a packet), the lock held 50 us a chunk.
+    - The collision tests: 3.63 / 5.89 ms a frame, nearly all rays
+      (vector 3.24 / 5.04). By user: the sounds' obstruction rays 1.60 /
+      1.94 (19 / 27 rays a frame, about 70 us each: nearly all of
+      `game_sound_update`); AI line of sight 0.68 / 0.64 (6 rays, about
+      106 us each: about half of the AI's tick); the particles' point
+      physics 0.47 / 0.65 (213 / 364 short rays, 2 us each); the bipeds'
+      moves 0.33 / 0.16 (most of `biped_update_physics`); vehicles 0.15
+      / 0.59 (about two thirds of their type update); "debug" 0.20 / 0.22:
+      `rasterizer_models_begin`'s obscurer ray, 10000 units along the view,
+      every frame.
+    - The HUD: 19 screen quads a frame take 0.36 ms (shaders 0.14, draw
+      0.15), and the interface pass's Direct3D draws 0.17 / 0.21: the
+      rest of the HUD's 1.83 / 1.91 ms (about 1.45) is its own code
+      outside the draws.
+  - Next, open for Matt's choice: 1. the sounds' obstruction ray reused
+    for a few ticks (audio only, not the simulation); 2. inside the rays:
+    the structure BSP's part and the objects' part, to make the common
+    path faster with the same results (sounds, AI, vehicles); 3. the
+    HUD's own code timed (crosshairs, numbers, meters, motion sensor); 4.
+    the obscurer ray once a tick, not every frame.
+- The next steps 1 to 3 (2026-10-19, Matt: "Go with 1-3. Be aware that we
+  can also delegate tasks to the SPEs."). Built, not tested on the PS3:
+  - 1, `game_sound.c` (`HALO_PS3`): the obstruction cache (keyed by the
+    source's exact position and the local player) keeps a result up to 4
+    ticks, not 1: each of its 512 slots (was 128) renews at its own tick of
+    the 4, so the rays spread over the ticks. A moving source still casts
+    its ray each tick. `[time] sound` counts the calls and those computed.
+    Audio only: the simulation does not read the obstruction.
+  - 2, the rays timed inside (`collision_usage.c`): each logged collision
+    function's time and calls at any depth (vector-structure, the
+    structure BSP part of `collision_test_vector`; vector-objects, its
+    objects part; model-vector; the object and structure BSP vector and
+    sphere tests), the BSP nodes each test entered (`collision_bsp.c`), and
+    the objects the rays tested (`collisions.c`). Faster code with the same
+    results comes after these numbers. About two more `mftb` reads a test.
+  - 3, the HUD's parts (`hud_weapon.c`: state, crosshairs, panel, sounds,
+    grenades; `hud_unit.c`: setup, background, shield, health, motion
+    sensor elements, motion sensor with its update and render in
+    `motion_sensor.c`, auxiliary), each with the screen quads it draws.
+  - The SPEs: see "SPEs and VMX" below.
+  - The changed files' comments over 2 lines are shortened (the symbol
+    tables of `game_sound.c`, `hud_weapon.c`, `hud_unit.c` and
+    `motion_sensor.c` point to upstream's copy); the code without comments
+    differs only by these changes. `check`: 0 `r2off`, `.got` 0x80b8. PKG
+    of 11:40 in `build/ps3_g8/`.
+  - The run (Matt: "Done."; the numbers in the Log), a30 with a vehicle
+    (heavier than the run before: the frames are not comparable), medians
+    all / under 45 frames per second:
+    - 1 works: 78 / 74 % of the obstruction calls come from the cache;
+      the sounds' rays 7.3 / 11.6 a frame (before 19.3 / 26.9), 0.58 /
+      0.93 ms (before 1.60 / 1.94); `game_sound_update` 0.72 / 0.77 ms a
+      frame (before 1.52 / 1.66).
+    - 2: the rays' objects part (vector-objects) is their main cost: 1.07
+      / 2.91 ms a frame for 30 / 60 calls, which test 1235 / 5655 objects
+      (about 0.5 to 0.9 us each, nearly all out of the ray's way); the
+      structure part (vector-structure) 0.35 / 0.83; every structure BSP
+      vector test 0.43 / 0.83 ms for 77 / 185 tests, 1881 / 4284 nodes
+      (about 24 a test, 0.2 us a node); the model tests 0.23 / 0.27;
+      features-in-sphere 0.40 / 1.07. By user: particles' point physics
+      0.56 / 1.15 (291 / 638 rays), vehicles 0.33 / 2.39, sounds 0.58 /
+      0.93, AI line of sight 0.36 / 0.40, bipeds 0.23 / 0.19, the obscurer
+      ray 0.21 / 0.22.
+    - 3: each HUD element costs 60 to 160 us, of it the quad's draw about
+      19 (the 19 quads 0.36 ms): weapon panel 0.49 / 0.56 (8 quads),
+      grenades 0.24 / 0.27 (4), crosshairs 0.16 / 0.21 (1), shield 0.18 (2),
+      health 0.18 / 0.20 (2), motion sensor elements 0.17 (2), the motion
+      sensor's blips 0.17 / 0.25 (its update 0.01). So 40 to 140 us an
+      element are the HUD's own code outside the draw.
+  - Next, open for Matt's choice: 1. the HUD: time inside an element
+    (`hud_draw_static_element`, `hud_draw_meter`, `hud_draw_numbers`); 2.
+    the rays' objects part: pass over the objects out of a ray's way on a
+    packed copy of their bounding spheres (as `object_bounds_cache.c` does
+    for the sphere tests: the same test on the same values, so the same
+    results), or with exact VMX; 3. the first SPE task, the DirectSound
+    mixer (see "SPEs and VMX"); 4. the obscurer ray once a tick.
+- SPEs and VMX (2026-10-19, Matt: "Write the SPEs parts and the vmx inside
+  GOALS and ROADMAPS in case. Those are extremely worth checking out."):
+  - What must match the PC builds: the simulation (the game ticks:
+    objects, units, vehicles, AI, projectiles, damage, scripts, and the
+    collision tests they make) must give the PC builds' floats (x86 SSE,
+    round to nearest, no fused multiply-add: `-ffp-contract=off`, musl's
+    maths) for network play. Free to differ: the sound (mixing, decoding,
+    obstruction), the drawing (render, the Direct3D layer, the RSX
+    microcode), the HUD, the particles and contrails (updated each frame
+    with the frame's time: visual only), loads and conversions.
+  - SPEs (PSL1GHT): 6 for the game, 256 KB local store each, DMA to main
+    memory; `spu-gcc` 7.2 is in the image (`$PS3DEV/spu/bin`), with
+    PSL1GHT's SPU libraries (`libsputhread`, `libspudma`, `simdmath`); SPU
+    threads with `sysSpuThreadGroupCreate`, images with
+    `sysSpuImageImport`. Single precision rounds toward zero, has no
+    denormals, NaN or infinity: not the PC's results. Double precision is
+    IEEE (round to nearest) but slow on this Cell (not pipelined).
+  - VMX (AltiVec on the PPE): 4 floats a register; every unit builds with
+    `-mno-altivec`, so a VMX unit needs `-maltivec` of its own. Exact for
+    the simulation only so: `vaddfp` and `vsubfp` round to nearest as SSE
+    does; a multiply is `vmaddfp` with -0.0 added (one rounding, exact); a
+    fused multiply-add rounds once, unlike the PC's multiply then add;
+    division and square root are only estimates (`vrefp`, `vrsqrtefp`),
+    so they stay on the scalar FPU; VSCR's NJ bit must be 0 (it flushes
+    denormals). The scalar code's order of operations kept in each lane:
+    four of the same test at once.
+  - Reference: flycastPS3 (`E:\Users\Matteo\Desktop\Dreamcast\flycastPS3`):
+    SPU programs in `ps3/spu/` (audio `spe_aica`, texture decode and hash
+    `spe_tex`, vertex build `spe_vb`, pixels `spe_pix`), their PPE side
+    (`ps3/ps3_spe.cpp`, `ps3_spevb.cpp`, `ps3_spetex.cpp`), the Makefile's
+    rules (`spu-gcc`, `bin2s`, `-lsputhread`), a PC simulator of the SPU
+    image (`misc/spu_sim/`), and its trap: an SPU thread's `main` gets 3
+    arguments, the 4th arrives as 0 (pack extra buffers into one struct).
+  - SPE candidates, by measured cost (a30, all / under 45 frames per
+    second):
+    1. The DirectSound mixer (decode and mix): 484 us of each 5333 us
+       chunk on the PPE, about 9 % of the hardware thread that the game
+       thread and the Direct3D thread share. Self-contained (packets in,
+       samples out to the audio ring), no exactness needed; flycastPS3's
+       `spe_aica` is the model. The first SPE task: small, and a fault is
+       heard at once.
+    2. The Direct3D thread's conversions (of its 10 to 12 ms a frame:
+       vertices at draws 3.45, colours 0.5, indices 0.3): copies and
+       conversions into the RSX scratch as SPU jobs (flycastPS3's
+       `spe_vb`); the command buffer stays on the PPE.
+    3. The particles (visual): their update 1.33 / 2.57 ms a frame, and
+       their point physics rays 0.56 / 1.15 (291 / 638 a frame). An SPU
+       job needs the collision BSP and the objects by DMA: a large port.
+    4. The sounds' obstruction rays (audio): 0.58 / 0.93 ms a frame after
+       the 4-tick cache; the same needs as 3.
+    5. Texture conversion and hashing at loads (flycastPS3's `spe_tex`):
+       load times, not frame times.
+  - VMX candidates:
+    1. The Direct3D layer's conversions on the PPE (as SPE 2): float4
+       vertices, D3DCOLOR to float4, index copies.
+    2. The mixer's loop (4 samples at once), while it stays on the PPE.
+    3. The render's CPU math, free to differ: the models (2.84 / 2.19 ms
+       a frame: node matrices to vertex constants), the visibility tests,
+       the particles' and contrails' quads (0.92 / 1.87).
+    4. The simulation, exactly (adds, subtracts and unfused multiplies,
+       NJ 0, no estimates): the rays' objects part (1.07 / 2.91 ms a frame,
+       bounding sphere tests four at once), node matrices (1.15 ms a tick),
+       the BSP traversal (0.43 / 0.83 ms). Each with a PC check bit for bit
+       against the scalar code, as the shader check does.
+  - Proposed order: the SPU set-up from flycastPS3 (Makefile rules, an
+    SPU job runner) and the mixer on an SPU; measure; then the Direct3D
+    conversions (SPU jobs or VMX); then exact VMX where the measurements
+    point, each with its PC check.
 
 ## G7 analysis (2026-10-06)
 
@@ -1066,11 +1384,12 @@ the whole tree. No code change.
 33. To find a black RSX picture, read pixels back after `rsxFinish`
     (`gcmGetConfiguration` gives the CPU address of RSX memory) and swap
     in one-instruction pixel shaders. G4's diagnostic builds did this.
-34. `d3d8_rsx.c` marks the header of each texture in the texture cache's
-    memory: it writes its own value in `Lock` after it checks the texels.
-    While the mark stays, it does not check them again.
-    `xbox_texture_cache.c` puts `Lock` to 0 for each texture it loads, so a
-    new texture is checked. Code that writes texels in that memory with
+34. A texture's `Lock` holds the number of its last draw, as the Xbox
+    runtime's does (`d3d8_rsx.c` `draw_prologue`): `D3DResource_IsBusy`
+    compares it with the Direct3D thread's progress (trap 49). A draw that
+    finds `Lock` 0 checks the texels again: `xbox_texture_cache.c` puts it
+    to 0 for each texture it loads, and texels of the texture cache are not
+    checked again otherwise. Code that writes texels in that memory with
     the CPU (Bink, once it decodes) must put `Lock` to 0 after each write.
 35. The pixel shader optimizer (`ps3_rsx_fp.c`) takes these values as 0 to
     1: the texels (every RSX texture is A8R8G8B8 or DXT), the colour inputs
@@ -1142,6 +1461,14 @@ the whole tree. No code change.
 48. The menus' tags for LAN PLAY, INTERNET PLAY and SETTINGS come from one
     `instances_grow` a load (`xbox_multiplayer_patch`): a second would take
     the first's tags as the map's (`original_count`).
+49. Two threads draw (`d3d8_rsx.c`): the game's thread records the Direct3D
+    calls (`front`), the Direct3D thread runs the records (`device`,
+    `render_state`, `ps3_gpu.c`). A new call that changes what a draw uses
+    needs a record, or the draw prologue's diff. The Direct3D thread reads
+    game memory only where it stays: the tag cache (`d3d8_tag_cache_loading`
+    waits before a load) and textures (`Lock`, trap 34); other vertices and
+    indices are copied into the record. Game-thread code that uses the
+    Direct3D thread's state or `ps3_gpu.c` calls `direct3d_drain` first.
 
 ## Commands
 
@@ -1605,3 +1932,215 @@ then `./build.sh pkg LOG_IP=<address>`.
   changed. `RSX_CHECKPOINTS` 0 (its names only with it): clean PKG of
   01:14 in `build/ps3_g8/`, `check` 0 `r2off`, `.got` 0x7f98. Heavy scenes
   miss 16.7 ms: Matt's condition for step 5 (the second hardware thread).
+- 2026-10-19: G8 step 5, the Direct3D thread (Matt: "Yes, the picture
+  looked right. I'll try the widescreen/30 FPS changes in future. Let's go
+  with Step 5."): `d3d8_rsx.c` (the records, the ring, `direct3d_thread`),
+  `ps3_gpu.c` and `.h` (`ps3_gpu_timestamp`, the stop hook),
+  `ps3_main.c` (the exit and the halt stop the thread), `ps3_timers.c` and
+  `.h` (`[time] Direct3D thread`), `d3d8_resources.c` (`IsBusy`,
+  `BlockUntilNotBusy` and a release follow the thread under `HALO_PS3`),
+  `source/cache/cache_files.c` (`d3d8_tag_cache_loading` before each
+  load), `port/ps3/README.md`, traps 34 and 49. See "G8 analysis" ("Step
+  5"). `check`: 0 `r2off`, `.got` 0x7fa0. PKG of 01:58 in
+  `build/ps3_g8/`. Not tested on hardware.
+- 2026-10-19: PKG of 01:58 (the Direct3D thread) on hardware: runs, no
+  error, no draw skipped (Matt: "The framerate still feels sluggish.").
+  The `[time]` lines: menus 59.9; a30 calm 57 to 60, heavy combat 38 to 47
+  (before: 33 to 37), once 23 (1.3 ticks a frame of 19 ms, sound 5.7 ms).
+  The game thread's render 9 to 18 ms (before 15 to 21); it never waits
+  for the Direct3D thread in a level. Left: the ticks, 9 to 19 ms each
+  (they hold `game_frame`, which runs every frame: particles, widgets,
+  sound), every second frame, so frames alternate about 25 and 12 ms; the
+  RSX 8 to 19 ms. Main memory 44 to 46 MB free. Matt asked about the SPEs
+  and VMX: not for the tick (network results must match the PC builds:
+  SPU single precision and VMX's fused multiply-add round otherwise; the
+  tick's code is branches and pointers); VMX later, for loops that only
+  draw.
+- 2026-10-19: The tick's measurement and the sound at the ticks' rate
+  (Matt: "Do the measurement. Also build the audio on tick frames."):
+  `game.c` (`PS3_GAME_SPLIT`: units, AI, players, effects, first person,
+  scripts, objects, HUD, other; `game_frame`: particles, widgets, sound,
+  other), `game_time.c` (the interpolation's and the netcode's step of a
+  tick), `ps3_timers.c` and `.h` (`[time] tick, ms each`, `game frame, ms
+  a frame`), `main.c` (`sound_render` with the frames between ticks only
+  on a tick's frame, else every second frame). `check`: 0 `r2off`, `.got`
+  0x7fa8. PKG of 02:25 in `build/ps3_g8/`. Not tested on hardware.
+- 2026-10-19: PKG of 02:25 on hardware (Matt: "Done. Check the ticks."): a30
+  heavy combat, a frame of 28.5 ms (35 frames per second): the game's
+  render 16.8 (objects 5.7, effects 3.0, `sound_render` 2.7, interface 2.0,
+  lights 1.1, diffuse 1.1), the ticks 7.2 a frame (`objects_update` 4.4, AI
+  1.6, interpolation 0.6), `game_frame` 3.9 (particles 2.0, game sound 1.9).
+  A tick: `objects_update` 2.4 to 7.9 ms, AI up to 6.0, interpolation 0.7,
+  effects 0.4, scripts 0.2, the rest under 0.1 each. The sound, 2.5 to 5 ms
+  a frame (`game_sound_update` 1.7 to 2.7 at every frame). No sound fault
+  reported with `sound_render` at the ticks' rate.
+- 2026-10-19: The sound, and the next measurements (Matt: "Yes, update the
+  sound then expand the measurements for the objects_update, and the
+  render's objects and effects passes."): `game.c` (`game_sound_update`
+  at the ticks' rate, as `sound_render`, with the frames' time added; its
+  `dt` is unused today), `dsound_ps3.c` (the voices' and the listener's
+  settings without the mixer's lock: words the mixer reads once a chunk;
+  the orientation normalized before it is stored), `objects.c` (the type
+  updates by kind: units, items, projectiles, others; damage, node
+  matrices, lights, values; activation, garbage collection), `render.c`
+  (`PS3_TIMER_PART`: the CPU's parts of a split without an RSX stamp: sky,
+  first person, lights; weather, particles, contrails, transparent,
+  decals, detail objects), `render_objects.c` (find, first person,
+  lighting, models), `ps3_timers.c` and `.h` (`[time] objects_update`,
+  `[time] objects pass`; the render line's objects and effects stay whole
+  passes). `check`: 0 `r2off`, `.got` 0x7fb8. PKG of 02:50 in
+  `build/ps3_g8/`. Not tested on hardware.
+- 2026-10-19: PKG of 02:50 on hardware (the first run was the PKG of 02:25
+  again: no new lines; the second the right one). No sound fault reported.
+  `game_sound_update` about 1.3 ms a frame in calm play (before 1.8): about
+  2.5 ms a call. A tick's `objects_update`: units' type updates 0.6 to 1.2
+  ms calm, 4.8 to 6.4 in heavy combat; node matrices 0.7 to 1.7; items and
+  projectiles up to 0.9; the rest about 0.8. The render's `render_objects`
+  2.2 to 8.0 ms a frame, of it the models 1.4 to 6.7 (find, first person
+  and lighting each under 0.5); the sky about 0.25. Effects: particles 0.3
+  to 1.8, transparent 0.2 to 1.5, contrails up to 0.7 (and the particles'
+  update in `game_frame` 0.5 to 3.2). The interface (HUD) about 2 ms in
+  every frame of play.
+- 2026-10-19: Immediate mode, cheaper (Matt: "Make the immediate mode
+  cheaper."): `d3d8_rsx.c` stores each vertex's registers of a layout (the
+  ones written up to the first vertex) in place of all 16 (256 bytes);
+  `End` copies the block once. A register first written after the first
+  vertex widens the layout, with its value before for the vertices before
+  (`immediate_widen`), as each vertex had all 16. The Direct3D thread's
+  side is the same. `check`: 0 `r2off`, `.got` 0x7fb8. PKG of 03:16 in
+  `build/ps3_g8/`. Not tested on hardware.
+- 2026-10-19: PKG of 03:16 on hardware (Matt: "Done"): the interface 1.5 to
+  2.1 ms a frame in play, as before (about 2): no measurable change.
+- 2026-10-19: The measurements for 1, 2 and 3 (Matt: "Prepare the
+  measurements for 1, 2 and 3, so we can investigate all 3 issues and have
+  a median."): `sound_manager.c` (`sound_render`: listener, with
+  `begin_scene` and the class fades; looping sounds, refresh, prioritize,
+  channels; cache, with `end_scene`), `game_sound.c` (`game_sound_update`:
+  environment, looping sounds), `object_types.c` (a type update's parts:
+  unit, for bipeds and vehicles; biped, vehicle, item for all items,
+  projectile, other), `bipeds.c` (`biped_update`: turning, moving, dead or
+  airborne or landing or slipping, animation, the rest), `render.c` (the
+  interface pass: fog, flares and antialiasing; `interface_draw_screen`;
+  flash; widgets), `interface.c` and `hud.c` (screen effect, players,
+  motion sensor, weapon, unit, navigation, messages, game engine),
+  `d3d8_rsx.c` (the game thread's time in the four draw calls and in
+  `SetVertexShaderConstant`, in the whole frame, without its waits for
+  ring room), `ps3_timers.c` and `.h` (`[time] unit parts`, `[time] sound`,
+  `[time] interface pass`; the render line's interface stays the whole
+  pass). The medians come from the play windows' lines. `check`: 0
+  `r2off`, `.got` 0x7fd0. PKG of 03:42 in `build/ps3_g8/`. Not tested on
+  hardware.
+- 2026-10-19: PKG of 03:42 on hardware (Matt: "Done."), a30, 20 windows of
+  play; medians of all of them, then of the 8 under 45 frames per second.
+  The frame 19.9 / 27.1 ms, the RSX 9.9 (the game thread sets the rate).
+  The sound, ms a frame: `game_sound_update` 1.50 / 1.92, nearly all of it
+  the looping sounds' loop (each audible one's `sound_refresh_looping`, with
+  `compute_sound_obstruction`'s ray test through the BSP and the objects);
+  `sound_render` 1.10 / 2.15: listener 0.60 / 0.78 (with `begin_scene`:
+  `DirectSoundDoWork`, the mixer's lock and the stream packets' decode on
+  the game thread), refresh 0.30 / 0.59, channels 0.15 / 0.58 (worst 2.1),
+  the rest under 0.1. The mixer holds its lock for a whole chunk: 0.14 to
+  0.54 ms on average, 2.0 at most, with up to 32 streams. The units, ms a
+  tick: `objects_update`'s units 1.73 / 2.92; biped 0.60 / 1.54, of it
+  moving 0.56 / 1.32 (`biped_update_physics`), the other steps under 0.1
+  each; vehicle 0.42 / 1.70 (4.1 in the worst window); unit 0.28 / 0.42.
+  The interface, ms a frame: 1.90 / 2.00, the same in calm play and in
+  combat: weapon 0.92 / 0.95 (crosshairs, weapon and grenade HUD), unit
+  0.80 / 0.83, the rest 0.1 or less. The game thread's Direct3D calls in
+  the whole frame: draws 1.75 / 1.73 (158 to 435 draws a frame), constants
+  0.16 / 0.15. Also: AI 1.91 / 4.38 ms a tick, the particles' update 1.32
+  / 1.96 and draw 0.92 / 1.28 ms a frame, the models 2.24 / 1.91.
+- 2026-10-19: Steps 1 to 3 (Matt chose all three: "3. HUD draw timers, 2.
+  Sound off game thread, 1. Collision by user"): `collision_usage.c` and
+  `.h`, `collisions.c`, `collision_models.c` (the collision tests by user
+  and kind), `dsound_ps3.c` (the decode on the mixer's thread, the lock
+  held only to take and give back a pass's packets),
+  `rasterizer_xbox_dynavobgeom.c` and `render.c` (the screen quads, the
+  interface pass's Direct3D calls), `ps3_timers.c` and `.h` (`[time]
+  collision`, `[time] collision by user`, `[time] screen quads`, the
+  sound's lock waits), `port/ps3/README.md`. See "G8 analysis" ("Steps 1
+  to 3 of 2026-10-19"). The PC check of `dsound_ps3.c` passes. `check`: 0
+  `r2off`, `.got` 0x8048. PKG of 10:59 in `build/ps3_g8/`. Not tested on
+  hardware.
+- 2026-10-19: PKG of 10:59 on hardware (Matt: "Done."; our listener, from
+  the boot): menus, a30, a clean exit (`[ps3] exit 0`), no halt; every
+  `DirectSound:` line 0 silent and 0 partial port blocks. 31 timer
+  windows, 26 of play (game ticks of 1 ms or more each), 9 under 45
+  frames per second; medians all / under 45 (the same method as the run
+  of 03:42). The frame 18.05 / 23.80 ms (55.5 / 41.9 frames per second;
+  0.53 / 0.70 ticks a frame), game ticks 7.75 / 11.10, render 9.30 /
+  13.30; the RSX 9.2 / 12.5; the Direct3D thread busy 10.5 / 10.2. The
+  sound, ms a frame: `sound_render` 0.30 / 0.70 (listener 0.03 / 0.04,
+  before 0.60 / 0.78; channels 0.03 / 0.04, before 0.15 / 0.58; refresh
+  0.22 / 0.58), `game_sound_update`'s looping sounds 1.51 / 1.65, the
+  game thread's waits for DirectSound's lock 0.00 / 0.00. The mixer
+  thread (15 lines of play): 484 us a chunk (216 to 838; max 2.5 to 5.2
+  ms), decoding 202 (85 to 350; about 0.49 ms a packet), the lock held
+  50 us a chunk (max 0.13 to 0.82 ms), 725 packets in 10 s. The collision
+  tests, ms a frame (tests a frame): total 3.63 / 5.89 (270 / 554);
+  vector 3.24 / 5.04, sphere 0.09 / 0.37, move 0.33 / 0.16, pill and
+  point 0.00; sound 1.60 / 1.94 (19.3 / 26.9; 72 / 68 us a test), ai-los
+  0.68 / 0.64 (5.95 / 5.8; 106 us), pt-phys 0.47 / 0.65 (213 / 364; 1.9
+  us), biped 0.33 / 0.16 (0.85 / 0.8; 84 / 100 us), veh 0.15 / 0.59 (21
+  / 50; 7 / 13 us), debug 0.20 / 0.22 (1.0; about 200 us: the obscurer
+  ray of `rasterizer_models_begin`), unknown 0.00 / 0.11 (0 / 36), light
+  0.04 / 0.05, the others 0.00. The interface: screen 1.83 / 1.91 (weapon
+  0.94 / 0.98, unit 0.82 / 0.85); 19 screen quads a frame: states 0.01,
+  constants 0.03, textures 0.03, shaders 0.14, draw 0.15; the interface
+  pass's Direct3D draws 0.17 / 0.21 and constants 0.02 (the whole frame's
+  1.68 / 2.19 and 0.16 / 0.26). Also: AI 2.08 / 2.07 ms a tick,
+  `objects_update` 4.48 / 4.62 ms a tick (units 1.77 / 2.44), the unit
+  parts (ms a tick): biped 0.85 / 0.58 (moving 0.62 / 0.32), vehicle 0.44
+  / 1.32; particles' update 1.09 / 1.59 ms a frame. No sound fault (Matt:
+  "I didn't hear any sound faults.").
+- 2026-10-19: The next steps 1 to 3 (Matt: "Go with 1-3. Be aware that we
+  can also delegate tasks to the SPEs."): `game_sound.c` (the obstruction
+  kept up to 4 ticks, 512 slots, counted), `collision_usage.c` and `.h`,
+  `collision_bsp.c`, `collisions.c` (each logged collision function at any
+  depth, the BSP nodes, the objects tested), `hud_weapon.c`, `hud_unit.c`,
+  `motion_sensor.c` (the HUD's parts and their quads), `ps3_timers.c` and
+  `.h` (`[time] collision by function`, `[time] HUD parts`, the
+  obstruction counts in `[time] sound`), `port/ps3/README.md`. See "G8
+  analysis" ("The next steps 1 to 3"). The changed units compile with
+  GCC's warnings (none new). `check`: 0 `r2off`, `.got` 0x80b8. PKG of
+  11:40 in `build/ps3_g8/`. Not tested on hardware.
+- 2026-10-19: PKG of 11:40 on hardware (Matt: "Done."; our listener):
+  menus, a30 with a vehicle, `[ps3] exit 0`, no halt; `DirectSound:` 0
+  partial blocks, 1 silent block at the boot only (before any sound). 21
+  timer windows, 20 of play, 5 under 45 frames per second; medians all /
+  under 45. The frame 18.80 / 27.30 ms (53.2 / 36.7 frames per second;
+  0.54 / 0.70 ticks a frame), game ticks 6.20 / 11.40, render 10.50 /
+  11.50; the RSX 9.85 / 11.60; the Direct3D thread busy 11.8 / 8.2. The
+  sound: obstruction calls 36.4 / 49.8 a frame, computed 8.2 / 13.1;
+  `game_sound_update` 0.72 / 0.77 ms a frame (looping 0.71 / 0.76);
+  `sound_render` 0.20 / 0.50 (refresh 0.10 / 0.32); lock waits 0.00. The
+  mixer thread (12 lines of play): 469 us a chunk (172 to 1049; max 2.4 to
+  6.5 ms), decoding 206 (62 to 438), the lock held 50 us a chunk (max 0.16
+  to 0.77 ms). The collision tests 2.68 / 6.37
+  ms a frame (390 / 833 tests): vector 2.33 / 5.28, sphere 0.20 / 0.99,
+  move 0.23 / 0.19. By user (ms, tests a frame): pt-phys 0.56 / 1.15 (291
+  / 638), sound 0.58 / 0.93 (7.3 / 11.6), veh 0.33 / 2.39 (36 / 78),
+  ai-los 0.36 / 0.40 (3.1 / 4.4), biped 0.23 / 0.19, debug 0.21 / 0.22
+  (1), unknown 0.08 / 0.13 (25 / 41). By function (ms, calls a frame, at
+  any depth): vector-structure 0.35 / 0.83 (48 / 143), vector-objects 1.07
+  / 2.91 (30 / 60), features-in-sphere 0.40 / 1.07 (21 / 39), model-vector
+  0.23 / 0.27 (26 / 30), object-bsp-vector 0.17 / 0.20 (68 / 82),
+  structure-bsp-vector 0.43 / 0.83 (77 / 185), object-bsp-sphere 0.04 /
+  0.08, structure-bsp-sphere 0.09 / 0.16 (21 / 39); BSP nodes a frame:
+  object vector 620 / 703, structure vector 1881 / 4284, structure sphere
+  473 / 785; objects tested a frame 1235 / 5655. The HUD (ms a frame,
+  quads): interface screen 1.75 / 2.04 (weapon 0.91 / 1.06, unit 0.80 /
+  0.88); crosshairs 0.16 / 0.21 (1), weapon panel 0.49 / 0.56 (8),
+  grenades 0.24 / 0.27 (4), state and sounds 0.00; unit setup 0.02,
+  background 0.00, shield 0.18 / 0.17 (2), health 0.18 / 0.20 (2), motion
+  sensor elements 0.17 / 0.18 (2), motion sensor 0.18 / 0.26 (0 quads;
+  update 0.01, render 0.17 / 0.25), auxiliary 0.00; 19 screen quads a
+  frame. Also: AI 1.88 / 1.83 ms a tick, `objects_update` 3.83 / 7.26 ms
+  a tick (units 1.84 / 4.81, node matrices 1.15 / 1.10), unit parts
+  vehicle 1.07 / 3.41 ms a tick, the particles' update 1.33 / 2.57 ms a
+  frame. Matt: "Write the SPEs parts and the vmx inside GOALS and
+  ROADMAPS in case. Those are extremely worth checking out.": "G8
+  analysis" ("SPEs and VMX") and GOALS.md ("SPEs and VMX").
+- 2026-10-19: The handoff (Matt: "Update ROADMAP and GOALS. I'll start a
+  new session."): "Now", the goal table and GOALS.md updated. No code
+  change after the PKG of 11:40.

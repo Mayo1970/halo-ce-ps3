@@ -1,5 +1,5 @@
-/* The Direct3D 8 device on the RSX: port/linux/src/d3d8_gl.c's device, with vertex programs and combiners
-as runtime microcode (ps3_rsx_*.c) and the RSX through ps3_gpu.c. Resources: d3d8_resources.c. */
+/* d3d8_gl.c's Direct3D device on the RSX (ps3_gpu.c), vertex programs and combiners as runtime microcode (ps3_rsx_*.c).
+Resources: d3d8_resources.c. The game's thread records calls; the PPE's other thread (Direct3D thread) draws them. */
 
 #include <string.h>
 #include <stdlib.h>
@@ -97,19 +97,39 @@ struct vertex_shader_object
 	BOOL untranslatable;
 };
 
+/* a surface's words, as the game's thread read them for the Direct3D thread */
+struct surface_words
+{
+	DWORD valid;
+	DWORD data;
+	DWORD format;
+	DWORD size;
+};
+
+/* a stage's texture header and palette data; fresh: the header was set up again (Lock 0) since its last draw */
+struct stage_texture
+{
+	DWORD bound;
+	DWORD data;
+	DWORD format;
+	DWORD size;
+	DWORD palette;
+	DWORD fresh;
+};
+
+/* the device as the Direct3D thread draws: the records' state */
 static struct
 {
 	BOOL created;
 	BOOL gpu_ready;
 	D3DPRESENT_PARAMETERS presentation;
+	/* the game's surfaces; they change only between frames, with the Direct3D thread idle (halo_screen_commit) */
 	D3DSurface back_buffer;
 	D3DSurface depth_buffer;
-	D3DSurface *render_target;
-	D3DSurface *depth_stencil;
+	/* the colour and depth targets */
+	struct surface_words targets[2];
 	D3DVIEWPORT8 viewport;
-	D3DMATRIX transforms[D3DTS_MAX];
-	D3DBaseTexture *textures[TEXTURE_STAGES];
-	D3DPalette *palettes[TEXTURE_STAGES];
+	struct stage_texture stages[TEXTURE_STAGES];
 	D3DSHADERCONSTANTMODE shader_constant_mode;
 
 	struct vertex_shader_object *vertex_shader;
@@ -122,23 +142,15 @@ static struct
 	float viewport_scale[4];
 	float viewport_offset[4];
 
+	/* a draw's streams: vertex v at base + v * stride, in the tag cache or in the record's copy */
 	struct
 	{
-		DWORD data;
+		const unsigned char *base;
 		UINT stride;
 	} streams[16];
-	/* SetIndices' base vertex, added to every index of an indexed draw */
-	UINT base_vertex_index;
-	/* the vertex count of the map vertex buffer that the next indexed draw reads (d3d8_draw_vertex_count) */
-	unsigned long draw_vertex_count;
 
 	/* the current value of each input register (SetVertexData) */
 	float attributes[VERTEX_ATTRIBUTE_COUNT][4];
-	BOOL immediate_active;
-	D3DPRIMITIVETYPE immediate_type;
-	float *immediate_vertices;
-	unsigned long immediate_count;
-	unsigned long immediate_capacity;
 
 	/* the bound targets' size in the game's units, their pixels a unit and their size in pixels (bind_targets) */
 	unsigned long target_width;
@@ -149,10 +161,141 @@ static struct
 	/* a stage's linear render target drawn at the screen's scale: its texel coordinates times this (bind_textures) */
 	float texture_scale[TEXTURE_STAGES][2];
 
-	BOOL visibility_test_active;
 	unsigned long frame;
-	unsigned long next_vertex_shader_id;
 } device;
+
+/* the render and texture stage states the Direct3D thread draws with; the game writes D3D__RenderState */
+static DWORD render_state[D3DRS_MAX];
+static DWORD texture_state[D3DTSS_MAXSTAGES][D3DTSS_MAX];
+
+/* the device as the game's thread sees it; the records carry it to the Direct3D thread */
+static struct
+{
+	D3DSurface *render_target;
+	D3DSurface *depth_stencil;
+	D3DBaseTexture *textures[TEXTURE_STAGES];
+	D3DPalette *palettes[TEXTURE_STAGES];
+	struct vertex_shader_object *vertex_shader;
+	struct
+	{
+		DWORD data;
+		UINT stride;
+	} streams[16];
+	/* SetIndices' base vertex, added to every index of an indexed draw */
+	UINT base_vertex_index;
+	/* the vertex count of the map vertex buffer that the next indexed draw reads (d3d8_draw_vertex_count) */
+	unsigned long draw_vertex_count;
+	float attributes[VERTEX_ATTRIBUTE_COUNT][4];
+	BOOL immediate_active;
+	D3DPRIMITIVETYPE immediate_type;
+	/* each vertex's registers of the layout, in order (capacity in floats); the registers written since Begin */
+	float *immediate_vertices;
+	unsigned long immediate_count;
+	unsigned long immediate_capacity;
+	DWORD immediate_written;
+	/* the registers the first vertex had written, widened when a later one writes another */
+	DWORD immediate_layout;
+	unsigned char immediate_regs[VERTEX_ATTRIBUTE_COUNT];
+	unsigned long immediate_reg_count;
+	unsigned long immediate_floats;
+	/* registers out of the layout written after the first vertex, and their values for the vertices before */
+	DWORD immediate_changed;
+	float immediate_before[VERTEX_ATTRIBUTE_COUNT][4];
+	D3DMATRIX transforms[D3DTS_MAX];
+	BOOL visibility_test_active;
+	unsigned long next_vertex_shader_id;
+	unsigned long frame;
+	long ui_offset;
+	/* what the records have given the Direct3D thread */
+	DWORD recorded_render_state[D3DRS_MAX];
+	DWORD recorded_texture_state[D3DTSS_MAXSTAGES][D3DTSS_MAX];
+	float recorded_attributes[VERTEX_ATTRIBUTE_COUNT][4];
+	struct stage_texture recorded_stages[TEXTURE_STAGES];
+	struct surface_words recorded_targets[2];
+	/* the ring's position after the last frame's present record */
+	uint64_t previous_present;
+} front;
+
+/* ---------- records: a call's arguments, read by the Direct3D thread in the order the game made them */
+
+enum
+{
+	_record_wrap,
+	_record_states,
+	_record_attributes,
+	_record_texture,
+	_record_vertex_shader,
+	_record_constants,
+	_record_constant_mode,
+	_record_viewport,
+	_record_render_target,
+	_record_ui_offset,
+	_record_clear,
+	_record_draw,
+	_record_draw_indexed,
+	_record_immediate,
+	_record_timestamp,
+	_record_present
+};
+
+/* each record starts 16-aligned with this header; bytes: the whole record, a multiple of 16 */
+struct record
+{
+	uint32_t type;
+	uint32_t bytes;
+	uint32_t a;
+	uint32_t b;
+};
+
+/* 0: each record runs on the game's thread as it is made */
+#define DIRECT3D_THREAD 1
+/* a heavy frame's records take about 1 MB: room for the frame drawn and the one recorded */
+#define RING_BYTES (4UL * 1024 * 1024)
+/* a larger record runs on the game's thread, with the Direct3D thread idle */
+#define RECORD_LARGEST (RING_BYTES / 4)
+/* the records the Direct3D thread gets at once (the game's thread publishes them) */
+#define PUBLISH_BYTES (64UL * 1024)
+/* a wait sees again after this, whatever wakes it */
+#define WAIT_MICROSECONDS 100000
+
+static struct
+{
+	unsigned char *memory;
+	/* byte positions since the start: the game's thread records and publishes, the Direct3D thread consumes */
+	uint64_t written;
+	volatile uint64_t published;
+	volatile uint64_t consumed;
+	/* the draws numbered (draw_prologue) and the last one done */
+	DWORD recorded_draws;
+	volatile DWORD completed_draws;
+	/* the waits in progress, under the lock */
+	volatile int consumer_sleeping;
+	volatile int producers_waiting;
+	volatile int stop;
+	volatile int stopped;
+	BOOL running;
+	/* after direct3d_stop, no record runs */
+	BOOL dead;
+	uint64_t producer;
+	uint64_t consumer;
+	struct ps3_host_lock *lock;
+	struct ps3_host_condition *work;
+	struct ps3_host_condition *progress;
+	/* the record being made, and whether it runs on the game's thread (record_commit) */
+	struct record *current;
+	BOOL current_inline;
+	unsigned char *large;
+	unsigned long large_bytes;
+} ring;
+
+static void *record_begin(uint32_t type, unsigned long payload_bytes, uint32_t a, uint32_t b);
+static void record_commit(void);
+static void direct3d_publish(void);
+static void direct3d_wait(uint64_t position);
+static void direct3d_drain(void);
+static void direct3d_start(void);
+static void direct3d_stop(void);
+static void present_run(void);
 
 static struct
 {
@@ -227,7 +370,14 @@ long halo_screen_width(void)
 /* the menus and full-screen overlays are laid out for 640 columns: centred while they draw */
 void halo_screen_ui_offset(unsigned char centered)
 {
-	ui_offset = centered ? (halo_screen_width() - SCREEN_WIDTH) / 2 : 0;
+	long offset = centered ? (halo_screen_width() - SCREEN_WIDTH) / 2 : 0;
+
+	if (offset != front.ui_offset)
+	{
+		front.ui_offset = offset;
+		record_begin(_record_ui_offset, 0, (uint32_t)offset, 0);
+		record_commit();
+	}
 }
 
 void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
@@ -247,6 +397,8 @@ long halo_screen_commit(void)
 	screen_mode_choose(&width, scale);
 	if (width != screen_width || scale[0] != screen_scale[0] || scale[1] != screen_scale[1])
 	{
+		/* the surfaces and the targets change under the Direct3D thread's frames */
+		direct3d_drain();
 		platform_log("screen: %ldx%d drawn at %.0fx%.0f", width, SCREEN_HEIGHT, width * scale[0],
 			SCREEN_HEIGHT * scale[1]);
 		screen_width = width;
@@ -434,11 +586,11 @@ static void constants_upload(void)
 /* the depth buffer's range: the screen-space z the game's programs give */
 static float depth_scale(void)
 {
-	if (device.depth_stencil)
+	if (device.targets[1].valid)
 	{
 		struct xgpu_texture_description description;
 
-		xgpu_texture_describe(device.depth_stencil->Format, device.depth_stencil->Size, &description);
+		xgpu_texture_describe(device.targets[1].format, device.targets[1].size, &description);
 		if (description.format == D3DFMT_D16 || description.format == D3DFMT_LIN_D16 ||
 			description.format == D3DFMT_F16 || description.format == D3DFMT_LIN_F16)
 			return 65535.0f;
@@ -596,16 +748,24 @@ static struct render_target *render_target_lookup(DWORD data, unsigned long unit
 	return target;
 }
 
-static struct render_target *render_target_get(const D3DSurface *surface, BOOL depth)
+static struct render_target *render_target_get(const struct surface_words *surface, BOOL depth)
 {
 	struct xgpu_texture_description description;
 
-	if (!surface || !surface->Data)
+	if (!surface->valid || !surface->data)
 		return NULL;
-	xgpu_texture_describe(surface->Format, surface->Size, &description);
+	xgpu_texture_describe(surface->format, surface->size, &description);
 	if (format_is_depth(description.format) != depth || !description.width || !description.height)
 		return NULL;
-	return render_target_lookup(surface->Data, description.width, description.height, depth);
+	return render_target_lookup(surface->data, description.width, description.height, depth);
+}
+
+static void surface_words_read(const D3DSurface *surface, struct surface_words *words)
+{
+	words->valid = surface != NULL;
+	words->data = surface ? surface->Data : 0;
+	words->format = surface ? surface->Format : 0;
+	words->size = surface ? surface->Size : 0;
 }
 
 /* every target (the screen's size changed), freed once the frames in flight are done with them */
@@ -641,44 +801,30 @@ static struct render_target *render_target_find(DWORD data)
 }
 
 /* the RSX surface for the current targets; FALSE if there is nothing to draw into. The lookups are kept while the
-surfaces and their descriptions stay: every draw binds. */
+surfaces' words stay: every draw binds. */
 static BOOL bind_targets(BOOL *has_depth)
 {
 	static struct
 	{
-		const D3DSurface *surfaces[2];
-		DWORD words[2][3];
+		struct surface_words targets[2];
 		unsigned long generation;
 		struct render_target *color, *depth;
 		BOOL has_depth, valid;
 	} last;
-	const D3DSurface *surfaces[2];
 	struct render_target *color, *depth;
 	struct ps3_gpu_surface surface;
-	int which;
 
-	surfaces[0] = device.render_target;
-	surfaces[1] = device.depth_stencil;
-	if (last.valid && last.generation == render_target_generation && last.surfaces[0] == surfaces[0] &&
-		last.surfaces[1] == surfaces[1])
+	if (last.valid && last.generation == render_target_generation &&
+		!memcmp(last.targets, device.targets, sizeof(last.targets)))
 	{
-		for (which = 0; which < 2; which++)
-		{
-			if (surfaces[which] && (surfaces[which]->Data != last.words[which][0] ||
-				surfaces[which]->Format != last.words[which][1] || surfaces[which]->Size != last.words[which][2]))
-				break;
-		}
-		if (which == 2)
-		{
-			color = last.color;
-			depth = last.depth;
-			*has_depth = last.has_depth;
-			goto bind;
-		}
+		color = last.color;
+		depth = last.depth;
+		*has_depth = last.has_depth;
+		goto bind;
 	}
 	last.valid = FALSE;
-	color = render_target_get(device.render_target, FALSE);
-	depth = render_target_get(device.depth_stencil, TRUE);
+	color = render_target_get(&device.targets[0], FALSE);
+	depth = render_target_get(&device.targets[1], TRUE);
 	if (!color && !depth)
 		return FALSE;
 	if (!color)
@@ -688,16 +834,7 @@ static BOOL bind_targets(BOOL *has_depth)
 		depth = render_target_lookup(0, color->units_width, color->units_height, TRUE);
 	if (!color || !depth)
 		return FALSE;
-	for (which = 0; which < 2; which++)
-	{
-		last.surfaces[which] = surfaces[which];
-		if (surfaces[which])
-		{
-			last.words[which][0] = surfaces[which]->Data;
-			last.words[which][1] = surfaces[which]->Format;
-			last.words[which][2] = surfaces[which]->Size;
-		}
-	}
+	memcpy(last.targets, device.targets, sizeof(last.targets));
 	last.generation = render_target_generation;
 	last.color = color;
 	last.depth = depth;
@@ -731,8 +868,8 @@ struct texture_entry
 	__uint64 content_hash;
 	unsigned long checked_frame;
 	unsigned long last_used_frame;
-	/* the mark put in the header's Lock when these texels were last checked (texture_get) */
-	DWORD stamp;
+	/* texels in the texture cache, checked since its header was last set up (texture_get) */
+	BOOL checked;
 	struct xgpu_texture_description description;
 	void *memory;
 	unsigned long bytes;
@@ -748,7 +885,6 @@ void *physical_memory_get_texture_cache_base_address(void);
 
 static struct texture_entry *texture_buckets[TEXTURE_BUCKET_COUNT];
 static unsigned long texture_frame = 1;
-static DWORD texture_stamp;
 
 static unsigned long texture_bucket_index(DWORD data, DWORD format_word, DWORD size_word)
 {
@@ -842,9 +978,10 @@ static BOOL texture_cache_holds(const unsigned char *source, unsigned long size)
 	return base && source >= base && source + size <= base + TEXTURE_CACHE_BYTES;
 }
 
-static struct texture_entry *texture_get(D3DBaseTexture *texture, const DWORD *palette, DWORD palette_hash)
+static struct texture_entry *texture_get(struct stage_texture *texture, const DWORD *palette, DWORD palette_hash)
 {
-	DWORD data = texture->Data, format_word = texture->Format, size_word = texture->Size;
+	DWORD data = texture->data, format_word = texture->format, size_word = texture->size;
+	BOOL fresh = texture->fresh != 0;
 	struct texture_entry **bucket = &texture_buckets[texture_bucket_index(data, format_word, size_word)];
 	struct texture_entry *entry;
 	const unsigned char *source;
@@ -873,7 +1010,8 @@ static struct texture_entry *texture_get(D3DBaseTexture *texture, const DWORD *p
 		*bucket = entry;
 	}
 	entry->last_used_frame = texture_frame;
-	if (entry->checked_frame == texture_frame)
+	texture->fresh = 0;
+	if (entry->checked_frame == texture_frame && !fresh)
 		return entry->memory ? entry : NULL;
 	/* once a frame: the game writes texels with the CPU (the text cache) */
 	entry->checked_frame = texture_frame;
@@ -881,10 +1019,10 @@ static struct texture_entry *texture_get(D3DBaseTexture *texture, const DWORD *p
 	size = xgpu_texture_face_size(&entry->description) * (entry->description.cube_map ? 6 : 1);
 	if (!size || !platform_is_contiguous(source) || !platform_is_contiguous(source + size - 1))
 		return entry->memory ? entry : NULL;
-	/* the cache sets a header up again, Lock 0, for each texture it loads; a CPU writer of texels there
+	/* the cache sets a header up again, Lock 0, for each texture it loads (fresh); a CPU writer of texels there
 	(Bink, once it decodes) must put Lock to 0 after each write */
 	cached = texture_cache_holds(source, size);
-	if (cached && entry->memory && entry->stamp && texture->Lock == entry->stamp)
+	if (cached && entry->memory && entry->checked && !fresh)
 		return entry;
 	span = ps3_timer_now();
 	hash = hash_bytes(source, size) ^ palette_hash;
@@ -895,13 +1033,7 @@ static struct texture_entry *texture_get(D3DBaseTexture *texture, const DWORD *p
 		entry->content_hash = hash;
 		ps3_timer_add(_ps3_timer_texture_upload, span);
 	}
-	if (cached && entry->memory)
-	{
-		if (!++texture_stamp)
-			texture_stamp = 1;
-		entry->stamp = texture_stamp;
-		texture->Lock = texture_stamp;
-	}
+	entry->checked = cached && entry->memory;
 	return entry->memory ? entry : NULL;
 }
 
@@ -960,7 +1092,7 @@ static void textures_measure(unsigned long *count, unsigned long *bytes, unsigne
 
 static unsigned long stage_texture_mode(int stage)
 {
-	return (D3D__RenderState[D3DRS_PSTEXTUREMODES] >> (5 * stage)) & 0x1f;
+	return (render_state[D3DRS_PSTEXTUREMODES] >> (5 * stage)) & 0x1f;
 }
 
 static unsigned char address_mode(DWORD mode)
@@ -983,7 +1115,7 @@ static unsigned char anisotropy_level(DWORD maximum)
 
 static void sampler_fill(int stage, struct ps3_gpu_texture *texture)
 {
-	DWORD *state = D3D__TextureState[stage];
+	DWORD *state = texture_state[stage];
 	BOOL mipmapped = texture->levels > 1 && !(texture->format & GCM_TEXTURE_FORMAT_UNRM);
 	DWORD mip_filter = mipmapped ? state[D3DTSS_MIPFILTER] : D3DTEXF_NONE;
 	BOOL point = state[D3DTSS_MINFILTER] == D3DTEXF_POINT;
@@ -1012,14 +1144,14 @@ static void sampler_fill(int stage, struct ps3_gpu_texture *texture)
 /* the palette's 256 entries as ARGB (palettes keep the Xbox's order: trap 27) */
 static DWORD palette_load(int stage, DWORD palette[256])
 {
-	D3DPalette *source = device.palettes[stage];
+	DWORD data = device.stages[stage].palette;
 	const DWORD *entries;
 	DWORD hash = 2166136261UL;
 	int index;
 
-	if (!source || !source->Data)
+	if (!data)
 		return 0;
-	entries = (const DWORD *)PLATFORM_PHYSICAL_TO_VIRTUAL(source->Data);
+	entries = (const DWORD *)PLATFORM_PHYSICAL_TO_VIRTUAL(data);
 	for (index = 0; index < 256; index++)
 	{
 		palette[index] = __builtin_bswap32(entries[index]);
@@ -1034,26 +1166,26 @@ static void bind_textures(struct rsx_fragment_key *key)
 
 	for (stage = 0; stage < TEXTURE_STAGES; stage++)
 	{
-		D3DBaseTexture *texture = device.textures[stage];
+		struct stage_texture *texture = &device.stages[stage];
 		unsigned long mode = stage_texture_mode(stage);
 		struct render_target *target;
 		struct ps3_gpu_texture bound;
 
 		key->sampler_type[stage] = mode == 0x11 ? _rsx_sampler_2d : _rsx_sampler_none;
 		device.texture_scale[stage][0] = device.texture_scale[stage][1] = 1.0f;
-		if (!texture || !texture->Data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
+		if (!texture->bound || !texture->data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
 		{
 			ps3_gpu_set_texture(stage, NULL);
 			continue;
 		}
 		memset(&bound, 0, sizeof(bound));
-		target = render_target_find(texture->Data);
+		target = render_target_find(texture->data);
 		if (target)
 		{
 			struct xgpu_texture_description description;
 
 			/* a rendered target: its surface, linear, its one level */
-			xgpu_texture_describe(texture->Format, texture->Size, &description);
+			xgpu_texture_describe(texture->format, texture->size, &description);
 			bound.offset = target->offset;
 			bound.pitch = target->pitch;
 			bound.width = (uint16_t)target->width;
@@ -1076,7 +1208,7 @@ static void bind_textures(struct rsx_fragment_key *key)
 			DWORD palette[256], palette_hash = 0;
 			struct texture_entry *entry;
 
-			if (((texture->Format & D3DFORMAT_FORMAT_MASK) >> D3DFORMAT_FORMAT_SHIFT) == 0x0b)
+			if (((texture->format & D3DFORMAT_FORMAT_MASK) >> D3DFORMAT_FORMAT_SHIFT) == 0x0b)
 				palette_hash = palette_load(stage, palette);
 			entry = texture_get(texture, palette_hash ? palette : NULL, palette_hash);
 			if (!entry)
@@ -1162,7 +1294,7 @@ static const struct rsx_fragment_program *fragment_program_get(const struct rsx_
 
 static void fragment_key_build(struct rsx_fragment_key *key)
 {
-	DWORD *rs = D3D__RenderState;
+	DWORD *rs = render_state;
 	int index;
 
 	for (index = 0; index < 8; index++)
@@ -1181,8 +1313,8 @@ static void fragment_key_build(struct rsx_fragment_key *key)
 	key->compare_mode = rs[D3DRS_PSCOMPAREMODE];
 	for (index = 0; index < TEXTURE_STAGES; index++)
 	{
-		key->alpha_kill[index] = D3D__TextureState[index][D3DTSS_ALPHAKILL] == D3DTALPHAKILL_ENABLE;
-		key->color_sign[index] = (unsigned char)((D3D__TextureState[index][D3DTSS_COLORSIGN] >> 28) & 0xf);
+		key->alpha_kill[index] = texture_state[index][D3DTSS_ALPHAKILL] == D3DTALPHAKILL_ENABLE;
+		key->color_sign[index] = (unsigned char)((texture_state[index][D3DTSS_COLORSIGN] >> 28) & 0xf);
 	}
 	key->fog_enable = rs[D3DRS_FOGENABLE] != 0;
 	key->fog_table_mode = (unsigned char)rs[D3DRS_FOGTABLEMODE];
@@ -1196,7 +1328,7 @@ static void fragment_uniforms_build(float uniforms[_rsx_uniform_count][4])
 	static float converted[_rsx_uniform_texture_scale][4];
 	static BOOL valid;
 	DWORD now[22 + TEXTURE_STAGES * 6];
-	DWORD *rs = D3D__RenderState;
+	DWORD *rs = render_state;
 	int stage, count = 0;
 
 	for (stage = 0; stage < 8; stage++)
@@ -1212,7 +1344,7 @@ static void fragment_uniforms_build(float uniforms[_rsx_uniform_count][4])
 	now[count++] = rs[D3DRS_FOGDENSITY];
 	for (stage = 0; stage < TEXTURE_STAGES; stage++)
 	{
-		DWORD *state = D3D__TextureState[stage];
+		DWORD *state = texture_state[stage];
 
 		now[count++] = state[D3DTSS_BUMPENVMAT00];
 		now[count++] = state[D3DTSS_BUMPENVMAT01];
@@ -1239,7 +1371,7 @@ static void fragment_uniforms_build(float uniforms[_rsx_uniform_count][4])
 		converted[_rsx_uniform_fog][3] = 0.0f;
 		for (stage = 0; stage < TEXTURE_STAGES; stage++)
 		{
-			DWORD *state = D3D__TextureState[stage];
+			DWORD *state = texture_state[stage];
 
 			converted[_rsx_uniform_bump_matrix + stage][0] = dword_to_float(state[D3DTSS_BUMPENVMAT00]);
 			converted[_rsx_uniform_bump_matrix + stage][1] = dword_to_float(state[D3DTSS_BUMPENVMAT01]);
@@ -1279,7 +1411,7 @@ static DWORD blend_equation(DWORD operation)
 /* FALSE when the viewport leaves nothing of the target */
 static BOOL apply_raster_state(BOOL has_depth)
 {
-	DWORD *rs = D3D__RenderState;
+	DWORD *rs = render_state;
 	DWORD write = rs[D3DRS_COLORWRITEENABLE];
 	BOOL depth_test = has_depth && rs[D3DRS_ZENABLE];
 	struct ps3_gpu_state state;
@@ -1429,7 +1561,7 @@ HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWOR
 	if (!object)
 		return E_OUTOFMEMORY;
 	object->signature = VERTEX_SHADER_SIGNATURE;
-	object->id = device.next_vertex_shader_id++;
+	object->id = front.next_vertex_shader_id++;
 	if (function)
 	{
 		/* the header: the program type in the low word, the instruction count in the high */
@@ -1459,22 +1591,58 @@ void WINAPI D3DDevice_DeleteVertexShader(DWORD handle)
 	(void)handle;
 }
 
+enum
+{
+	_shader_set,
+	_shader_load,
+	_shader_select
+};
+
+/* (the Direct3D thread) a shader record */
+static void vertex_shader_apply(uint32_t kind, struct vertex_shader_object *object, uint32_t address)
+{
+	switch (kind)
+	{
+	case _shader_set:
+		device.vertex_shader = object;
+		device.program_address = 0;
+		device.program_slots[0] = object;
+		break;
+	case _shader_load:
+		device.program_slots[address] = object;
+		break;
+	default:
+		if (object)
+			device.vertex_shader = object;
+		if (address < VERTEX_PROGRAM_SLOTS)
+			device.program_address = address;
+		break;
+	}
+}
+
+static void vertex_shader_record(uint32_t kind, struct vertex_shader_object *object, uint32_t address)
+{
+	uint64_t *payload = record_begin(_record_vertex_shader, sizeof(uint64_t), kind, address);
+
+	*payload = (uint64_t)object;
+	record_commit();
+}
+
 void WINAPI D3DDevice_SetVertexShader(DWORD handle)
 {
 	struct vertex_shader_object *object = vertex_shader_from_handle(handle);
 
 	if (object)
 	{
-		device.vertex_shader = object;
-		device.program_address = 0;
-		device.program_slots[0] = object;
+		front.vertex_shader = object;
+		vertex_shader_record(_shader_set, object, 0);
 	}
 }
 
 void WINAPI D3DDevice_LoadVertexShader(DWORD handle, DWORD address)
 {
 	if (address < VERTEX_PROGRAM_SLOTS)
-		device.program_slots[address] = vertex_shader_from_handle(handle);
+		vertex_shader_record(_shader_load, vertex_shader_from_handle(handle), address);
 }
 
 void WINAPI D3DDevice_SelectVertexShader(DWORD handle, DWORD address)
@@ -1482,9 +1650,8 @@ void WINAPI D3DDevice_SelectVertexShader(DWORD handle, DWORD address)
 	struct vertex_shader_object *object = vertex_shader_from_handle(handle);
 
 	if (object)
-		device.vertex_shader = object;
-	if (address < VERTEX_PROGRAM_SLOTS)
-		device.program_address = address;
+		front.vertex_shader = object;
+	vertex_shader_record(_shader_select, object, address);
 }
 
 void WINAPI D3DDevice_GetVertexShaderSize(DWORD handle, UINT *size)
@@ -1494,15 +1661,40 @@ void WINAPI D3DDevice_GetVertexShaderSize(DWORD handle, UINT *size)
 	*size = object ? object->instruction_count : 0;
 }
 
-void WINAPI D3DDevice_SetVertexShaderConstant(INT reg, CONST void *constant_data, DWORD constant_count)
+/* the timer build: the game thread's time in a call, without its waits for the ring's room (_ps3_timer_thread_wait) */
+static uint64_t front_call_start, front_call_waits;
+
+static void front_call_begin(void)
+{
+	front_call_waits = ps3_timers[_ps3_timer_thread_wait];
+	front_call_start = ps3_timer_now();
+}
+
+static void front_call_end(int timer)
+{
+	ps3_timers[timer] += ps3_timer_now() - front_call_start - (ps3_timers[_ps3_timer_thread_wait] - front_call_waits);
+}
+
+static void constants_record(INT reg, CONST void *constant_data, DWORD constant_count)
 {
 	long first = reg + VERTEX_CONSTANT_BIAS;
+	void *payload;
 
-	if (first < 0 || first >= VERTEX_CONSTANT_COUNT)
+	if (first < 0 || first >= VERTEX_CONSTANT_COUNT || !constant_count)
 		return;
 	if (first + (long)constant_count > VERTEX_CONSTANT_COUNT)
 		constant_count = VERTEX_CONSTANT_COUNT - first;
-	constants_store((unsigned long)first, constant_data, constant_count);
+	payload = record_begin(_record_constants, constant_count * sizeof(device.constants[0]), (uint32_t)first,
+		(uint32_t)constant_count);
+	memcpy(payload, constant_data, constant_count * sizeof(device.constants[0]));
+	record_commit();
+}
+
+void WINAPI D3DDevice_SetVertexShaderConstant(INT reg, CONST void *constant_data, DWORD constant_count)
+{
+	front_call_begin();
+	constants_record(reg, constant_data, constant_count);
+	front_call_end(_ps3_timer_front_constants);
 }
 
 /* the program that runs: the one loaded at the selected address, else the current shader's own */
@@ -1791,6 +1983,12 @@ static float *vertex_arena_allocate(unsigned long bytes, uint32_t *offset)
 	return (float *)(vertex_arena.memory + vertex_arena.used - bytes);
 }
 
+/* cache_files.c, before a load writes the tag cache: the draws that read it are done first */
+void d3d8_tag_cache_loading(void)
+{
+	direct3d_drain();
+}
+
 /* cache_files.c: a map's tag data or a BSP was loaded into [address, address + size) of the tag cache;
 every copy goes, as they share one block */
 void d3d8_tag_cache_loaded(void const *address, unsigned long size)
@@ -1798,6 +1996,8 @@ void d3d8_tag_cache_loaded(void const *address, unsigned long size)
 	const unsigned char *begin = address, *end = begin + size;
 	unsigned long index;
 
+	/* the caches are the Direct3D thread's: it waits idle meanwhile */
+	direct3d_drain();
 	for (index = 0; index < VERTEX_CACHE_BUCKET_COUNT; index++)
 	{
 		while (vertex_cache_buckets[index])
@@ -1835,7 +2035,7 @@ void d3d8_tag_cache_loaded(void const *address, unsigned long size)
 part): its vertex count, so the copies of its elements get their full size at once */
 void d3d8_draw_vertex_count(unsigned long vertex_count)
 {
-	device.draw_vertex_count = vertex_count;
+	front.draw_vertex_count = vertex_count;
 }
 
 /* the RSX copy of one element of a stream with vertices [0, first + count) converted, room for the buffer's
@@ -1925,15 +2125,15 @@ static BOOL setup_vertices(const struct rsx_vertex_program *program, unsigned lo
 	for (index = 0; index < declaration->element_count && slot_count < 15; index++)
 	{
 		const struct vertex_element *element = &declaration->elements[index];
-		DWORD data = device.streams[element->stream].data;
+		const unsigned char *base = device.streams[element->stream].base;
 		const struct vertex_cache_entry *cached;
 		const unsigned char *source;
 
 		if (element->reg >= VERTEX_ATTRIBUTE_COUNT || !(program->input_mask & (1u << element->reg)) ||
-			(placed & (1u << element->reg)) || !data || element->type == D3DVSDT_NONE)
+			(placed & (1u << element->reg)) || !base || element->type == D3DVSDT_NONE)
 			continue;
 		placed |= 1u << element->reg;
-		source = (const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(data) + element->offset;
+		source = base + element->offset;
 		cached = vertex_cache_get(source, device.streams[element->stream].stride, element->type, element->bytes,
 			first, count, extent);
 		if (cached)
@@ -1986,13 +2186,13 @@ static BOOL setup_cached_vertices(const struct rsx_vertex_program *program, unsi
 	for (index = 0; index < declaration->element_count; index++)
 	{
 		const struct vertex_element *element = &declaration->elements[index];
-		DWORD data = device.streams[element->stream].data;
+		const unsigned char *base = device.streams[element->stream].base;
 
 		if (element->reg >= VERTEX_ATTRIBUTE_COUNT || !(program->input_mask & (1u << element->reg)) ||
-			(placed & (1u << element->reg)) || !data || element->type == D3DVSDT_NONE)
+			(placed & (1u << element->reg)) || !base || element->type == D3DVSDT_NONE)
 			continue;
-		cached[element->reg] = vertex_cache_get((const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(data) +
-			element->offset, device.streams[element->stream].stride, element->type, element->bytes, 0, extent, extent);
+		cached[element->reg] = vertex_cache_get(base + element->offset, device.streams[element->stream].stride,
+			element->type, element->bytes, 0, extent, extent);
 		if (!cached[element->reg])
 			return FALSE;
 		placed |= 1u << element->reg;
@@ -2086,59 +2286,124 @@ static uint32_t primitive_type(D3DPRIMITIVETYPE type)
 	return type == D3DPT_POLYGON ? GCM_TYPE_TRIANGLE_FAN : (uint32_t)type;
 }
 
-void WINAPI D3DDevice_SetStreamSource(UINT stream_number, D3DVertexBuffer *stream_data, UINT stride)
+static unsigned long bit_count(DWORD value)
 {
-	if (stream_number >= 16)
-		return;
-	device.streams[stream_number].data = stream_data ? stream_data->Data : 0;
-	device.streams[stream_number].stride = stride;
+	unsigned long count = 0;
+
+	for (; value; value &= value - 1)
+		count++;
+	return count;
 }
 
-void WINAPI D3DDevice_SetIndices(D3DIndexBuffer *index_data, UINT base_vertex_index)
+/* a draw record; stream_mask's streams follow in order, then the indices it copied, then the vertices */
+struct record_draw
 {
-	device.base_vertex_index = base_vertex_index;
-	D3D__IndexData = index_data ? (WORD *)(__uint64)index_data->Data : NULL;
+	uint32_t primitive;
+	/* vertices, or indices */
+	uint32_t count;
+	/* the first vertex, or the indices' base vertex */
+	uint32_t start;
+	/* indices: the buffer's vertices from vertex 0 (d3d8_draw_vertex_count), or 0 */
+	uint32_t extent;
+	/* indices: their range, when the game's thread read it to copy vertices */
+	uint32_t ranged;
+	uint32_t minimum;
+	uint32_t maximum;
+	uint32_t stream_mask;
+	/* indices: in the tag cache, or the record's copy */
+	uint64_t indices;
+	/* this draw's number (texture Lock words, ring.completed_draws) */
+	uint32_t draw;
+	uint32_t pad;
+};
+
+/* vertex v of the stream at base + v * stride */
+struct record_stream
+{
+	uint64_t base;
+	uint32_t stride;
+	uint32_t pad;
+};
+
+/* each vertex follows: the written registers' 4 floats, in register order */
+struct record_immediate
+{
+	uint32_t primitive;
+	uint32_t count;
+	uint32_t written;
+	uint32_t draw;
+};
+
+/* the rectangles follow (a of the record) */
+struct record_clear
+{
+	uint32_t color;
+	uint32_t z;
+	uint32_t stencil;
+	uint32_t pad;
+};
+
+typedef char record_size_check[sizeof(struct record_draw) % 16 == 0 && sizeof(struct record_stream) == 16 &&
+	sizeof(struct record_immediate) == 16 && sizeof(struct record_clear) == 16 ? 1 : -1];
+
+/* ---------- draws, as the Direct3D thread runs their records */
+
+static void streams_load(const struct record_draw *draw)
+{
+	const struct record_stream *stream = (const struct record_stream *)(draw + 1);
+	unsigned long index;
+
+	for (index = 0; index < 16; index++)
+	{
+		if (draw->stream_mask & (1u << index))
+		{
+			device.streams[index].base = (const unsigned char *)stream->base;
+			device.streams[index].stride = stream->stride;
+			stream++;
+		}
+	}
 }
 
-void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type_value, UINT start_vertex, UINT vertex_count)
+static void draw_vertices_run(const struct record_draw *draw)
 {
 	const struct rsx_vertex_program *program;
 	uint64_t span;
 	BOOL ready;
 
-	if (!vertex_count || !(program = prepare_draw()))
+	streams_load(draw);
+	if (!draw->count || !(program = prepare_draw()))
 		return;
 	span = ps3_timer_now();
-	ready = setup_vertices(program, start_vertex, vertex_count, 0);
+	ready = setup_vertices(program, draw->start, draw->count, 0);
 	ps3_timer_add(_ps3_timer_draw_vertices, span);
 	if (!ready)
 	{
 		statistics.skipped_scratch++;
 		return;
 	}
-	ps3_gpu_draw(primitive_type(primitive_type_value), 0, vertex_count);
+	ps3_gpu_draw(primitive_type((D3DPRIMITIVETYPE)draw->primitive), 0, draw->count);
 	statistics.draws++;
 }
 
-void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type_value, UINT vertex_count, CONST WORD *index_data)
+static void draw_indexed_run(const struct record_draw *draw)
 {
 	const struct rsx_vertex_program *program;
+	const WORD *index_data = (const WORD *)draw->indices;
+	unsigned long vertex_count = draw->count, extent = draw->extent, base_vertex_index = draw->start;
 	unsigned long index, minimum = 0xffff, maximum = 0;
-	/* the buffer's vertices from its vertex 0, as the cache counts them; for this draw only */
-	unsigned long extent = device.draw_vertex_count ? device.base_vertex_index + device.draw_vertex_count : 0;
 	uint32_t offset;
 	unsigned short *indices;
 	uint64_t span;
 	BOOL ready;
 
-	device.draw_vertex_count = 0;
+	streams_load(draw);
 	if (!vertex_count || !index_data || !(program = prepare_draw()))
 		return;
 	span = ps3_timer_now();
 	/* a map buffer the vertex cache holds whole: its indices as they are, a model's from the index cache */
-	if (extent && setup_cached_vertices(program, device.base_vertex_index, extent))
+	if (extent && setup_cached_vertices(program, base_vertex_index, extent))
 	{
-		unsigned long vertices = extent - device.base_vertex_index;
+		unsigned long vertices = extent - base_vertex_index;
 
 		span = ps3_timer_add(_ps3_timer_draw_vertices, span);
 		ready = index_cache_offset(index_data, vertex_count, vertices, &offset) ||
@@ -2146,22 +2411,30 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type_value,
 		ps3_timer_add(_ps3_timer_draw_indices, span);
 		if (ready)
 		{
-			ps3_gpu_draw_indexed(primitive_type(primitive_type_value), offset, vertex_count);
+			ps3_gpu_draw_indexed(primitive_type((D3DPRIMITIVETYPE)draw->primitive), offset, vertex_count);
 			statistics.draws++;
 			return;
 		}
 		span = ps3_timer_now();
 	}
-	for (index = 0; index < vertex_count; index++)
+	if (draw->ranged)
 	{
-		if (index_data[index] < minimum)
-			minimum = index_data[index];
-		if (index_data[index] > maximum)
-			maximum = index_data[index];
+		minimum = draw->minimum;
+		maximum = draw->maximum;
+	}
+	else
+	{
+		for (index = 0; index < vertex_count; index++)
+		{
+			if (index_data[index] < minimum)
+				minimum = index_data[index];
+			if (index_data[index] > maximum)
+				maximum = index_data[index];
+		}
 	}
 	span = ps3_timer_add(_ps3_timer_draw_indices, span);
 	/* index i is vertex base + i; the converted vertices start at the smallest index */
-	ready = setup_vertices(program, device.base_vertex_index + minimum, maximum - minimum + 1, extent);
+	ready = setup_vertices(program, base_vertex_index + minimum, maximum - minimum + 1, extent);
 	span = ps3_timer_add(_ps3_timer_draw_vertices, span);
 	if (!ready || !(indices = ps3_gpu_scratch(vertex_count * sizeof(unsigned short), 128, &offset)))
 	{
@@ -2171,47 +2444,24 @@ void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type_value,
 	for (index = 0; index < vertex_count; index++)
 		indices[index] = (unsigned short)(index_data[index] - minimum);
 	ps3_timer_add(_ps3_timer_draw_indices, span);
-	ps3_gpu_draw_indexed(primitive_type(primitive_type_value), offset, vertex_count);
+	ps3_gpu_draw_indexed(primitive_type((D3DPRIMITIVETYPE)draw->primitive), offset, vertex_count);
 	statistics.draws++;
 }
 
-/* ---------- immediate mode */
-
-void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type_value)
-{
-	device.immediate_active = TRUE;
-	device.immediate_type = primitive_type_value;
-	device.immediate_count = 0;
-}
-
-static void immediate_emit(void)
-{
-	unsigned long floats = VERTEX_ATTRIBUTE_COUNT * 4;
-
-	if (device.immediate_count == device.immediate_capacity)
-	{
-		unsigned long capacity = device.immediate_capacity ? device.immediate_capacity * 2 : 256;
-		float *vertices = realloc(device.immediate_vertices, capacity * floats * sizeof(float));
-
-		if (!vertices)
-			return;
-		device.immediate_vertices = vertices;
-		device.immediate_capacity = capacity;
-	}
-	memcpy(device.immediate_vertices + device.immediate_count * floats, device.attributes, floats * sizeof(float));
-	device.immediate_count++;
-}
-
-void WINAPI D3DDevice_End(void)
+static void immediate_run(const struct record_immediate *immediate)
 {
 	const struct rsx_vertex_program *program;
-	unsigned long count = device.immediate_count, regs[VERTEX_ATTRIBUTE_COUNT], reg_count = 0, index, vertex;
+	const float *data = (const float *)(immediate + 1);
+	unsigned long count = immediate->count, regs[VERTEX_ATTRIBUTE_COUNT], slots[VERTEX_ATTRIBUTE_COUNT];
+	unsigned long reg_count = 0, written_count = 0, index, vertex;
 	uint32_t offset = 0;
 	float *out;
 
-	device.immediate_active = FALSE;
 	if (!count || !(program = prepare_draw()))
 		return;
+	/* a written register's place among a vertex's; the others keep their value for every vertex */
+	for (index = 0; index < VERTEX_ATTRIBUTE_COUNT; index++)
+		slots[index] = immediate->written & (1u << index) ? written_count++ : VERTEX_ATTRIBUTE_COUNT;
 	for (index = 0; index < VERTEX_ATTRIBUTE_COUNT && reg_count < 15; index++)
 	{
 		if (program->input_mask & (1u << index))
@@ -2225,22 +2475,551 @@ void WINAPI D3DDevice_End(void)
 	}
 	for (vertex = 0; vertex < count; vertex++)
 	{
-		const float *source = device.immediate_vertices + vertex * VERTEX_ATTRIBUTE_COUNT * 4;
+		const float *source = data + vertex * written_count * 4;
 
 		for (index = 0; index < reg_count; index++, out += 4)
-			memcpy(out, source + regs[index] * 4, 4 * sizeof(float));
+		{
+			unsigned long slot = slots[regs[index]];
+
+			memcpy(out, slot < VERTEX_ATTRIBUTE_COUNT ? source + slot * 4 : device.attributes[regs[index]],
+				4 * sizeof(float));
+		}
 	}
 	for (index = 0; index < VERTEX_ATTRIBUTE_COUNT; index++)
 		ps3_gpu_set_attribute((uint32_t)index, 0, 0, 0);
 	for (index = 0; index < reg_count; index++)
 		ps3_gpu_set_attribute((uint32_t)regs[index], offset + (uint32_t)(index * 16), (uint32_t)(reg_count * 16), 4);
-	ps3_gpu_draw(primitive_type(device.immediate_type), 0, (uint32_t)count);
+	ps3_gpu_draw(primitive_type((D3DPRIMITIVETYPE)immediate->primitive), 0, (uint32_t)count);
 	statistics.draws++;
+}
+
+static void clear_run(const struct record *record)
+{
+	const struct record_clear *clear = (const struct record_clear *)(record + 1);
+	const D3DRECT *rectangles = (const D3DRECT *)(clear + 1);
+	DWORD count = record->a, flags = record->b, color = clear->color, stencil = clear->stencil;
+	BOOL has_depth = FALSE;
+	DWORD gpu_flags, depth;
+	long left, top, right, bottom;
+	DWORD index;
+	float z;
+
+	memcpy(&z, &clear->z, sizeof(z));
+	if (!device.gpu_ready || !bind_targets(&has_depth))
+		return;
+	/* the Xbox clears the channels named: the fog screen clears only alpha */
+	gpu_flags = flags & (D3DCLEAR_TARGET_R | D3DCLEAR_TARGET_G | D3DCLEAR_TARGET_B | D3DCLEAR_TARGET_A);
+	if (has_depth)
+		gpu_flags |= flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL);
+	if (!gpu_flags)
+		return;
+	if (z < 0.0f)
+		z = 0.0f;
+	/* 1.0 * 16777215 + 0.5 rounds to 2^24 in a float, which shifted out to a depth of 0 */
+	depth = z < 1.0f ? (DWORD)(z * 16777215.0f + 0.5f) : 0xffffffUL;
+	if (depth > 0xffffffUL)
+		depth = 0xffffffUL;
+	depth = (depth << 8) | (stencil & 0xff);
+	/* the NV2A clips a clear to the viewport, which keeps split-screen windows apart; a rectangle moves with the
+	menus' centring (d3d8_gl.c); in the target's pixels */
+	for (index = 0; index < (count ? count : 1); index++)
+	{
+		long offset = 0;
+
+		left = (long)device.viewport.X;
+		top = (long)device.viewport.Y;
+		right = left + (long)device.viewport.Width;
+		bottom = top + (long)device.viewport.Height;
+		if (count)
+		{
+			if (rectangles[index].x1 > left) left = rectangles[index].x1;
+			if (rectangles[index].y1 > top) top = rectangles[index].y1;
+			if (rectangles[index].x2 < right) right = rectangles[index].x2;
+			if (rectangles[index].y2 < bottom) bottom = rectangles[index].y2;
+			offset = ui_offset;
+		}
+		left = scaled_pixel((float)(left + offset), device.target_scale[0]);
+		top = scaled_pixel((float)top, device.target_scale[1]);
+		right = scaled_pixel((float)(right + offset), device.target_scale[0]);
+		bottom = scaled_pixel((float)bottom, device.target_scale[1]);
+		if (left < 0) left = 0;
+		if (top < 0) top = 0;
+		if (right > (long)device.target_pixel_width) right = (long)device.target_pixel_width;
+		if (bottom > (long)device.target_pixel_height) bottom = (long)device.target_pixel_height;
+		if (left < right && top < bottom)
+			ps3_gpu_clear(gpu_flags, color, depth, (uint32_t)left, (uint32_t)top, (uint32_t)(right - left),
+				(uint32_t)(bottom - top));
+	}
+}
+
+/* ---------- draws, as the game's thread records them */
+
+void WINAPI D3DDevice_SetStreamSource(UINT stream_number, D3DVertexBuffer *stream_data, UINT stride)
+{
+	if (stream_number >= 16)
+		return;
+	front.streams[stream_number].data = stream_data ? stream_data->Data : 0;
+	front.streams[stream_number].stride = stride;
+}
+
+void WINAPI D3DDevice_SetIndices(D3DIndexBuffer *index_data, UINT base_vertex_index)
+{
+	front.base_vertex_index = base_vertex_index;
+	D3D__IndexData = index_data ? (WORD *)(__uint64)index_data->Data : NULL;
+}
+
+/* the tag cache's data, which stays until a load; the game waits for the Direct3D thread before one */
+static BOOL static_data(const void *begin, unsigned long bytes)
+{
+	const unsigned char *data = begin;
+
+	return static_vertices_end && data >= static_vertices_begin && data + bytes <= static_vertices_end;
+}
+
+/* the render and texture stage states the game changed since the last record (the inline setters write them) */
+static void record_states(void)
+{
+	uint32_t pairs[(D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX) * 2];
+	unsigned long count = 0, index, stage;
+
+	for (index = 0; index < D3DRS_MAX; index++)
+	{
+		if (D3D__RenderState[index] != front.recorded_render_state[index])
+		{
+			front.recorded_render_state[index] = D3D__RenderState[index];
+			pairs[count * 2] = (uint32_t)index;
+			pairs[count * 2 + 1] = D3D__RenderState[index];
+			count++;
+		}
+	}
+	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
+	{
+		for (index = 0; index < D3DTSS_MAX; index++)
+		{
+			if (D3D__TextureState[stage][index] != front.recorded_texture_state[stage][index])
+			{
+				front.recorded_texture_state[stage][index] = D3D__TextureState[stage][index];
+				pairs[count * 2] = (uint32_t)(D3DRS_MAX + stage * D3DTSS_MAX + index);
+				pairs[count * 2 + 1] = D3D__TextureState[stage][index];
+				count++;
+			}
+		}
+	}
+	if (count)
+	{
+		memcpy(record_begin(_record_states, count * 2 * sizeof(uint32_t), (uint32_t)count, 0), pairs,
+			count * 2 * sizeof(uint32_t));
+		record_commit();
+	}
+}
+
+static void record_attributes(void)
+{
+	DWORD mask = 0;
+	unsigned long reg, count = 0;
+	float *payload;
+
+	for (reg = 0; reg < VERTEX_ATTRIBUTE_COUNT; reg++)
+	{
+		if (memcmp(front.attributes[reg], front.recorded_attributes[reg], sizeof(front.attributes[0])))
+		{
+			mask |= 1u << reg;
+			count++;
+		}
+	}
+	if (!mask)
+		return;
+	payload = record_begin(_record_attributes, count * sizeof(front.attributes[0]), mask, 0);
+	for (reg = 0; reg < VERTEX_ATTRIBUTE_COUNT; reg++)
+	{
+		if (mask & (1u << reg))
+		{
+			memcpy(front.recorded_attributes[reg], front.attributes[reg], sizeof(front.attributes[0]));
+			memcpy(payload, front.attributes[reg], sizeof(front.attributes[0]));
+			payload += 4;
+		}
+	}
+	record_commit();
+}
+
+/* the bound surfaces' words, which the game can change between draws (the back buffer's width) */
+static void record_targets(void)
+{
+	struct surface_words targets[2];
+
+	surface_words_read(front.render_target, &targets[0]);
+	surface_words_read(front.depth_stencil, &targets[1]);
+	if (memcmp(targets, front.recorded_targets, sizeof(targets)))
+	{
+		memcpy(front.recorded_targets, targets, sizeof(targets));
+		memcpy(record_begin(_record_render_target, sizeof(targets), 0, 0), targets, sizeof(targets));
+		record_commit();
+	}
+}
+
+static void record_textures(DWORD draw)
+{
+	unsigned long stage;
+
+	for (stage = 0; stage < TEXTURE_STAGES; stage++)
+	{
+		D3DBaseTexture *texture = front.textures[stage];
+		D3DPalette *palette = front.palettes[stage];
+		struct stage_texture now;
+
+		now.bound = texture != NULL;
+		now.data = texture ? texture->Data : 0;
+		now.format = texture ? texture->Format : 0;
+		now.size = texture ? texture->Size : 0;
+		now.palette = palette ? palette->Data : 0;
+		now.fresh = texture && !texture->Lock;
+		/* as the Xbox's runtime: Lock holds the last draw that reads it (d3d8_resource_busy) */
+		if (texture)
+			texture->Lock = draw;
+		if (memcmp(&now, &front.recorded_stages[stage], sizeof(now)))
+		{
+			memcpy(record_begin(_record_texture, sizeof(now), (uint32_t)stage, 0), &now, sizeof(now));
+			record_commit();
+			front.recorded_stages[stage] = now;
+			front.recorded_stages[stage].fresh = 0;
+		}
+	}
+}
+
+/* before a draw, what the game changed that its record does not carry; the draw's number */
+static DWORD draw_prologue(void)
+{
+	DWORD draw = ring.recorded_draws + 1;
+
+	if (!draw)
+		draw = 1;
+	ring.recorded_draws = draw;
+	record_states();
+	record_attributes();
+	record_targets();
+	record_textures(draw);
+	return draw;
+}
+
+/* a draw's streams: the tag cache's read where they are, the others copied (the game can write them again at once) */
+struct stream_plan
+{
+	DWORD mask;
+	DWORD copied;
+	const unsigned char *sources[16];
+	UINT strides[16];
+	/* the bytes of a vertex its elements read */
+	unsigned long spans[16];
+};
+
+static void streams_plan(struct stream_plan *plan)
+{
+	const struct vertex_shader_object *declaration = front.vertex_shader;
+	unsigned long index;
+
+	memset(plan, 0, sizeof(*plan));
+	if (!declaration)
+		return;
+	for (index = 0; index < declaration->element_count; index++)
+	{
+		const struct vertex_element *element = &declaration->elements[index];
+		unsigned long stream = element->stream, span = element->offset + element->bytes;
+
+		if (stream >= 16)
+			continue;
+		if (!(plan->mask & (1u << stream)))
+		{
+			DWORD data = front.streams[stream].data;
+
+			plan->mask |= 1u << stream;
+			plan->strides[stream] = front.streams[stream].stride;
+			plan->sources[stream] = data ? (const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(data) : NULL;
+			if (plan->sources[stream] && !static_data(plan->sources[stream], 1))
+				plan->copied |= 1u << stream;
+		}
+		if (span > plan->spans[stream])
+			plan->spans[stream] = span;
+	}
+}
+
+static unsigned long stream_copy_bytes(const struct stream_plan *plan, unsigned long stream, unsigned long count)
+{
+	return count ? (count - 1) * plan->strides[stream] + plan->spans[stream] : 0;
+}
+
+static unsigned long streams_copy_bytes(const struct stream_plan *plan, unsigned long count)
+{
+	unsigned long index, bytes = 0;
+
+	for (index = 0; index < 16; index++)
+	{
+		if (plan->copied & (1u << index))
+			bytes += (stream_copy_bytes(plan, index, count) + 15) & ~15UL;
+	}
+	return bytes;
+}
+
+/* the record's streams, and the copies of vertices [first, first + count) at copies */
+static void streams_write(const struct stream_plan *plan, struct record_draw *draw, unsigned char *copies,
+	unsigned long first, unsigned long count)
+{
+	struct record_stream *stream = (struct record_stream *)(draw + 1);
+	unsigned long index;
+
+	draw->stream_mask = plan->mask;
+	for (index = 0; index < 16; index++)
+	{
+		if (!(plan->mask & (1u << index)))
+			continue;
+		stream->stride = plan->strides[index];
+		stream->pad = 0;
+		stream->base = (uint64_t)plan->sources[index];
+		if (plan->copied & (1u << index))
+		{
+			unsigned long bytes = stream_copy_bytes(plan, index, count);
+
+			memcpy(copies, plan->sources[index] + first * plan->strides[index], bytes);
+			/* (vertex first is the copy's first) */
+			stream->base = (uint64_t)copies - (uint64_t)first * plan->strides[index];
+			copies += (bytes + 15) & ~15UL;
+		}
+		stream++;
+	}
+}
+
+static void draw_vertices_record(D3DPRIMITIVETYPE primitive_type_value, UINT start_vertex, UINT vertex_count)
+{
+	struct stream_plan plan;
+	struct record_draw *draw;
+	unsigned long streams;
+	DWORD number;
+
+	if (!vertex_count)
+		return;
+	number = draw_prologue();
+	streams_plan(&plan);
+	streams = bit_count(plan.mask);
+	draw = record_begin(_record_draw, sizeof(*draw) + streams * sizeof(struct record_stream) +
+		streams_copy_bytes(&plan, vertex_count), 0, 0);
+	if (!draw)
+		return;
+	memset(draw, 0, sizeof(*draw));
+	draw->primitive = primitive_type_value;
+	draw->count = vertex_count;
+	draw->start = start_vertex;
+	draw->draw = number;
+	streams_write(&plan, draw, (unsigned char *)(draw + 1) + streams * sizeof(struct record_stream), start_vertex,
+		vertex_count);
+	record_commit();
+}
+
+void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type_value, UINT start_vertex, UINT vertex_count)
+{
+	front_call_begin();
+	draw_vertices_record(primitive_type_value, start_vertex, vertex_count);
+	front_call_end(_ps3_timer_front_draws);
+}
+
+static void draw_indexed_record(D3DPRIMITIVETYPE primitive_type_value, UINT vertex_count, CONST WORD *index_data)
+{
+	/* the buffer's vertices from its vertex 0, as the cache counts them; for this draw only */
+	unsigned long extent = front.draw_vertex_count ? front.base_vertex_index + front.draw_vertex_count : 0;
+	unsigned long streams, index_bytes = 0, index, minimum = 0xffff, maximum = 0, first = 0, count = 0;
+	struct stream_plan plan;
+	struct record_draw *draw;
+	unsigned char *next;
+	BOOL copied_indices;
+	DWORD number;
+
+	front.draw_vertex_count = 0;
+	if (!vertex_count || !index_data)
+		return;
+	number = draw_prologue();
+	streams_plan(&plan);
+	/* indices out of the tag cache are copied, as the Xbox put them in its push buffer */
+	copied_indices = !static_data(index_data, vertex_count * sizeof(WORD));
+	if (copied_indices)
+		index_bytes = (vertex_count * sizeof(WORD) + 15) & ~15UL;
+	if (plan.copied)
+	{
+		for (index = 0; index < vertex_count; index++)
+		{
+			if (index_data[index] < minimum)
+				minimum = index_data[index];
+			if (index_data[index] > maximum)
+				maximum = index_data[index];
+		}
+		first = front.base_vertex_index + minimum;
+		count = maximum - minimum + 1;
+	}
+	streams = bit_count(plan.mask);
+	draw = record_begin(_record_draw_indexed, sizeof(*draw) + streams * sizeof(struct record_stream) + index_bytes +
+		streams_copy_bytes(&plan, count), 0, 0);
+	if (!draw)
+		return;
+	memset(draw, 0, sizeof(*draw));
+	draw->primitive = primitive_type_value;
+	draw->count = vertex_count;
+	draw->start = front.base_vertex_index;
+	draw->extent = extent;
+	draw->draw = number;
+	next = (unsigned char *)(draw + 1) + streams * sizeof(struct record_stream);
+	draw->indices = (uint64_t)index_data;
+	if (copied_indices)
+	{
+		memcpy(next, index_data, vertex_count * sizeof(WORD));
+		draw->indices = (uint64_t)next;
+		next += index_bytes;
+	}
+	if (plan.copied)
+	{
+		draw->ranged = 1;
+		draw->minimum = minimum;
+		draw->maximum = maximum;
+	}
+	streams_write(&plan, draw, next, first, count);
+	record_commit();
+}
+
+void WINAPI D3DDevice_DrawIndexedVertices(D3DPRIMITIVETYPE primitive_type_value, UINT vertex_count, CONST WORD *index_data)
+{
+	front_call_begin();
+	draw_indexed_record(primitive_type_value, vertex_count, index_data);
+	front_call_end(_ps3_timer_front_draws);
+}
+
+/* ---------- immediate mode */
+
+void WINAPI D3DDevice_Begin(D3DPRIMITIVETYPE primitive_type_value)
+{
+	front.immediate_active = TRUE;
+	front.immediate_type = primitive_type_value;
+	front.immediate_count = 0;
+	front.immediate_written = 0;
+	front.immediate_changed = 0;
+}
+
+static void immediate_layout_set(DWORD layout)
+{
+	unsigned long reg;
+
+	front.immediate_layout = layout;
+	front.immediate_reg_count = 0;
+	for (reg = 0; reg < VERTEX_ATTRIBUTE_COUNT; reg++)
+	{
+		if (layout & (1u << reg))
+			front.immediate_regs[front.immediate_reg_count++] = (unsigned char)reg;
+	}
+	front.immediate_floats = front.immediate_reg_count * 4;
+}
+
+/* the vertices so far with the registers changed since the layout was fixed, at their values before */
+static void immediate_widen(void)
+{
+	DWORD old_layout = front.immediate_layout;
+	unsigned long old_floats = front.immediate_floats, count = front.immediate_count, vertex, slot, old_slot;
+	unsigned long capacity;
+	const float *in = front.immediate_vertices;
+	float *vertices, *out;
+
+	immediate_layout_set(old_layout | front.immediate_changed);
+	capacity = (count + 256) * front.immediate_floats;
+	vertices = malloc(capacity * sizeof(float));
+	if (!vertices)
+	{
+		/* (those registers then take their new value for every vertex) */
+		immediate_layout_set(old_layout);
+		front.immediate_changed = 0;
+		return;
+	}
+	for (vertex = 0, out = vertices; vertex < count; vertex++, in += old_floats)
+	{
+		for (slot = 0, old_slot = 0; slot < front.immediate_reg_count; slot++, out += 4)
+		{
+			unsigned long reg = front.immediate_regs[slot];
+
+			if (old_layout & (1u << reg))
+				memcpy(out, in + 4 * old_slot++, 4 * sizeof(float));
+			else
+				memcpy(out, front.immediate_before[reg], 4 * sizeof(float));
+		}
+	}
+	free(front.immediate_vertices);
+	front.immediate_vertices = vertices;
+	front.immediate_capacity = capacity;
+	front.immediate_changed = 0;
+}
+
+static void immediate_emit(void)
+{
+	unsigned long slot, needed;
+	float *out;
+
+	if (!front.immediate_count)
+	{
+		immediate_layout_set(front.immediate_written);
+		front.immediate_changed = 0;
+	}
+	else if (front.immediate_changed)
+	{
+		immediate_widen();
+	}
+	needed = (front.immediate_count + 1) * front.immediate_floats;
+	if (needed > front.immediate_capacity)
+	{
+		unsigned long capacity = front.immediate_capacity ? front.immediate_capacity * 2 : 4096;
+		float *vertices;
+
+		while (capacity < needed)
+			capacity *= 2;
+		vertices = realloc(front.immediate_vertices, capacity * sizeof(float));
+		if (!vertices)
+			return;
+		front.immediate_vertices = vertices;
+		front.immediate_capacity = capacity;
+	}
+	out = front.immediate_vertices + front.immediate_count * front.immediate_floats;
+	for (slot = 0; slot < front.immediate_reg_count; slot++, out += 4)
+		memcpy(out, front.attributes[front.immediate_regs[slot]], 4 * sizeof(float));
+	front.immediate_count++;
+}
+
+static void immediate_record(void)
+{
+	unsigned long count = front.immediate_count;
+	struct record_immediate *immediate;
+	DWORD number;
+
+	front.immediate_active = FALSE;
+	if (!count)
+		return;
+	/* a register changed after the last vertex: the vertices keep its value before */
+	if (front.immediate_changed)
+		immediate_widen();
+	number = draw_prologue();
+	immediate = record_begin(_record_immediate, sizeof(*immediate) + count * front.immediate_floats * sizeof(float), 0,
+		0);
+	if (!immediate)
+		return;
+	immediate->primitive = front.immediate_type;
+	immediate->count = count;
+	immediate->written = front.immediate_layout;
+	immediate->draw = number;
+	memcpy(immediate + 1, front.immediate_vertices, count * front.immediate_floats * sizeof(float));
+	record_commit();
+}
+
+void WINAPI D3DDevice_End(void)
+{
+	front_call_begin();
+	immediate_record();
+	front_call_end(_ps3_timer_front_draws);
 }
 
 static void set_attribute(INT reg, float a, float b, float c, float d)
 {
 	BOOL emit = FALSE;
+	DWORD bit;
 
 	if (reg == D3DVSDE_VERTEX)
 	{
@@ -2249,13 +3028,24 @@ static void set_attribute(INT reg, float a, float b, float c, float d)
 	}
 	if (reg < 0 || reg >= VERTEX_ATTRIBUTE_COUNT)
 		return;
-	device.attributes[reg][0] = a;
-	device.attributes[reg][1] = b;
-	device.attributes[reg][2] = c;
-	device.attributes[reg][3] = d;
-	/* like the hardware, writing register 0 completes a vertex */
-	if (device.immediate_active && (emit || reg == 0))
-		immediate_emit();
+	bit = 1u << reg;
+	if (front.immediate_active && front.immediate_count && !(front.immediate_layout & bit) &&
+		!(front.immediate_changed & bit))
+	{
+		memcpy(front.immediate_before[reg], front.attributes[reg], sizeof(front.attributes[0]));
+		front.immediate_changed |= bit;
+	}
+	front.attributes[reg][0] = a;
+	front.attributes[reg][1] = b;
+	front.attributes[reg][2] = c;
+	front.attributes[reg][3] = d;
+	if (front.immediate_active)
+	{
+		front.immediate_written |= bit;
+		/* like the hardware, writing register 0 completes a vertex */
+		if (emit || reg == 0)
+			immediate_emit();
+	}
 }
 
 void WINAPI D3DDevice_SetVertexData2f(INT reg, FLOAT a, FLOAT b)
@@ -2288,58 +3078,402 @@ void WINAPI D3DDevice_SetVertexDataColor(INT reg, D3DCOLOR color)
 
 /* ---------- clearing */
 
+static void clear_record(DWORD count, CONST D3DRECT *rectangles, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
+{
+	unsigned long rectangle_count = count && rectangles ? count : 0;
+	struct record_clear *clear;
+
+	record_targets();
+	clear = record_begin(_record_clear, sizeof(*clear) + rectangle_count * sizeof(D3DRECT), (uint32_t)rectangle_count,
+		flags);
+	if (!clear)
+		return;
+	clear->color = color;
+	memcpy(&clear->z, &z, sizeof(z));
+	clear->stencil = stencil;
+	clear->pad = 0;
+	if (rectangle_count)
+		memcpy(clear + 1, rectangles, rectangle_count * sizeof(D3DRECT));
+	record_commit();
+}
+
 void WINAPI D3DDevice_Clear(DWORD count, CONST D3DRECT *rectangles, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
 {
-	BOOL has_depth = FALSE;
-	DWORD gpu_flags, depth;
-	long left, top, right, bottom;
-	DWORD index;
+	front_call_begin();
+	clear_record(count, rectangles, flags, color, z, stencil);
+	front_call_end(_ps3_timer_front_draws);
+}
 
-	if (!device.gpu_ready || !bind_targets(&has_depth))
-		return;
-	/* the Xbox clears the channels named: the fog screen clears only alpha */
-	gpu_flags = flags & (D3DCLEAR_TARGET_R | D3DCLEAR_TARGET_G | D3DCLEAR_TARGET_B | D3DCLEAR_TARGET_A);
-	if (has_depth)
-		gpu_flags |= flags & (D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL);
-	if (!gpu_flags)
-		return;
-	if (z < 0.0f)
-		z = 0.0f;
-	/* 1.0 * 16777215 + 0.5 rounds to 2^24 in a float, which shifted out to a depth of 0 */
-	depth = z < 1.0f ? (DWORD)(z * 16777215.0f + 0.5f) : 0xffffffUL;
-	if (depth > 0xffffffUL)
-		depth = 0xffffffUL;
-	depth = (depth << 8) | (stencil & 0xff);
-	/* the NV2A clips a clear to the viewport, which keeps split-screen windows apart; a rectangle moves with the
-	menus' centring (d3d8_gl.c); in the target's pixels */
-	for (index = 0; index < (count && rectangles ? count : 1); index++)
+/* ---------- the Direct3D thread: the records in a ring, which the game's thread writes and this thread runs */
+
+static void render_target_apply(const struct surface_words *targets, BOOL reset);
+
+/* a record that runs on the game's thread: before the device's thread starts, after it stops, or a large one */
+static unsigned char record_scratch[64 * 1024] __attribute__((aligned(16)));
+
+static void states_apply(const uint32_t *pairs, uint32_t count)
+{
+	for (; count; count--, pairs += 2)
 	{
-		long offset = 0;
-
-		left = (long)device.viewport.X;
-		top = (long)device.viewport.Y;
-		right = left + (long)device.viewport.Width;
-		bottom = top + (long)device.viewport.Height;
-		if (count && rectangles)
-		{
-			if (rectangles[index].x1 > left) left = rectangles[index].x1;
-			if (rectangles[index].y1 > top) top = rectangles[index].y1;
-			if (rectangles[index].x2 < right) right = rectangles[index].x2;
-			if (rectangles[index].y2 < bottom) bottom = rectangles[index].y2;
-			offset = ui_offset;
-		}
-		left = scaled_pixel((float)(left + offset), device.target_scale[0]);
-		top = scaled_pixel((float)top, device.target_scale[1]);
-		right = scaled_pixel((float)(right + offset), device.target_scale[0]);
-		bottom = scaled_pixel((float)bottom, device.target_scale[1]);
-		if (left < 0) left = 0;
-		if (top < 0) top = 0;
-		if (right > (long)device.target_pixel_width) right = (long)device.target_pixel_width;
-		if (bottom > (long)device.target_pixel_height) bottom = (long)device.target_pixel_height;
-		if (left < right && top < bottom)
-			ps3_gpu_clear(gpu_flags, color, depth, (uint32_t)left, (uint32_t)top, (uint32_t)(right - left),
-				(uint32_t)(bottom - top));
+		if (pairs[0] < D3DRS_MAX)
+			render_state[pairs[0]] = pairs[1];
+		else
+			(&texture_state[0][0])[pairs[0] - D3DRS_MAX] = pairs[1];
 	}
+}
+
+static void attributes_apply(DWORD mask, const float *values)
+{
+	unsigned long reg;
+
+	for (reg = 0; reg < VERTEX_ATTRIBUTE_COUNT; reg++)
+	{
+		if (mask & (1u << reg))
+		{
+			memcpy(device.attributes[reg], values, sizeof(device.attributes[0]));
+			values += 4;
+		}
+	}
+}
+
+static void record_execute(const struct record *record)
+{
+	const void *payload = record + 1;
+
+	switch (record->type)
+	{
+	case _record_states:
+		states_apply(payload, record->a);
+		break;
+	case _record_attributes:
+		attributes_apply(record->a, payload);
+		break;
+	case _record_texture:
+		device.stages[record->a] = *(const struct stage_texture *)payload;
+		break;
+	case _record_vertex_shader:
+		vertex_shader_apply(record->a, (struct vertex_shader_object *)*(const uint64_t *)payload, record->b);
+		break;
+	case _record_constants:
+		constants_store(record->a, payload, record->b);
+		break;
+	case _record_constant_mode:
+		device.shader_constant_mode = (D3DSHADERCONSTANTMODE)record->a;
+		viewport_update_constants();
+		break;
+	case _record_viewport:
+		memcpy(&device.viewport, payload, sizeof(device.viewport));
+		viewport_update_constants();
+		break;
+	case _record_render_target:
+		render_target_apply(payload, record->b != 0);
+		break;
+	case _record_ui_offset:
+		ui_offset = (long)(int32_t)record->a;
+		break;
+	case _record_clear:
+		clear_run(record);
+		break;
+	case _record_draw:
+		draw_vertices_run(payload);
+		break;
+	case _record_draw_indexed:
+		draw_indexed_run(payload);
+		break;
+	case _record_immediate:
+		immediate_run(payload);
+		break;
+	case _record_timestamp:
+		ps3_gpu_timestamp((int)record->a);
+		break;
+	case _record_present:
+		present_run();
+		break;
+	default:
+		break;
+	}
+}
+
+/* the draw a record carries, else 0 */
+static DWORD record_draw_number(const struct record *record)
+{
+	if (record->type == _record_draw || record->type == _record_draw_indexed)
+		return ((const struct record_draw *)(record + 1))->draw;
+	if (record->type == _record_immediate)
+		return ((const struct record_immediate *)(record + 1))->draw;
+	return 0;
+}
+
+static void direct3d_thread(void *unused)
+{
+	(void)unused;
+	ring.consumer = ps3_host_thread_id();
+	for (;;)
+	{
+		uint64_t published = ring.published, span;
+
+		if (ring.consumed == published)
+		{
+			if (ring.stop)
+				break;
+			ps3_host_lock_enter(ring.lock);
+			ring.consumer_sleeping = 1;
+			__sync_synchronize();
+			if (ring.consumed == ring.published && !ring.stop)
+				ps3_host_condition_wait(ring.work, WAIT_MICROSECONDS);
+			ring.consumer_sleeping = 0;
+			ps3_host_lock_leave(ring.lock);
+			continue;
+		}
+		/* the records after the position that showed them */
+		__asm__ volatile("lwsync" : : : "memory");
+		span = ps3_timer_now();
+		while (ring.consumed != published)
+		{
+			const struct record *record = (const struct record *)(ring.memory + ring.consumed % RING_BYTES);
+			DWORD draw = record_draw_number(record);
+
+			record_execute(record);
+			/* the record read before its room is given back */
+			__asm__ volatile("lwsync" : : : "memory");
+			if (draw)
+				ring.completed_draws = draw;
+			ring.consumed += record->bytes;
+			__sync_synchronize();
+			if (ring.producers_waiting)
+			{
+				ps3_host_lock_enter(ring.lock);
+				ps3_host_condition_broadcast(ring.progress);
+				ps3_host_lock_leave(ring.lock);
+			}
+		}
+		ps3_timer_add(_ps3_timer_thread_busy, span);
+	}
+	ring.stopped = 1;
+	__sync_synchronize();
+	ps3_host_lock_enter(ring.lock);
+	ps3_host_condition_broadcast(ring.progress);
+	ps3_host_lock_leave(ring.lock);
+}
+
+/* (the game's thread) the records so far to the Direct3D thread */
+static void direct3d_publish(void)
+{
+	if (!ring.running || ring.dead || ring.published == ring.written)
+		return;
+	__asm__ volatile("lwsync" : : : "memory");
+	ring.published = ring.written;
+	__sync_synchronize();
+	if (ring.consumer_sleeping)
+	{
+		ps3_host_lock_enter(ring.lock);
+		ps3_host_condition_broadcast(ring.work);
+		ps3_host_lock_leave(ring.lock);
+	}
+}
+
+/* until the Direct3D thread has run the records before this position (published ones) */
+static void direct3d_wait(uint64_t position)
+{
+	uint64_t span;
+
+	if (!ring.running || (int64_t)(ring.consumed - position) >= 0)
+		return;
+	span = ps3_timer_now();
+	while ((int64_t)(ring.consumed - position) < 0 && !ring.stopped)
+	{
+		ps3_host_lock_enter(ring.lock);
+		ring.producers_waiting++;
+		__sync_synchronize();
+		if ((int64_t)(ring.consumed - position) < 0 && !ring.stopped)
+			ps3_host_condition_wait(ring.progress, WAIT_MICROSECONDS);
+		ring.producers_waiting--;
+		ps3_host_lock_leave(ring.lock);
+	}
+	ps3_timer_add(_ps3_timer_thread_wait, span);
+}
+
+/* (the game's thread) every record run: the Direct3D thread waits for the next, and the game's thread may use its
+state until it records one */
+static void direct3d_drain(void)
+{
+	if (!ring.running)
+		return;
+	direct3d_publish();
+	direct3d_wait(ring.written);
+}
+
+/* room for bytes more in the ring */
+static void ring_room(unsigned long bytes)
+{
+	if (ring.written + bytes - ring.consumed <= RING_BYTES)
+		return;
+	direct3d_publish();
+	direct3d_wait(ring.written + bytes - RING_BYTES);
+}
+
+static void *record_begin(uint32_t type, unsigned long payload_bytes, uint32_t a, uint32_t b)
+{
+	unsigned long bytes = (sizeof(struct record) + payload_bytes + 15) & ~15UL;
+	struct record *record;
+
+	if (ring.running && !ring.dead && bytes <= RECORD_LARGEST)
+	{
+		unsigned long offset = (unsigned long)(ring.written % RING_BYTES);
+
+		/* a record never wraps: the end's bytes are skipped */
+		if (offset + bytes > RING_BYTES)
+		{
+			ring_room(RING_BYTES - offset);
+			record = (struct record *)(ring.memory + offset);
+			record->type = _record_wrap;
+			record->bytes = (uint32_t)(RING_BYTES - offset);
+			ring.written += RING_BYTES - offset;
+		}
+		ring_room(bytes);
+		record = (struct record *)(ring.memory + ring.written % RING_BYTES);
+		ring.current_inline = FALSE;
+	}
+	else
+	{
+		if (bytes <= sizeof(record_scratch))
+		{
+			record = (struct record *)record_scratch;
+		}
+		else
+		{
+			if (bytes > ring.large_bytes)
+			{
+				free(ring.large);
+				ring.large = malloc(bytes);
+				ring.large_bytes = ring.large ? bytes : 0;
+			}
+			if (!ring.large || ring.dead)
+				return NULL;
+			record = (struct record *)ring.large;
+		}
+		ring.current_inline = TRUE;
+	}
+	record->type = type;
+	record->bytes = (uint32_t)bytes;
+	record->a = a;
+	record->b = b;
+	ring.current = record;
+	return record + 1;
+}
+
+static void record_commit(void)
+{
+	struct record *record = ring.current;
+
+	if (ring.dead)
+		return;
+	if (ring.current_inline)
+	{
+		/* after the records before it */
+		direct3d_drain();
+		record_execute(record);
+		return;
+	}
+	ring.written += record->bytes;
+	if (ring.written - ring.published >= PUBLISH_BYTES)
+		direct3d_publish();
+}
+
+static void direct3d_start(void)
+{
+#if DIRECT3D_THREAD
+	ring.memory = malloc(RING_BYTES);
+	ring.lock = ps3_host_lock_create(FALSE);
+	ring.work = ring.lock ? ps3_host_condition_create(ring.lock) : NULL;
+	ring.progress = ring.lock ? ps3_host_condition_create(ring.lock) : NULL;
+	if (!ring.memory || !ring.work || !ring.progress)
+	{
+		platform_log("Direct3D: no memory for the Direct3D thread's ring");
+		return;
+	}
+	ring.producer = ps3_host_thread_id();
+	ring.running = TRUE;
+	/* above the game's threads, as the vertical blank's: it sleeps while it has no records */
+	if (ps3_host_thread_create(direct3d_thread, NULL, 0x100000, PS3_HOST_PRIORITY_NORMAL - 1, "direct3d") != 0)
+	{
+		ring.running = FALSE;
+		return;
+	}
+	ps3_gpu_set_stop_hook(direct3d_stop);
+#endif
+}
+
+/* the Direct3D thread ends after the records published (the process ends, or the display thread takes the RSX) */
+static void direct3d_stop(void)
+{
+	uint64_t start;
+
+	if (!ring.running || ring.dead)
+		return;
+	if (ps3_host_thread_id() == ring.producer)
+		direct3d_publish();
+	ring.dead = TRUE;
+	if (ps3_host_thread_id() == ring.consumer)
+		return;
+	ring.stop = 1;
+	__sync_synchronize();
+	ps3_host_lock_enter(ring.lock);
+	ps3_host_condition_broadcast(ring.work);
+	ps3_host_lock_leave(ring.lock);
+	start = ps3_host_microseconds();
+	while (!ring.stopped && ps3_host_microseconds() - start < 3000000)
+		ps3_host_sleep_microseconds(1000);
+}
+
+/* a resource's last draw not done yet (a texture's Lock: draw_prologue), else any record not done */
+static BOOL resource_pending(const DWORD *fields)
+{
+	if (!ring.running || ring.dead || ring.consumed == ring.written)
+		return FALSE;
+	if ((fields[0] & D3DCOMMON_TYPE_MASK) == D3DCOMMON_TYPE_TEXTURE)
+		return fields[2] && (int32_t)(fields[2] - ring.completed_draws) > 0;
+	return TRUE;
+}
+
+/* d3d8_resources.c: whether the Direct3D thread can still read a resource (D3DResource_IsBusy) */
+BOOL d3d8_resource_busy(D3DResource *resource)
+{
+	if (ps3_host_thread_id() == ring.producer)
+		direct3d_publish();
+	return resource_pending((const DWORD *)resource);
+}
+
+/* d3d8_resources.c: until it cannot (D3DResource_BlockUntilNotBusy, a release) */
+void d3d8_resource_wait(D3DResource *resource)
+{
+	const DWORD *fields = (const DWORD *)resource;
+
+	if (!ring.running || ring.dead)
+		return;
+	if (ps3_host_thread_id() == ring.producer)
+		direct3d_publish();
+	while (resource_pending(fields) && !ring.stopped)
+	{
+		ps3_host_lock_enter(ring.lock);
+		ring.producers_waiting++;
+		__sync_synchronize();
+		if (resource_pending(fields) && !ring.stopped)
+			ps3_host_condition_wait(ring.progress, WAIT_MICROSECONDS);
+		ring.producers_waiting--;
+		ps3_host_lock_leave(ring.lock);
+	}
+}
+
+/* ps3_timers.h: a split of the RSX's frame, in the records' order; returns the time now */
+uint64_t ps3_timers_rsx_wait(int part)
+{
+	if (device.created)
+	{
+		record_begin(_record_timestamp, 0, (uint32_t)part, 0);
+		record_commit();
+	}
+	return ps3_timer_now();
 }
 
 /* ---------- device creation */
@@ -2369,6 +3503,8 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 		int index;
 
 		memset(&device, 0, sizeof(device));
+		memset(&front, 0, sizeof(front));
+		ui_offset = 0;
 		if (presentation_parameters)
 			device.presentation = *presentation_parameters;
 		width = device.presentation.BackBufferWidth ? device.presentation.BackBufferWidth : SCREEN_WIDTH;
@@ -2378,23 +3514,26 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 		d3d8_surface_initialize(&device.depth_buffer, D3DFMT_LIN_D24S8, SCREEN_MAXIMUM_WIDTH, height);
 		d3d8_surface_resize(&device.back_buffer, D3DFMT_LIN_A8R8G8B8, width, height);
 		d3d8_surface_resize(&device.depth_buffer, D3DFMT_LIN_D24S8, width, height);
-		device.render_target = &device.back_buffer;
-		device.depth_stencil = &device.depth_buffer;
+		front.render_target = &device.back_buffer;
+		front.depth_stencil = &device.depth_buffer;
+		surface_words_read(front.render_target, &device.targets[0]);
+		surface_words_read(front.depth_stencil, &device.targets[1]);
+		memcpy(front.recorded_targets, device.targets, sizeof(device.targets));
 		for (index = 0; index < D3DTS_MAX; index++)
 		{
-			device.transforms[index]._11 = 1.0f;
-			device.transforms[index]._22 = 1.0f;
-			device.transforms[index]._33 = 1.0f;
-			device.transforms[index]._44 = 1.0f;
+			front.transforms[index]._11 = 1.0f;
+			front.transforms[index]._22 = 1.0f;
+			front.transforms[index]._33 = 1.0f;
+			front.transforms[index]._44 = 1.0f;
 		}
 		for (index = 0; index < VERTEX_ATTRIBUTE_COUNT; index++)
-			device.attributes[index][3] = 1.0f;
+			device.attributes[index][3] = front.attributes[index][3] = front.recorded_attributes[index][3] = 1.0f;
 		for (index = 0; index < 256; index++)
 			byte_floats[index] = index / 255.0f;
 		device.viewport.Width = width;
 		device.viewport.Height = height;
 		device.viewport.MaxZ = 1.0f;
-		device.next_vertex_shader_id = 1;
+		front.next_vertex_shader_id = 1;
 		D3D__RenderState[D3DRS_ZENABLE] = TRUE;
 		D3D__RenderState[D3DRS_ZWRITEENABLE] = TRUE;
 		D3D__RenderState[D3DRS_ZFUNC] = D3DCMP_LESSEQUAL;
@@ -2421,14 +3560,23 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 			D3D__TextureState[index][D3DTSS_MINFILTER] = D3DTEXF_POINT;
 			D3D__TextureState[index][D3DTSS_MAXANISOTROPY] = 1;
 		}
+		memcpy(render_state, D3D__RenderState, sizeof(render_state));
+		memcpy(texture_state, D3D__TextureState, sizeof(texture_state));
+		memcpy(front.recorded_render_state, D3D__RenderState, sizeof(front.recorded_render_state));
+		memcpy(front.recorded_texture_state, D3D__TextureState, sizeof(front.recorded_texture_state));
 		device.constants_dirty_first = _rsx_vp_constant_count;
 		constants_initialize();
 		viewport_update_constants();
 		vertical_blank_start();
 		device.gpu_ready = ps3_gpu_initialize() == 0;
+		/* (its first read sets the screen up: before the Direct3D thread can make one) */
+		halo_screen_width();
 		device.created = TRUE;
-		platform_log("Direct3D: %lux%lu on the RSX%s, back buffer at 0x%08lx", width, height,
-			device.gpu_ready ? "" : " (not available: nothing is drawn)", (unsigned long)device.back_buffer.Data);
+		if (device.gpu_ready)
+			direct3d_start();
+		platform_log("Direct3D: %lux%lu on the RSX%s, back buffer at 0x%08lx; %s", width, height,
+			device.gpu_ready ? "" : " (not available: nothing is drawn)", (unsigned long)device.back_buffer.Data,
+			ring.running ? "the Direct3D thread draws" : "the game's thread draws");
 	}
 	/* the game reaches the device only through the D3DDevice_ functions */
 	*returned_device = (D3DDevice *)&device;
@@ -2476,24 +3624,25 @@ void WINAPI D3DDevice_GetBackBuffer(INT back_buffer, D3DBACKBUFFER_TYPE type, D3
 
 HRESULT WINAPI D3DDevice_GetDepthStencilSurface(D3DSurface **result)
 {
-	*result = device.depth_stencil;
+	*result = front.depth_stencil;
 	if (!*result)
 		return D3DERR_NOTFOUND;
 	(*result)->Common++;
 	return S_OK;
 }
 
-void WINAPI D3DDevice_SetRenderTarget(D3DSurface *render_target, D3DSurface *depth_stencil)
+/* (the Direct3D thread) the targets' words; reset: a SetRenderTarget's */
+static void render_target_apply(const struct surface_words *targets, BOOL reset)
 {
-	if (render_target)
-		device.render_target = render_target;
-	device.depth_stencil = depth_stencil;
+	memcpy(device.targets, targets, sizeof(device.targets));
+	if (!reset)
+		return;
 	/* like Direct3D, the viewport becomes the whole new target */
-	if (device.render_target)
+	if (device.targets[0].valid)
 	{
 		struct xgpu_texture_description description;
 
-		xgpu_texture_describe(device.render_target->Format, device.render_target->Size, &description);
+		xgpu_texture_describe(device.targets[0].format, device.targets[0].size, &description);
 		device.viewport.X = 0;
 		device.viewport.Y = 0;
 		device.viewport.Width = description.width;
@@ -2504,22 +3653,36 @@ void WINAPI D3DDevice_SetRenderTarget(D3DSurface *render_target, D3DSurface *dep
 	viewport_update_constants();
 }
 
+void WINAPI D3DDevice_SetRenderTarget(D3DSurface *render_target, D3DSurface *depth_stencil)
+{
+	struct surface_words targets[2];
+
+	if (render_target)
+		front.render_target = render_target;
+	front.depth_stencil = depth_stencil;
+	surface_words_read(front.render_target, &targets[0]);
+	surface_words_read(front.depth_stencil, &targets[1]);
+	memcpy(front.recorded_targets, targets, sizeof(targets));
+	memcpy(record_begin(_record_render_target, sizeof(targets), 0, 1), targets, sizeof(targets));
+	record_commit();
+}
+
 void WINAPI D3DDevice_SetViewport(CONST D3DVIEWPORT8 *viewport)
 {
-	device.viewport = *viewport;
-	viewport_update_constants();
+	memcpy(record_begin(_record_viewport, sizeof(*viewport), 0, 0), viewport, sizeof(*viewport));
+	record_commit();
 }
 
 void WINAPI D3DDevice_SetTransform(D3DTRANSFORMSTATETYPE state, CONST D3DMATRIX *matrix)
 {
 	if ((unsigned long)state < D3DTS_MAX)
-		device.transforms[state] = *matrix;
+		front.transforms[state] = *matrix;
 }
 
 void WINAPI D3DDevice_GetTransform(D3DTRANSFORMSTATETYPE state, D3DMATRIX *matrix)
 {
 	if ((unsigned long)state < D3DTS_MAX)
-		*matrix = device.transforms[state];
+		*matrix = front.transforms[state];
 }
 
 void WINAPI D3DDevice_SetFlickerFilter(DWORD filter) { (void)filter; }
@@ -2527,19 +3690,23 @@ void WINAPI D3DDevice_SetSoftDisplayFilter(BOOL enable) { (void)enable; }
 
 void WINAPI D3DDevice_SetShaderConstantMode(D3DSHADERCONSTANTMODE mode)
 {
-	device.shader_constant_mode = mode;
-	viewport_update_constants();
+	record_begin(_record_constant_mode, 0, (uint32_t)mode, 0);
+	record_commit();
 }
 
-/* ---------- synchronisation: the RSX keeps the order of its commands */
+/* ---------- synchronisation: the Direct3D thread keeps the order of the records, and the RSX of its commands */
 
 BOOL WINAPI D3DDevice_IsBusy(void)
 {
-	return FALSE;
+	if (ps3_host_thread_id() == ring.producer)
+		direct3d_publish();
+	return ring.running && !ring.dead && ring.consumed != ring.written;
 }
 
 void WINAPI D3DDevice_KickPushBuffer(void)
 {
+	if (ps3_host_thread_id() == ring.producer)
+		direct3d_publish();
 }
 
 void WINAPI D3DDevice_InsertCallback(D3DCALLBACKTYPE type, D3DCALLBACK callback, DWORD context)
@@ -2554,13 +3721,13 @@ void WINAPI D3DDevice_InsertCallback(D3DCALLBACKTYPE type, D3DCALLBACK callback,
 
 void WINAPI D3DDevice_BeginVisibilityTest(void)
 {
-	device.visibility_test_active = TRUE;
+	front.visibility_test_active = TRUE;
 }
 
 HRESULT WINAPI D3DDevice_EndVisibilityTest(DWORD index)
 {
 	(void)index;
-	device.visibility_test_active = FALSE;
+	front.visibility_test_active = FALSE;
 	return S_OK;
 }
 
@@ -2679,13 +3846,13 @@ void WINAPI D3DDevice_SetTextureState_BumpEnv(DWORD stage, D3DTEXTURESTAGESTATET
 void WINAPI D3DDevice_SetTexture(DWORD stage, D3DBaseTexture *texture)
 {
 	if (stage < TEXTURE_STAGES)
-		device.textures[stage] = texture;
+		front.textures[stage] = texture;
 }
 
 void WINAPI D3DDevice_SetPalette(DWORD stage, D3DPalette *palette)
 {
 	if (stage < TEXTURE_STAGES)
-		device.palettes[stage] = palette;
+		front.palettes[stage] = palette;
 }
 
 void WINAPI D3DDevice_SetPixelShaderProgram(D3DPIXELSHADERDEF *definition)
@@ -2714,23 +3881,19 @@ void WINAPI D3DDevice_SetPixelShaderProgram(D3DPIXELSHADERDEF *definition)
 
 unsigned long platform_d3d_frame_count(void)
 {
-	return device.frame;
+	return front.frame;
 }
 
-/* the Xbox keeps at most two frames queued behind its 60 Hz display */
-void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destination_rectangle,
-	void *unused, void *unused2)
+/* (the Direct3D thread) a frame's end */
+static void present_run(void)
 {
-	uint64_t span;
-
-	(void)source_rectangle;
-	(void)destination_rectangle;
-	(void)unused;
-	(void)unused2;
 	if (device.gpu_ready)
 	{
-		struct render_target *back_buffer = render_target_get(&device.back_buffer, FALSE);
+		struct surface_words words;
+		struct render_target *back_buffer;
 
+		surface_words_read(&device.back_buffer, &words);
+		back_buffer = render_target_get(&words, FALSE);
 		if (back_buffer)
 			ps3_gpu_present(back_buffer->offset, back_buffer->pitch, (uint32_t)back_buffer->width,
 				(uint32_t)back_buffer->height);
@@ -2758,8 +3921,30 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 			(unsigned long)(VERTEX_ARENA_BYTES / 1024), statistics.cache_refused);
 		memset(&statistics, 0, sizeof(statistics));
 	}
+}
+
+/* the Xbox keeps at most two frames queued behind its 60 Hz display; the Direct3D thread draws one frame behind the
+game's thread */
+void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destination_rectangle,
+	void *unused, void *unused2)
+{
+	uint64_t span;
+
+	(void)source_rectangle;
+	(void)destination_rectangle;
+	(void)unused;
+	(void)unused2;
+	record_begin(_record_present, 0, 0, 0);
+	record_commit();
+	direct3d_publish();
+	front.frame++;
+	direct3d_wait(front.previous_present);
+	front.previous_present = ring.written;
 	if (ps3_host_exit_requested())
+	{
+		direct3d_stop();
 		ps3_host_exit(0);
+	}
 	vertical_blank_start();
 	if (!vertical_blank_started)
 		return;

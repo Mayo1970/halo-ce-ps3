@@ -1,94 +1,5 @@
-/*
-COLLISIONS.C
-
-symbols in this file:
-0013D2D0 0030:
-	_collision_model_get_material_type (0000)
-0013D300 0060:
-	_collision_test_sphere (0000)
-0013D360 0120:
-	_object_test_point (0000)
-0013D480 00b0:
-	_collision_test_point (0000)
-0013D530 0290:
-	_object_test_vector (0000)
-0013D7C0 06d0:
-	_collision_test_vector (0000)
-0013DE90 0190:
-	_collision_test_vector_exit (0000)
-0013E020 0170:
-	_collision_test_pill (0000)
-0013E190 00d0:
-	_collision_test_pill_new (0000)
-0013E260 0220:
-	_object_get_features_in_sphere (0000)
-0013E480 0200:
-	_collision_get_features_in_sphere (0000)
-0013E680 0040:
-	_clip_position_to_plane (0000)
-0013E6C0 0040:
-	_clip_velocity_to_plane (0000)
-0013E700 0080:
-	_clip_position_to_line (0000)
-0013E780 0050:
-	_clip_velocity_to_line (0000)
-0013E7D0 00a0:
-	_collision_fix_pill_nudge_collision (0000)
-0013E870 02a0:
-	_collision_fix_pill (0000)
-0013EB10 1290:
-	_collision_move_point (0000)
-0013FDA0 0180:
-	_collision_move_pill (0000)
-0013FF20 0040:
-	_collision_move_sphere (0000)
-0028BAB8 0008:
-	__real@3fa0000000000000 (0000)
-0028BAC0 0008:
-	__real@3f30000000000000 (0000)
-0028BAC8 0004:
-	__real@3d000000 (0000)
-0028BACC 0004:
-	__real@3f441b7d (0000)
-0028BAD0 0024:
-	??_C@_0CE@BAGBGBHP@c?3?2halo?2SOURCE?2physics?2collision@ (0000)
-0028BAF4 000d:
-	??_C@_0N@LANGNGIH@new_velocity?$AA@ (0000)
-0028BB04 000c:
-	??_C@_0M@HGHPBCFN@?$CGclip_plane?$AA@ (0000)
-0028BB10 000c:
-	??_C@_0M@KHLCGDHC@?$CGclip_point?$AA@ (0000)
-0028BB1C 0012:
-	??_C@_0BC@GFMKCLPO@?$CGclip_line_vector?$AA@ (0000)
-0028BB30 0011:
-	??_C@_0BB@IPCKNOKM@?$CGclip_line_point?$AA@ (0000)
-0028BB44 000d:
-	??_C@_0N@HNOBANOD@clip_count?$DM3?$AA@ (0000)
-0028BB54 002f:
-	??_C@_0CP@BCIJNMNG@?$CFs?3?5assert_valid_real_plane3d?$CI?$CFf@ (0000)
-0028BB84 0012:
-	??_C@_0BC@KMBJNJFM@?$CGcollision?9?$DOplane?$AA@ (0000)
-0028BB98 000a:
-	??_C@_09MFIJNMKH@?$CGvelocity?$AA@ (0000)
-0028BBA4 000a:
-	??_C@_09KHKMDFEK@?$CGposition?$AA@ (0000)
-0028BBB0 0012:
-	??_C@_0BC@JCEJOAFB@?$CGclipped_velocity?$AA@ (0000)
-0028BBC4 0012:
-	??_C@_0BC@PAGMAJLM@?$CGclipped_position?$AA@ (0000)
-0028BBD8 0028:
-	??_C@_0CI@OLDCDOIO@collision_count?$DMmaximum_collisio@ (0000)
-0028BC00 000d:
-	??_C@_0N@MHPNJHFJ@old_velocity?$AA@ (0000)
-0028BC10 000d:
-	??_C@_0N@KFNIHOLE@old_position?$AA@ (0000)
-0030CDE8 00cc:
-	_data_0030cde8 (0000)
-0045E000 001a:
-	_bss_0045e000 (0000)
-	_debug_collision_skip_objects (0018)
-	_debug_collision_skip_vectors (0019)
-*/
+/* COLLISIONS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/physics/collisions.c. */
 
 /* ---------- headers */
 
@@ -211,9 +122,8 @@ long collision_model_get_material_type(
 {
 	long material_type;
 
-	/* port: a material (from the map) that is no material of the model, or
-	whose type is no material type (the retail ones are at most 32), is
-	none */
+	/* port: a material (from the map) that is no material of the model, or whose type is no material
+	type (the retail ones are at most 32), is none */
 	if (material_index == NONE)
 	{
 		material_type = NONE;
@@ -257,9 +167,8 @@ static void collision_material_type_report(
 	return;
 }
 
-/* port: the cluster of a collision bsp leaf (from the map), NONE if it is
-no leaf of the structure bsp (whose leaves the collision bsp's are: the
-retail ones have as many) */
+/* port: the cluster of a collision bsp leaf (from the map), NONE if it is no leaf of the structure bsp
+(whose leaves the collision bsp's are: the retail ones have as many) */
 static long collision_cluster_index_from_leaf(
 	long leaf_index)
 {
@@ -287,9 +196,8 @@ static long collision_cluster_index_from_leaf(
 		struct structure_leaf)->cluster_index;
 }
 
-/* port: the material type of a structure bsp's collision material (from
-the map), NONE if it is no material of the bsp or its type is no material
-type (the retail ones are at most 31) */
+/* port: the material type of a structure bsp's collision material (from the map), NONE if it is no
+material of the bsp or its type is no material type (the retail ones are at most 31) */
 static long collision_structure_material_type(
 	struct structure_bsp const *structure_bsp,
 	short material_index)
@@ -319,11 +227,8 @@ static long collision_structure_material_type(
 	return material_type;
 }
 
-/* port: TRUE with a cluster's fog plane and its fog when the cluster
-(from the map) has a fog plane of a material, as collision_test_vector
-read them; FALSE, reported once, when a link of the chain (cluster, fog
-plane, region, palette entry, fog) names nothing of the bsp's (the retail
-chains are all whole) */
+/* port: TRUE with a cluster's (from the map) fog plane of a material and its fog, as collision_test_vector read
+them; FALSE, reported once, when a link (cluster, fog plane, region, palette, fog) names nothing (retail: none) */
 static boolean collision_cluster_fog_plane(
 	struct structure_bsp const *structure_bsp,
 	long cluster_index,
@@ -403,6 +308,7 @@ boolean collision_test_sphere(
 	boolean result;
 	struct collision_bsp_test_sphere_result sphere_result;
 
+	PS3_COLLISION_BEGIN();
 	if (bsp3d_test_point(global_bsp3d_get(), 0, center) != NONE)
 	{
 		result = collision_bsp_test_sphere(
@@ -414,10 +320,12 @@ boolean collision_test_sphere(
 			&sphere_result);
 		if (!result)
 		{
+			PS3_COLLISION_END(_ps3_collision_sphere);
 			return result;
 		}
 	}
 
+	PS3_COLLISION_END(_ps3_collision_sphere);
 	return TRUE;
 }
 
@@ -430,6 +338,7 @@ boolean collision_test_point(
 	long reference_index;
 	boolean test_objects;
 
+	PS3_COLLISION_BEGIN();
 	if (!(flags & _collision_test_environment_flags))
 	{
 		goto no_collision;
@@ -469,9 +378,11 @@ boolean collision_test_point(
 	}
 
 no_collision:
+	PS3_COLLISION_END(_ps3_collision_point);
 	return FALSE;
 
 collision:
+	PS3_COLLISION_END(_ps3_collision_point);
 	return TRUE;
 }
 
@@ -487,6 +398,7 @@ boolean collision_test_vector(
 		TEST_FLAG(flags, _collision_test_media_bit) ||
 		TEST_FLAG(flags, _collision_test_objects_bit);
 
+	PS3_COLLISION_BEGIN();
 	if (debug_collision_skip_vectors)
 	{
 		test_environment = FALSE;
@@ -731,6 +643,7 @@ boolean collision_test_vector(
 		scenario_location_from_point(&collision->location, &collision->point);
 	}
 
+	PS3_COLLISION_END(_ps3_collision_vector);
 	return hit;
 }
 
@@ -745,6 +658,7 @@ boolean collision_test_pill(
 	boolean hit = FALSE;
 	struct collision_bsp_test_pill_result bsp_result;
 
+	PS3_COLLISION_BEGIN();
 	collision->type = NONE;
 	collision->t = REAL_MAX;
 
@@ -795,6 +709,7 @@ boolean collision_test_pill(
 	COLLISION_POINT_FROM_LINE3D(point, vector, collision->t, &collision->point);
 	scenario_location_from_point(&collision->location, &collision->point);
 
+	PS3_COLLISION_END(_ps3_collision_pill);
 	return hit;
 }
 
@@ -992,10 +907,8 @@ boolean collision_fix_pill(
 	long ignore_object_index,
 	real_point3d *new_position)
 {
-	/* Name, type and function scope: PC demo and HCEX PDBs.
-	 * January confirms the 204-byte array and this function as its sole user.
-	 * The declaration's precise block position is not independently attested.
-	 */
+	/* Name, type and function scope: PC demo and HCEX PDBs. January confirms the 204-byte array and this
+	function as its sole user; the declaration's precise block position is not independently attested. */
 	static real_vector3d offsets[17] =
 	{
 		{ { -1.0f, 0.0f, 0.0f } },
@@ -1026,6 +939,7 @@ boolean collision_fix_pill(
 		global_current_collision_user_depth < MAXIMUM_COLLISION_USER_STACK_DEPTH);
 	global_current_collision_users[global_current_collision_user_depth++] =
 		_collision_user_bipeds;
+	PS3_COLLISION_BEGIN();
 
 	{
 		real_point3d center;
@@ -1127,6 +1041,7 @@ boolean collision_fix_pill(
 		}
 	}
 
+	PS3_COLLISION_END(_ps3_collision_move);
 	match_assert(
 		"c:\\halo\\SOURCE\\physics\\collisions.c",
 		0x562,
@@ -1148,6 +1063,7 @@ boolean collision_test_pill_new(
 	real t;
 	real_vector3d normal;
 
+	PS3_COLLISION_BEGIN();
 	collision->type = NONE;
 	collision->start_location.leaf_index = NONE;
 	collision->start_location.cluster_index = NONE;
@@ -1183,6 +1099,7 @@ boolean collision_test_pill_new(
 	collision->plane.n.j = 0.0f;
 	collision->plane.n.k = 0.0f;
 
+	PS3_COLLISION_END(_ps3_collision_pill);
 	return result;
 }
 
@@ -1291,6 +1208,7 @@ short collision_move_point(
 	real_vector3d clip_line_vector;
 	real_point3d clip_point;
 
+	PS3_COLLISION_BEGIN();
 	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\physics\\collisions.c", 0x3AD, old_position);
 	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\physics\\collisions.c", 0x3AE, old_velocity);
 	match_assert("c:\\halo\\SOURCE\\physics\\collisions.c", 0x3AF, features->count[_collision_feature_sphere]<=MAXIMUM_COLLISION_FEATURES_PER_TEST);
@@ -1547,6 +1465,7 @@ short collision_move_point(
 	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\physics\\collisions.c", 0x497, new_position);
 	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\physics\\collisions.c", 0x498, new_velocity);
 
+	PS3_COLLISION_END(_ps3_collision_move);
 	return collision_count;
 }
 
@@ -1568,6 +1487,7 @@ short collision_move_pill(
 
 	match_assert("c:\\halo\\SOURCE\\physics\\collisions.c", 1214, global_current_collision_user_depth < MAXIMUM_COLLISION_USER_STACK_DEPTH);
 	global_current_collision_users[global_current_collision_user_depth++] = 7;
+	PS3_COLLISION_BEGIN();
 
 	center.x = position->x + velocity->i * 0.5f;
 	center.y = position->y + velocity->j * 0.5f;
@@ -1600,6 +1520,7 @@ short collision_move_pill(
 		*clipped_velocity = *velocity;
 	}
 
+	PS3_COLLISION_END(_ps3_collision_move);
 	match_assert("c:\\halo\\SOURCE\\physics\\collisions.c", 1230, global_current_collision_user_depth > 1);
 	--global_current_collision_user_depth;
 
@@ -1683,6 +1604,7 @@ static boolean object_test_vector(
 	{
 		struct object_datum const *object = object_get(object_index);
 
+		PS3_COLLISION_OBJECT();
 		if (object_index != ignore_object_index &&
 			!TEST_FLAG(object->object.flags, _object_invisible_bit) &&
 			TEST_FLAG(flags, object->object.type + _collision_test_objects_first_type_bit) &&

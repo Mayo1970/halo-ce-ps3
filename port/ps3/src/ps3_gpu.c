@@ -1,5 +1,5 @@
 /* The RSX behind the Direct3D device, with the hardware-proven patterns of ioQuake3-PS3 and xashPS3's
-ps3gl. Only the game's thread calls it, once it has taken the RSX from the display thread. */
+ps3gl. One thread calls it at a time: the Direct3D thread, or the game's while that one is idle (d3d8_rsx.c). */
 
 #include "ps3_gpu.h"
 #include "ps3_system.h"
@@ -40,7 +40,7 @@ ps3gl. Only the game's thread calls it, once it has taken the RSX from the displ
 #define PROGRAM_SLOTS 512
 #define RESIDENT_PROGRAM_COUNT 32
 
-/* the RSX's time at each split of the frame (ps3_timers_rsx_wait): report slots, three frames' worth (the
+/* the RSX's time at each split of the frame (ps3_gpu_timestamp): report slots, three frames' worth (the
 reports of the frame before last are read) */
 #define TIMESTAMP_REPORT_BASE 256
 #define TIMESTAMP_PARTS 32
@@ -1217,8 +1217,7 @@ void ps3_gpu_wait_idle(void)
 	}
 }
 
-/* the RSX's time at this split of the frame, without a stall: a timestamp report, read two frames on */
-uint64_t ps3_timers_rsx_wait(int part)
+void ps3_gpu_timestamp(int part)
 {
 	uint32_t set = frame_index % 3;
 
@@ -1228,7 +1227,19 @@ uint64_t ps3_timers_rsx_wait(int part)
 		stamps[set].parts[stamps[set].count++] = (uint8_t)part;
 		checkpoint(_checkpoint_timestamp);
 	}
-	return ps3_timer_now();
+}
+
+static void (*stop_hook)(void);
+
+void ps3_gpu_set_stop_hook(void (*hook)(void))
+{
+	stop_hook = hook;
+}
+
+void ps3_gpu_stop_drawing(void)
+{
+	if (stop_hook)
+		stop_hook();
 }
 
 /* the frame before last's timestamps (the RSX has finished it): each part ends at its split, from the split before;
@@ -1269,7 +1280,7 @@ void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t h
 		blit_draw(offset, pitch, width, height);
 	checkpoint(_checkpoint_blit);
 	/* the frame's last timestamp (_ps3_timer_present: the time after the render's) */
-	ps3_timers_rsx_wait(_ps3_timer_present);
+	ps3_gpu_timestamp(_ps3_timer_present);
 	/* the RSX writes it once this frame's draws are done (a command label can come early: ioq3) */
 	rsxSetWriteBackendLabel(context, FRAME_LABEL, frame_index);
 	checkpoint(_checkpoint_frame_label);

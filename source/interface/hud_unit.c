@@ -1,68 +1,5 @@
-/*
-HUD_UNIT.C
-
-symbols in this file:
-000C6590 0010:
-	_unit_hud_outline_mapper_tick (0000)
-000C65A0 0010:
-	_unit_hud_shield_meter_mapper_tick (0000)
-000C65B0 0010:
-	_unit_hud_shield_meter_mapper_init (0000)
-000C65C0 0040:
-	_initialize_hud_state (0000)
-000C6600 0070:
-	_get_hud_state (0000)
-000C6670 0040:
-	_hud_initialize_unit_interface (0000)
-000C66B0 00f0:
-	_hud_initialize_unit_interface_for_new_map (0000)
-000C67A0 0010:
-	_hud_dispose_unit_interface_from_old_map (0000)
-000C67B0 0010:
-	_hud_dispose_unit_interface (0000)
-000C67C0 0030:
-	_scripted_hud_show_health (0000)
-000C67F0 0030:
-	_scripted_hud_blink_health (0000)
-000C6820 0030:
-	_scripted_hud_show_shield (0000)
-000C6850 0030:
-	_scripted_hud_blink_shield (0000)
-000C6880 0030:
-	_scripted_hud_show_motion_sensor (0000)
-000C68B0 0030:
-	_scripted_hud_blink_motion_sensor (0000)
-000C68E0 0220:
-	_hud_play_unit_sounds (0000)
-000C6B00 0080:
-	_hud_fix_unit_data (0000)
-000C6B80 0220:
-	_hud_update_unit_local_player (0000)
-000C6DA0 02b0:
-	_hud_render_damage_indicators (0000)
-000C7050 0040:
-	_hud_tick_shield (0000)
-000C7090 0030:
-	_hud_update_unit (0000)
-000C70C0 0db0:
-	_hud_render_unit_interface (0000)
-00270268 0011:
-	??_C@_0BB@MIFNILGL@unit_hud_globals?$AA@ (0000)
-0027027C 0024:
-	??_C@_0CE@ICNCJJA@c?3?2halo?2SOURCE?2interface?2hud_uni@ (0000)
-002702A0 0013:
-	??_C@_0BD@OOGPMJCA@hud?5unit?5interface?$AA@ (0000)
-002702B4 0004:
-	__real@3e400000 (0000)
-002702B8 001d:
-	??_C@_0BN@FNBCLDEB@new_local_player_index?$CB?$DNNONE?$AA@ (0000)
-002702D8 001d:
-	??_C@_0BN@NPOPPJAG@old_local_player_index?$CB?$DNNONE?$AA@ (0000)
-002E4C68 0004:
-	?overcharge_count@?1??hud_render_unit_interface@@9@9 (0000)
-00453AC0 0004:
-	_unit_hud_globals (0000)
-*/
+/* HUD_UNIT.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/interface/hud_unit.c. */
 
 /* ---------- headers */
 
@@ -532,16 +469,8 @@ static void hud_update_unit_local_player(
 			{
 				real shield_drop = hud_state->last_shield_vitality - unit->object.shield_vitality;
 
-				/* port: the host drains an overshield by about 0.00074 a tick
-				and moves this meter's memory with it (hud_tick_shield). A
-				client does not drain shields. The lower value arrived as a
-				hit, so the meter flashed and the shield damage sound played
-				for the whole overshield. A small step from past full is that
-				drain (no more than about 25 ticks of it). A larger step is a
-				hit, and the meter still flashes. The step is closed here, so
-				one late packet cannot leave the meter a little behind and keep
-				the flash going, and a hit's flash already fading goes on
-				fading, as when the shield holds still. */
+				/* port: the host's overshield drain (0.00074 a tick, hud_tick_shield) reached a client as hits (flash,
+				damage sound): a step down from past full of at most 25 ticks' drain is closed here; a larger one is a hit */
 				if (hud_state->last_shield_vitality > 1.0f && shield_drop <= 0.02f)
 				{
 					hud_state->last_shield_vitality = unit->object.shield_vitality;
@@ -782,13 +711,29 @@ void hud_update_unit(
 
 /* ---------- public code */
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of the unit HUD, with their screen quads (port/ps3/include/ps3_timers.h) */
+#define PS3_UNIT_HUD_BEGIN() ((void)(ps3_span = ps3_timer_now(), ps3_quads = ps3_timer_quads))
+#define PS3_UNIT_HUD_PART(timer) ps3_timer_quad_part((timer), &ps3_span, &ps3_quads)
+#else
+#define PS3_UNIT_HUD_BEGIN() ((void)0)
+#define PS3_UNIT_HUD_PART(timer) ((void)0)
+#endif
+
 void hud_render_unit_interface(
 	struct player_datum *player)
 {
 	static long overcharge_count = 4;
 	long return_eip = get_return_eip();
 	long stack_buffer[STACK_BUFFER_LENGTH];
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+	uint32_t ps3_quads;
+#endif
 
+	PS3_UNIT_HUD_BEGIN();
 	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
 	match_assert(
 		"c:\\halo\\SOURCE\\interface\\hud_unit.c",
@@ -895,6 +840,7 @@ void hud_render_unit_interface(
 				struct unit_hud_interface_definition *hud_definition =
 					unit_hud_interface_definition_get(unit_hud_indices[unit_count]);
 
+				PS3_UNIT_HUD_PART(_ps3_timer_hud_unit_setup);
 				if (hud_definition->background.interface_bitmap.index != NONE)
 				{
 					short draw_flags = 0;
@@ -914,6 +860,7 @@ void hud_render_unit_interface(
 						draw_flags,
 						NONE);
 				}
+				PS3_UNIT_HUD_PART(_ps3_timer_hud_unit_background);
 
 				if (game_engine_has_shield(player_index) &&
 					!TEST_FLAG(
@@ -1034,6 +981,7 @@ void hud_render_unit_interface(
 							hud_state->last_shield_flash_time);
 					}
 				}
+				PS3_UNIT_HUD_PART(_ps3_timer_hud_shield);
 
 				if (!TEST_FLAG(
 					unit_hud_globals->script_flags,
@@ -1125,6 +1073,7 @@ void hud_render_unit_interface(
 
 					hud_state->last_body_vitality = hud_unit->object.body_vitality;
 				}
+				PS3_UNIT_HUD_PART(_ps3_timer_hud_health);
 
 				if (unit_count == 0 &&
 					!TEST_FLAG(
@@ -1185,10 +1134,12 @@ void hud_render_unit_interface(
 						local_player_count() > 1,
 						0.0f,
 						&corner);
+					PS3_UNIT_HUD_PART(_ps3_timer_hud_sensor_elements);
 					motion_sensor_draw_screen(
 						local_player_index,
 						local_player_count() > 1,
 						&corner);
+					PS3_UNIT_HUD_PART(_ps3_timer_hud_sensor);
 				}
 
 				{
@@ -1244,10 +1195,8 @@ void hud_render_unit_interface(
 							meter_index,
 							struct auxilary_meter_definition);
 
-						/* port: the type is the map's and indexes the flash times
-						and values (one type, the integrated light, which every
-						retail meter is): a meter of any other is not drawn, and
-						that is said once */
+						/* port: the type is the map's and indexes the flash times and values (one type, the integrated
+						light, as every retail meter): a meter of any other is not drawn, and that is said once */
 						if (!VALID_INDEX(meter->type, (short)NUMBEROF(hud_state->auxilary_flash_time)))
 						{
 							static boolean bad_meter_type_reported = FALSE;
@@ -1363,11 +1312,13 @@ void hud_render_unit_interface(
 				}
 
 				hud_state->auxilary_active_type_flags = (word)auxilary_flags;
+				PS3_UNIT_HUD_PART(_ps3_timer_hud_auxiliary);
 			}
 		}
 	}
 
 	match_assert_stack_frame("c:\\halo\\SOURCE\\interface\\hud_unit.c", 0x3C9);
+	PS3_UNIT_HUD_PART(_ps3_timer_hud_unit_setup);
 
 	return;
 }

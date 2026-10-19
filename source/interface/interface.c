@@ -498,15 +498,30 @@ void interface_draw_bitmap_modulated(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans of interface_draw_screen; hud_draw_screen's own are in hud.c (port/ps3/include/ps3_timers.h) */
+#define PS3_INTERFACE_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_INTERFACE_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#else
+#define PS3_INTERFACE_SPAN(span) ((void)0)
+#define PS3_INTERFACE_ADD(timer, span) ((void)0)
+#endif
+
 void interface_draw_screen(
 	void)
 {
 	real flashlight_power;
 	long weapon_hud_index;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
 	if (render.local_player_index == NONE)
 		return;
 
+	PS3_INTERFACE_SPAN(ps3_span);
 	weapon_hud_index = interface_get_weapon_hud_index(&flashlight_power);
 	if (weapon_hud_index != NONE)
 	{
@@ -651,8 +666,11 @@ void interface_draw_screen(
 		rasterizer_screen_effect(NULL);
 	}
 
+	PS3_INTERFACE_ADD(_ps3_timer_hud_screen_effect, ps3_span);
 	hud_draw_screen();
+	PS3_INTERFACE_SPAN(ps3_span);
 	game_engine_post_rasterize();
+	PS3_INTERFACE_ADD(_ps3_timer_hud_game_engine, ps3_span);
 
 	return;
 }

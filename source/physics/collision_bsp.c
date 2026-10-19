@@ -272,10 +272,8 @@ static boolean warned_about_collision_leaf;
 
 /* ---------- public code */
 
-/* port: a ring that leaves the bsp's edges, or does not close within
-MAXIMUM_EDGES_PER_COLLISION_SURFACE edges (the most a surface has, and
-what collision_surface_polygon's callers hold: the retail rings all close
-within 3 to 8 edges), ends there */
+/* port: a ring that leaves the bsp's edges, or does not close within MAXIMUM_EDGES_PER_COLLISION_SURFACE edges (the
+most a surface has, as collision_surface_polygon's callers hold; retail rings close within 3 to 8), ends there */
 boolean collision_surface_edge_ring_continues(
 	struct collision_bsp const *bsp,
 	long edge_index,
@@ -1137,6 +1135,7 @@ boolean collision_bsp_test_sphere(
 	result->vertex_count = 0;
 
 	bsp3d_test_sphere_recursive(&context, 0, 0);
+	PS3_COLLISION_NODES(collision_function, bsp->bsp3d.nodes.count - context.nodes_left);
 	collision_log_end_time(
 		collision_function,
 		collision_bsp_usage_times.sphere.QuadPart);
@@ -1179,6 +1178,7 @@ boolean collision_bsp_test_vector(
 
 	t = PIN(maximum_t, 0.f, 1.f);
 	return_value = collision_bsp_test_vector_recursive(&context, 0, 0.f, t, 0);
+	PS3_COLLISION_NODES(collision_function, bsp->bsp3d.nodes.count - context.nodes_left);
 	collision_log_end_time(
 		collision_function,
 		collision_bsp_usage_times.vector.QuadPart);
@@ -1188,13 +1188,8 @@ boolean collision_bsp_test_vector(
 
 /* ---------- private code */
 
-/* port: whether a test may enter a node (from the map) `depth` nodes deep
-in the bsp3d. One that is no node, deeper than the plane stacks hold
-(MAXIMUM_BSP3D_TRAVERSAL_DEPTH: the retail bsps are at most 66 deep), or
-past `nodes_left` (the bsp's node count when the test begins: a test enters
-each node of a tree at most once, so nodes that make no tree, a cycle or a
-node with two parents, would make it never end) ends the test there. The
-retail bsps are all trees */
+/* port: a node (from the map) that is no node, deeper than MAXIMUM_BSP3D_TRAVERSAL_DEPTH or past `nodes_left` (the count
+at the test's start: a bsp that is no tree would never end) ends the test there; retail bsps: trees, 66 deep at most */
 static boolean collision_bsp3d_enter_node(
 	struct collision_bsp const *bsp,
 	long node_index,
@@ -1218,9 +1213,8 @@ static boolean collision_bsp3d_enter_node(
 	return FALSE;
 }
 
-/* port: (as collision_bsp3d_enter_node, in a bsp2d of the bsp, at most
-MAXIMUM_BSP2D_TRAVERSAL_DEPTH deep, where the retail bsp2ds are at most 8:
-`nodes_left` is the bsp2d's node count when a bsp2d test begins) */
+/* port: (as collision_bsp3d_enter_node, in a bsp2d of the bsp, at most MAXIMUM_BSP2D_TRAVERSAL_DEPTH deep, retail
+at most 8: `nodes_left` is the bsp2d's node count when a bsp2d test begins) */
 static boolean collision_bsp2d_enter_node(
 	struct collision_bsp const *bsp,
 	long node_index,

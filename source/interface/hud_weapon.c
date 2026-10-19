@@ -1,54 +1,5 @@
-/*
-HUD_WEAPON.C
-
-symbols in this file:
-000C7E70 0040:
-	_hud_initialize_weapon_interface (0000)
-000C7EB0 0040:
-	_hud_initialize_weapon_interface_for_new_map (0000)
-000C7EF0 0010:
-	_hud_dispose_weapon_interface_from_old_map (0000)
-000C7F00 0010:
-	_hud_dispose_weapon_interface (0000)
-000C7F10 0030:
-	_scripted_hud_show_crosshair (0000)
-000C7F40 0070:
-	_get_hud_state (0000)
-000C7FB0 0070:
-	_get_crosshair_state (0000)
-000C8020 0050:
-	_code_000c8020 (0000)
-000C8070 02e0:
-	_code_000c8070 (0000)
-000C8350 0020:
-	_strip_path_name (0000)
-000C8370 08d0:
-	_code_000c8370 (0000)
-000C8C40 00a0:
-	_hud_fix_weapon_data (0000)
-000C8CE0 05c0:
-	_code_000c8ce0 (0000)
-000C92A0 0a60:
-	_code_000c92a0 (0000)
-000C9D00 0270:
-	_hud_update_weapon (0000)
-000C9F70 01f0:
-	_hud_render_weapon_interface (0000)
-002702F8 0013:
-	??_C@_0BD@NOPIHEPB@weapon_hud_globals?$AA@ (0000)
-0027030C 0026:
-	??_C@_0CG@DOLNIFA@c?3?2halo?2SOURCE?2interface?2hud_wea@ (0000)
-00270334 0015:
-	??_C@_0BF@HCPMNCNB@hud?5weapon?5interface?$AA@ (0000)
-00270350 0008:
-	__real@3ff4000000000000 (0000)
-00270358 0052:
-	??_C@_0FC@PHPDNACJ@frame?5index?5NONE?5when?5drawing?5cr@ (0000)
-002703AC 0030:
-	??_C@_0DA@GANDHJMM@too?5many?5levels?5in?5current?5weapo@ (0000)
-00453AC4 0004:
-	_weapon_hud_globals (0000)
-*/
+/* HUD_WEAPON.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/interface/hud_weapon.c. */
 
 /* ---------- headers */
 
@@ -139,9 +90,8 @@ enum hud_crosshair_flags
 	_hud_crosshair_runtime_invalid_bit,
 };
 
-/* TU-local copy: bitmap_group.h does not own the bitmap group type enum; the existing
-   copies are in bitmaps/bitmap_extract.c (complete), bitmaps/bitmap_group.c and
-   interface/hud_draw.c. */
+/* TU-local copy: bitmap_group.h does not own the bitmap group type enum; the other copies are in
+bitmaps/bitmap_extract.c (complete), bitmaps/bitmap_group.c and interface/hud_draw.c. */
 enum bitmap_group_type
 {
 	_bitmap_group_type_2d_textures = 0,
@@ -445,13 +395,8 @@ void hud_initialize_weapon_interface_for_new_map(
 		weapon_hud_globals,
 		NONE,
 		sizeof(*weapon_hud_globals));
-	/* port: no crosshair drawn until hud_update_weapon has worked out its
-	states (each tick). Drawn from the states above, all NONE, the default
-	weapon HUD's aim crosshair has frame NONE (crosshairs_draw's assertion,
-	and a sprite before the first in a release build): a distributed client's
-	player takes its unit when the host's word of it arrives, between ticks,
-	and without its weapons until the next word of what it carries, so a
-	frame could draw that crosshair before the next tick updated it. */
+	/* port: no crosshair until hud_update_weapon sets its states (each tick): a client's unit arrives between ticks,
+	and from these NONE states the default aim crosshair would draw frame NONE (an assert; a bad sprite) */
 	{
 		short local_player_index;
 
@@ -790,9 +735,8 @@ static void hud_update_weapon_local_player(
 					break;
 
 				case _crosshair_state_flash_ammo:
-					/* The redundant (remaining || loaded) && remaining tests of the four ammo states are first-party:
-					   January tests rounds_remaining twice (T+0x205..0x21b) and the later /Od build spells them the
-					   same way (0x638534..0x638599). */
+					/* The redundant (remaining || loaded) && remaining tests are first-party: January tests
+					rounds_remaining twice (T+0x205..0x21b), as the later /Od build (0x638534..0x638599). */
 					result = (weapon_state->magazines[0].rounds_remaining || weapon_state->magazines[0].rounds_loaded) &&
 						weapon_state->magazines[0].rounds_remaining &&
 						weapon_state->magazines[0].rounds_loaded <= root_definition->flash_cutoffs.loaded_ammo;
@@ -1059,9 +1003,8 @@ static void crosshairs_draw(
 								short frame_index;
 								pixel32 color;
 
-								/* port: a sprite item's sequence is the map's. Only one the
-								bitmap has is used, and the item isn't drawn otherwise (its
-								state still runs, below) */
+								/* port: a sprite item's sequence is the map's: one the bitmap lacks is not
+								drawn (its state still runs, below) */
 								if (!TEST_FLAG(item->flags, _hud_crosshair_not_a_sprite_bit))
 								{
 									struct bitmap_group *sequence_group = bitmap_group_get(verify_tag_reference(&element->crosshairs.bitmap));
@@ -1194,13 +1137,8 @@ static void crosshairs_draw(
 								}
 
 							draw_crosshair:
-								/* port: a frame that is not one of the item's sprites draws
-								nothing, rather than a sprite outside its sequence: a state not
-								yet worked out has none, and the states are worked out each tick
-								for the weapon then held, while a distributed client's weapons
-								change when the host's word arrives, between ticks, so a frame
-								can draw one weapon's crosshairs from another's states (the aim
-								state's 1 on the no-weapon crosshair's single sprite) */
+								/* port: a frame outside the item's sprites (none: a state not worked out) draws nothing;
+								a client's weapons change between ticks, so a frame can use another weapon's states */
 								if (frame_index < 0 ||
 									(sequence && frame_index >= sequence->sprites.count))
 								{
@@ -1309,9 +1247,8 @@ static void crosshairs_draw(
 												color,
 												in_multiplayer,
 												bitmap_group->type == _bitmap_group_type_interface_bitmaps,
-												/* port: a reticle, scaled with display.fov
-												(view_fov.c); a scope's picture keeps its
-												place */
+												/* port: a reticle, scaled with display.fov (view_fov.c); a scope's
+												picture keeps its place */
 												state_index != _crosshair_state_zoom);
 										}
 									}
@@ -1328,9 +1265,8 @@ static void crosshairs_draw(
 	return;
 }
 
-/* port: a hud element's state (or crosshair) type is the map's, and indexes
-the state tables (8 states, 19 crosshair states; retail elements use up to 7
-and 18): an element of any other is not drawn, and that is said once */
+/* port: a hud element's state (or crosshair) type is the map's and indexes the state tables (8 states, 19 crosshair
+states; retail: up to 7 and 18): an element of another is not drawn, and that is said once */
 static boolean weapon_hud_state_index_valid(
 	short state_index,
 	short state_count)
@@ -1642,9 +1578,8 @@ static void render_weapon_hud(
 			flags == 0);
 		SET_FLAG(flags, _weapon_overlay_on_always_bit, TRUE);
 		overlay_flags[5] = flags;
-		/* port: a weapon without a second magazine draws none of its overlays,
-		as the Xbox never set these; its states above read an empty one, whose
-		total ammunition is drawn disabled */
+		/* port: a weapon without a second magazine draws none of its overlays, as the Xbox never set these; its
+		states above read an empty one, whose total ammunition is drawn disabled */
 		if (weapon_state->magazine_count < 2)
 			overlay_flags[4] = overlay_flags[5] = 0;
 
@@ -2007,6 +1942,17 @@ void hud_update_weapon(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of the weapon HUD, with their screen quads (port/ps3/include/ps3_timers.h) */
+#define PS3_WEAPON_HUD_BEGIN() ((void)(ps3_span = ps3_timer_now(), ps3_quads = ps3_timer_quads))
+#define PS3_WEAPON_HUD_PART(timer) ps3_timer_quad_part((timer), &ps3_span, &ps3_quads)
+#else
+#define PS3_WEAPON_HUD_BEGIN() ((void)0)
+#define PS3_WEAPON_HUD_PART(timer) ((void)0)
+#endif
+
 void hud_render_weapon_interface(
 	struct player_datum *player)
 {
@@ -2014,7 +1960,12 @@ void hud_render_weapon_interface(
 		player->unit_index,
 		unit_get(player->unit_index)->unit.current_weapon_index);
 	boolean seat_disallows_hud = FALSE;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+	uint32_t ps3_quads;
+#endif
 
+	PS3_WEAPON_HUD_BEGIN();
 	if (weapon_index == NONE)
 	{
 		struct unit_datum *unit = unit_get(player->unit_index);
@@ -2056,6 +2007,7 @@ void hud_render_weapon_interface(
 		weapon_build_weapon_interface_state(
 			weapon_index,
 			&weapon_state);
+		PS3_WEAPON_HUD_PART(_ps3_timer_hud_weapon_state);
 		hud_index = definition->weapon.interface_definition.hud_interface.index;
 		if (hud_index != NONE)
 		{
@@ -2064,6 +2016,7 @@ void hud_render_weapon_interface(
 				weapon_index,
 				hud_index,
 				&weapon_state);
+			PS3_WEAPON_HUD_PART(_ps3_timer_hud_crosshairs);
 			render_weapon_hud(
 				hud_index,
 				player->local_player_index,
@@ -2072,26 +2025,32 @@ void hud_render_weapon_interface(
 				NULL,
 				NULL,
 				NULL);
+			PS3_WEAPON_HUD_PART(_ps3_timer_hud_weapon_panel);
 			play_weapon_hud_sounds(
 				player->local_player_index,
 				hud_index,
 				&weapon_state);
+			PS3_WEAPON_HUD_PART(_ps3_timer_hud_weapon_sounds);
 		}
 	}
 	else if (!seat_disallows_hud && !unit_get_weapon_count(player->unit_index))
 	{
 		struct weapon_interface_state weapon_state = { 0 };
 
+		PS3_WEAPON_HUD_PART(_ps3_timer_hud_weapon_state);
 		crosshairs_draw(
 			player,
 			NONE,
 			hud_globals->defaults.default_weapon_hud.index,
 			&weapon_state);
+		PS3_WEAPON_HUD_PART(_ps3_timer_hud_crosshairs);
 	}
 
+	PS3_WEAPON_HUD_PART(_ps3_timer_hud_weapon_state);
 	render_grenade_hud(
 		player->local_player_index,
 		player->unit_index);
+	PS3_WEAPON_HUD_PART(_ps3_timer_hud_grenades);
 	if (player->local_player_index != NONE)
 	{
 		get_hud_state(player->local_player_index)->last_weapon_index = weapon_index;

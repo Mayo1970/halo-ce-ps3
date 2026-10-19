@@ -653,21 +653,52 @@ void object_type_delete(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's spans of each part's update (port/ps3/include/ps3_timers.h) */
+#define PS3_PART_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_PART_ADD(group_tag, span) ((span) = ps3_timer_add(ps3_part_timer(group_tag), (span)))
+
+static int ps3_part_timer(
+	unsigned long group_tag)
+{
+	switch (group_tag)
+	{
+	case 'unit': return _ps3_timer_part_unit;
+	case 'bipd': return _ps3_timer_part_biped;
+	case 'vehi': return _ps3_timer_part_vehicle;
+	case 'item': case 'weap': case 'eqip': case 'garb': return _ps3_timer_part_item;
+	case 'proj': return _ps3_timer_part_projectile;
+	default: return _ps3_timer_part_other;
+	}
+}
+#else
+#define PS3_PART_SPAN(span) ((void)0)
+#define PS3_PART_ADD(group_tag, span) ((void)0)
+#endif
+
 boolean object_type_update(
 	long object_index)
 {
 	short i;
 	boolean result;
 	struct object_type_definition *definition = object_type_definition_get(object_get(object_index)->object.type);
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 	result = FALSE;
 
 	for (i = 0; definition->part_definitions[i]; i++)
 	{
 		struct object_type_definition *current_definition = definition->part_definitions[i];
+
+		PS3_PART_SPAN(ps3_span);
 		if (current_definition->datum_update && current_definition->datum_update(object_index))
 		{
 			result = TRUE;
 		}
+		PS3_PART_ADD(current_definition->group_tag, ps3_span);
 	}
 
 	return result;
