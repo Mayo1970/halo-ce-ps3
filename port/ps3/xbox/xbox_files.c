@@ -11,6 +11,9 @@ folders of the save root on the HDD (z:\ the map cache); names match in any case
 #define HOST_PATH_SIZE 1024
 /* transfers this large are logged with their time: the saves (16 MB a checkpoint) and the map copies */
 #define TRANSFER_LOG_BYTES 0x100000UL
+/* a read's lv2 calls at most this large: one 5 MB call read a structure BSP at 9.5 MB/s, the 128 KB calls of a
+save game 48 MB/s */
+#define READ_PIECE_BYTES 0x20000UL
 
 /* ---------- paths */
 
@@ -279,9 +282,13 @@ static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDW
 	}
 	while (!result && total < count)
 	{
+		DWORD piece = count - total;
+
+		if (!write && piece > READ_PIECE_BYTES)
+			piece = READ_PIECE_BYTES;
 		result = write ?
-			ps3_host_file_write(file->descriptor, (const char *)buffer + total, count - total, &done) :
-			ps3_host_file_read(file->descriptor, (char *)buffer + total, count - total, &done);
+			ps3_host_file_write(file->descriptor, (const char *)buffer + total, piece, &done) :
+			ps3_host_file_read(file->descriptor, (char *)buffer + total, piece, &done);
 		if (result || !done)
 			break;
 		total += (DWORD)done;
