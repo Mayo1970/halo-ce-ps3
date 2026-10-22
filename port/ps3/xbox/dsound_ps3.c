@@ -18,6 +18,12 @@ port's ring 43 ms ahead, an SPU decodes and mixes (ps3_spu.c); packets complete 
 #define MIX_PACKETS 8
 /* buffers a flush takes from the mixer's pass: the game's 256 channels of 4 packets */
 #define RETIRED_MAXIMUM 1024
+/* the packets' buffers by size, 16, 32 and 64 KB (a packet: up to 8,192 frames of 2 channels); a first block of 4 MB,
+then 1 MB more each time those are used up */
+#define SAMPLE_CLASSES 3
+#define SAMPLE_CLASS_BYTES 16384
+#define SAMPLE_FIRST_BLOCK_BYTES (4 * 1024 * 1024)
+#define SAMPLE_BLOCK_BYTES (1024 * 1024)
 /* one audio port block */
 #define MIX_CHUNK_FRAMES 256
 #define MIX_CHUNK_MICROSECONDS (MIX_CHUNK_FRAMES * 1000000 / OUTPUT_RATE)
@@ -61,9 +67,11 @@ struct voice_packet
 	/* the game's data, which stays until the packet completes, as the Xbox's hardware reads it in place */
 	const unsigned char *source;
 	unsigned long size;
-	/* allocated at Process, decoded by the mixer: interleaved floats, the source's channel count */
+	/* taken at Process (samples_take), decoded by the mixer: interleaved floats, the source's channel count; the
+	buffer's bytes */
 	float *samples;
 	unsigned long frames;
+	unsigned long bytes;
 	/* the mixer's, set with the lock held: decoded; played out, not yet completed */
 	BOOL decoded;
 	BOOL finished;
@@ -163,13 +171,25 @@ static volatile unsigned long mixer_pass;
 static volatile unsigned long packets_finished;
 static unsigned long packets_completed;
 
-/* buffers a flush took from a pass, freed once that pass is over (game thread, with the lock) */
+/* buffers a flush took from a pass, given back once that pass is over (game thread, with the lock) */
 static struct
 {
 	float *samples;
+	unsigned long bytes;
 	unsigned long pass;
 } retired[RETIRED_MAXIMUM];
 static unsigned long retired_count;
+
+/* the packets' buffers, from blocks never freed: the heap's 10 to 25 allocations and frees a second fragmented it
+(ps3_heap.c's log). A free buffer's first bytes link the next free one of its size. Game thread, with the lock */
+static struct
+{
+	void *free[SAMPLE_CLASSES];
+	unsigned char *block;
+	unsigned long room;
+	unsigned long blocks, block_bytes;
+	unsigned long in_use, peak;
+} samples_store;
 
 /* the game's thread (DirectSoundCreate comes first, on the main thread); its waits are timed */
 static void mixer_enter(void)
@@ -228,7 +248,96 @@ static void mixer_wait_pass(unsigned long pass)
 	}
 }
 
-/* (game thread, with the lock) frees the retired buffers whose pass is over */
+/* the size class of a buffer's bytes; SAMPLE_CLASSES: over the largest */
+static int samples_class(unsigned long bytes)
+{
+	int class = 0;
+
+	while (class < SAMPLE_CLASSES && (unsigned long)SAMPLE_CLASS_BYTES << class < bytes)
+		class++;
+	return class;
+}
+
+static void samples_free_push(int class, void *buffer)
+{
+	*(void **)buffer = samples_store.free[class];
+	samples_store.free[class] = buffer;
+}
+
+/* (game thread, with the lock) a new block; the last one's rest, a multiple of 16 KB, goes to the smaller sizes */
+static BOOL samples_block_add(void)
+{
+	unsigned long bytes = samples_store.blocks ? SAMPLE_BLOCK_BYTES : SAMPLE_FIRST_BLOCK_BYTES;
+	unsigned char *block;
+	int class;
+
+	for (class = SAMPLE_CLASSES - 1; class >= 0; class--)
+	{
+		unsigned long size = (unsigned long)SAMPLE_CLASS_BYTES << class;
+
+		while (samples_store.room >= size)
+		{
+			samples_free_push(class, samples_store.block);
+			samples_store.block += size;
+			samples_store.room -= size;
+		}
+	}
+	block = ps3_spu_buffer_allocate(bytes);
+	if (!block)
+		return FALSE;
+	samples_store.block = block;
+	samples_store.room = bytes;
+	samples_store.blocks++;
+	samples_store.block_bytes += bytes;
+	return TRUE;
+}
+
+/* (game thread, with the lock) a buffer no pass reads, back to its size's free list (one over 64 KB: the heap's) */
+static void samples_give_back(float *samples, unsigned long bytes)
+{
+	int class = samples_class(bytes);
+
+	if (class == SAMPLE_CLASSES)
+	{
+		free(samples);
+		return;
+	}
+	samples_store.in_use -= bytes;
+	samples_free_push(class, samples);
+}
+
+/* (game thread, with the lock) a buffer of the smallest size that holds bytes, its bytes in *taken; NULL: no memory */
+static float *samples_take(unsigned long bytes, unsigned long *taken)
+{
+	int class = samples_class(bytes);
+	unsigned long size = (unsigned long)SAMPLE_CLASS_BYTES << class;
+	void *buffer;
+
+	if (class == SAMPLE_CLASSES)
+	{
+		/* (none of the game's packets) */
+		*taken = bytes;
+		return ps3_spu_buffer_allocate(bytes);
+	}
+	buffer = samples_store.free[class];
+	if (buffer)
+		samples_store.free[class] = *(void **)buffer;
+	else
+	{
+		if (samples_store.room < size && !samples_block_add())
+			return NULL;
+		buffer = samples_store.block;
+		samples_store.block += size;
+		samples_store.room -= size;
+	}
+	*taken = size;
+	samples_store.in_use += size;
+	if (samples_store.in_use > samples_store.peak)
+		samples_store.peak = samples_store.in_use;
+	return buffer;
+}
+
+/* (game thread, with the lock) gives back the retired buffers whose pass is over */
 static void retired_free(void)
 {
 	unsigned long index, kept = 0;
@@ -238,20 +347,20 @@ static void retired_free(void)
 		if (retired[index].pass == mixer_pass)
 			retired[kept++] = retired[index];
 		else
-			free(retired[index].samples);
+			samples_give_back(retired[index].samples, retired[index].bytes);
 	}
 	retired_count = kept;
 }
 
 /* (game thread, with the lock) a completed packet's buffer; the mixer's pass may read an unfinished one */
-static void samples_release(float *samples, BOOL finished)
+static void samples_release(float *samples, unsigned long bytes, BOOL finished)
 {
 	if (!samples)
 		return;
 	retired_free();
 	if (finished || !(mixer_pass & 1))
 	{
-		free(samples);
+		samples_give_back(samples, bytes);
 		return;
 	}
 	if (retired_count == RETIRED_MAXIMUM)
@@ -264,12 +373,13 @@ static void samples_release(float *samples, BOOL finished)
 		mixer_enter();
 		retired_free();
 		if (mixer_pass != pass)
-			free(samples);
+			samples_give_back(samples, bytes);
 		else
 			platform_log("DirectSound: a flushed packet's buffer kept (the mixer's pass did not end)");
 		return;
 	}
 	retired[retired_count].samples = samples;
+	retired[retired_count].bytes = bytes;
 	retired[retired_count].pass = mixer_pass;
 	retired_count++;
 }
@@ -913,6 +1023,7 @@ static void statistics_log(void)
 	static unsigned last_silent, last_partial;
 	uint64_t now = ps3_host_microseconds();
 	unsigned long chunks, microseconds, maximum, decode, held, held_maximum, decoded;
+	unsigned long in_use, peak, blocks, block_bytes;
 	unsigned long playing_streams = 0, playing_buffers = 0;
 	unsigned silent = 0, partial = 0;
 	struct ps3_spu_mixer_statistics spu;
@@ -935,6 +1046,10 @@ static void statistics_log(void)
 	held = mixer_hold_microseconds;
 	held_maximum = mixer_hold_maximum_microseconds;
 	decoded = packets_decoded;
+	in_use = samples_store.in_use;
+	peak = samples_store.peak;
+	blocks = samples_store.blocks;
+	block_bytes = samples_store.block_bytes;
 	mixer_chunks = 0;
 	mixer_microseconds = 0;
 	mixer_maximum_microseconds = 0;
@@ -957,10 +1072,11 @@ static void statistics_log(void)
 		snprintf(spu_text, sizeof(spu_text), "SPU %s", spu.up ? "idle" : "off");
 	/* the mixer's lock: held twice a chunk (a pass); the mixer's time includes its wait for the SPU */
 	platform_log("DirectSound: %lu streams and %lu buffers playing, %lu packets decoded; mixer %lu us a chunk "
-		"(max %lu) of %d, decoding %lu, the lock held %lu (max %lu); port blocks %u silent, %u partial; %s",
-		playing_streams, playing_buffers, decoded, chunks ? microseconds / chunks : 0, maximum, MIX_CHUNK_MICROSECONDS,
-		chunks ? decode / chunks : 0, chunks ? held / chunks : 0, held_maximum, silent - last_silent,
-		partial - last_partial, spu_text);
+		"(max %lu) of %d, decoding %lu, the lock held %lu (max %lu); port blocks %u silent, %u partial; %s; packet "
+		"buffers %lu KB (peak %lu) of %lu KB in %lu blocks", playing_streams, playing_buffers, decoded,
+		chunks ? microseconds / chunks : 0, maximum, MIX_CHUNK_MICROSECONDS, chunks ? decode / chunks : 0,
+		chunks ? held / chunks : 0, held_maximum, silent - last_silent, partial - last_partial, spu_text, in_use / 1024,
+		peak / 1024, block_bytes / 1024, blocks);
 	last_silent = silent;
 	last_partial = partial;
 }
@@ -973,6 +1089,7 @@ static void stream_complete_head(struct ps3_stream *stream, DWORD status, DWORD 
 	struct voice_packet *entry = &stream->packets[stream->packet_head];
 	XMEDIAPACKET packet = entry->packet;
 	float *samples = entry->samples;
+	unsigned long bytes = entry->bytes;
 	BOOL finished = entry->finished;
 
 	entry->samples = NULL;
@@ -980,7 +1097,7 @@ static void stream_complete_head(struct ps3_stream *stream, DWORD status, DWORD 
 	entry->finished = FALSE;
 	stream->packet_head = (stream->packet_head + 1) % MAXIMUM_STREAM_PACKETS;
 	stream->packet_count--;
-	samples_release(samples, finished);
+	samples_release(samples, bytes, finished);
 	if (packet.pdwCompletedSize)
 		*packet.pdwCompletedSize = completed_size;
 	if (packet.pdwStatus)
@@ -1092,7 +1209,7 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 {
 	struct ps3_stream *stream = (struct ps3_stream *)object;
 	struct voice_packet *entry;
-	unsigned long frames;
+	unsigned long frames, bytes = 0;
 	float *samples = NULL;
 
 	(void)output;
@@ -1102,15 +1219,16 @@ static HRESULT STDMETHODCALLTYPE stream_process(IDirectSoundStream *object, LPCX
 		return E_OUTOFMEMORY;
 	/* only the buffer here, which the SPU's DMA can write: the mixer decodes it (packet_decode) */
 	frames = input->pvBuffer ? decoded_frames(&stream->voice, input->dwMaxSize) : 0;
-	if (frames)
-		samples = ps3_spu_buffer_allocate(frames * stream->voice.channels * sizeof(float));
 	mixer_enter();
+	if (frames)
+		samples = samples_take((frames * stream->voice.channels * sizeof(float) + 127) & ~127ul, &bytes);
 	entry = &stream->packets[(stream->packet_head + stream->packet_count) % MAXIMUM_STREAM_PACKETS];
 	entry->packet = *input;
 	entry->source = input->pvBuffer;
 	entry->size = input->dwMaxSize;
 	entry->samples = samples;
 	entry->frames = samples ? frames : 0;
+	entry->bytes = bytes;
 	entry->decoded = FALSE;
 	entry->finished = FALSE;
 	if (input->pdwStatus)

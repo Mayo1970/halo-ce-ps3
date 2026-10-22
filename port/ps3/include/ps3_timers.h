@@ -60,6 +60,8 @@ enum
 	_ps3_timer_point_total,
 	_ps3_timer_point_wind,
 	_ps3_timer_point_rays,
+	/* of the rays, those that test no surface (_point_physics_force_no_collisions_bit: the weather's), with their calls */
+	_ps3_timer_point_free_rays,
 	/* ai_update's parts (ai.c), ms a tick; an actor's update by step, the decisions and control by call (actors.c),
 	with the actors (ps3_timer_counts) */
 	_ps3_timer_ai_conversations,
@@ -164,6 +166,20 @@ enum
 	_ps3_timer_old_water,
 	_ps3_timer_old_antigrav,
 	_ps3_timer_old_translate,
+	/* compute_ground_plane's parts (physics.c, the new physics' and the old's): the features in the sphere with the
+	calls and the features found (a count only), the point's test against them with the calls */
+	_ps3_timer_ground_features,
+	_ps3_timer_ground_feature_count,
+	_ps3_timer_ground_point_test,
+	/* in those features in the sphere (collisions.c): the bsp's leaves with the calls and the leaves (a count), the
+	structure's features, the clusters' objects (the clusters; the objects walked, read from kept blocks), their tests */
+	_ps3_timer_ground_leaves,
+	_ps3_timer_ground_leaf_count,
+	_ps3_timer_ground_structure,
+	_ps3_timer_ground_objects,
+	_ps3_timer_ground_objects_walked,
+	_ps3_timer_ground_objects_read,
+	_ps3_timer_ground_object_tests,
 	/* vehicle_update's parts (vehicles.c): the physics with the vehicles simulated as its count, the effects after it
 	(slipping, suspension, crashing, airborne), the stopping, the animation with the vehicles as its count */
 	_ps3_timer_vehicle_physics,
@@ -201,6 +217,41 @@ enum
 	_ps3_timer_render_first_person_draw,
 	_ps3_timer_render_lighting,
 	_ps3_timer_render_models,
+	/* render_model's parts at every call but the shadows' (models.c): the node matrices relative to the model's (the
+	nodes as the count), the begin, the parts' draws (the models), the end; the objects' widgets (render_objects.c) */
+	_ps3_timer_model_nodes,
+	_ps3_timer_model_begin,
+	_ps3_timer_model_parts,
+	_ps3_timer_model_end,
+	_ps3_timer_render_widgets,
+	/* in the parts' draws (render_model_parts): the solid draws of model and environment shaders, the decals' draws, the
+	transparent parts' centroids and submits, each with its count; the rest: the loops over regions and parts, the links */
+	_ps3_timer_parts_model,
+	_ps3_timer_parts_environment,
+	_ps3_timer_parts_decals,
+	_ps3_timer_parts_transparent,
+	_ps3_timer_parts_rest,
+	/* the lights pass's parts (render.c): the lens flares' occlusion tests, the objects' shadows, the lights' diffuse
+	part, the light and alpha-tested decals; the diffuse pass's: the structure's diffuse textures, the decals */
+	_ps3_timer_lights_flares,
+	_ps3_timer_lights_shadows,
+	_ps3_timer_lights_diffuse,
+	_ps3_timer_lights_decals,
+	_ps3_timer_diffuse_structure,
+	_ps3_timer_diffuse_decals,
+	/* the objects' shadows (render_objects.c): the pass's begin and end, the objects' checks and lighting (the objects),
+	a shadow's begin (the calls), its model (the shadows), volume, structure, end; the structure's parts below */
+	_ps3_timer_shadow_pass,
+	_ps3_timer_shadow_objects,
+	_ps3_timer_shadow_begin,
+	_ps3_timer_shadow_model,
+	_ps3_timer_shadow_volume,
+	_ps3_timer_shadow_structure,
+	_ps3_timer_shadow_end,
+	/* in the structure (structure_render.c): the surfaces found (their count), their triangles built, their draws */
+	_ps3_timer_shadow_surfaces,
+	_ps3_timer_shadow_triangles,
+	_ps3_timer_shadow_draws,
 	/* the render's effects pass (render.c) */
 	_ps3_timer_effects_weather,
 	_ps3_timer_effects_particles,
@@ -213,9 +264,14 @@ enum
 	_ps3_timer_weather_update,
 	_ps3_timer_weather_sprites,
 	_ps3_timer_weather_draw,
-	/* the transparent geometry's draw (rasterizer_transparent_geometry.c): the sort with the groups as its count, the
-	groups' begin and end, each group (with those it draws first) by its shader's type, with the groups */
+	/* in the update, each particle's acceleration and its point_physics_update */
+	_ps3_timer_weather_acceleration,
+	_ps3_timer_weather_point,
+	/* the transparent geometry's draw (rasterizer_transparent_geometry.c): the sort with the groups as its count (in
+	it the qsort and the port's model order), the groups' begin and end, each group by its shader's type, with the groups */
 	_ps3_timer_transparent_sort,
+	_ps3_timer_transparent_qsort,
+	_ps3_timer_transparent_order_models,
 	_ps3_timer_transparent_begin_end,
 	_ps3_timer_transparent_effect,
 	_ps3_timer_transparent_model,
@@ -336,6 +392,10 @@ extern uint32_t ps3_timer_counts[_ps3_timer_count];
 extern uint32_t ps3_timer_game_ticks;
 /* the screen quads drawn */
 extern uint32_t ps3_timer_quads;
+/* set while compute_ground_plane's sphere query runs (physics.c), for the timers of its parts (collisions.c) */
+extern uint32_t ps3_timer_ground_query;
+/* the game thread's Direct3D draws and constants in a timer's spans: render.c's splits and parts, render_model's */
+extern uint64_t ps3_render_d3d[_ps3_timer_count];
 /* the collision tests' time and count by the user on top of the game's stack, and their time by kind */
 extern uint64_t ps3_collision_timers[PS3_COLLISION_USERS];
 extern uint32_t ps3_collision_tests[PS3_COLLISION_USERS];

@@ -31,7 +31,9 @@ enum
 	_register_coordinates = 20,
 	_register_v1r0_sum = 21,
 	_register_ef_product = 22,
-	_register_count = 23,
+	/* each combiner stage's ab, cd and sum, kept for clamp_through until the optimizer packs the registers */
+	_register_stages = 23,
+	_register_count = _register_stages + 3 * 8,
 };
 
 /* combiner registers */
@@ -75,6 +77,10 @@ enum
 
 /* the fixed constant most instructions take their numbers from: 0 1 2 0.5 */
 enum { _k_zero, _k_one, _k_two, _k_half };
+
+/* the clamp to [-1, 1] a combiner's write makes: one instruction for the optimizer, which can see through it
+(clamp_through), then an RSX MAX and MIN (expand_clamps) */
+enum { _op_clamp_signed = 0x3e };
 static const float fixed_constant[4] = { 0.0f, 1.0f, 2.0f, 0.5f };
 
 struct context
@@ -562,7 +568,8 @@ static void combiner_input(struct context *context, uint32_t input, int alpha, i
 	}
 }
 
-/* the output mapping, then the clamp to [-1, 1] the registers hold */
+/* the output mapping; the clamp to [-1, 1] the registers hold comes with the writes, which keeps the value before it
+for the next stage's inputs (clamp_through) */
 static void output_mapping(struct context *context, int reg, int mask, uint32_t flags)
 {
 	struct rsx_source value = temporary(reg);
@@ -587,8 +594,6 @@ static void output_mapping(struct context *context, int reg, int mask, uint32_t 
 	default:
 		break;
 	}
-	emit2(context, _rsx_fp_max, reg, mask, value, negated(fixed(_k_one)));
-	emit2(context, _rsx_fp_min, reg, mask, value, fixed(_k_one));
 }
 
 static int destination_register(uint32_t reg)
@@ -632,7 +637,8 @@ static void combiner_stage(struct context *context, int stage)
 	uint32_t rgb_inputs = key->rgb_inputs[stage], alpha_inputs = key->alpha_inputs[stage];
 	uint32_t rgb_outputs = key->rgb_outputs[stage], alpha_outputs = key->alpha_outputs[stage];
 	uint32_t rgb_flags = rgb_outputs >> 12, alpha_flags = alpha_outputs >> 12;
-	int portion;
+	int portion, ab_register = _register_stages + 3 * stage, cd_register = ab_register + 1;
+	int sum_register = ab_register + 2;
 
 	combiner_input(context, (rgb_inputs >> 24) & 0xff, 0, stage, _register_a);
 	combiner_input(context, (rgb_inputs >> 16) & 0xff, 0, stage, _register_b);
@@ -643,12 +649,12 @@ static void combiner_stage(struct context *context, int stage)
 	combiner_input(context, (alpha_inputs >> 8) & 0xff, 1, stage, _register_c);
 	combiner_input(context, alpha_inputs & 0xff, 1, stage, _register_d);
 
-	emit2(context, (rgb_flags & 0x02) ? _rsx_fp_dp3 : _rsx_fp_mul, _register_ab, _rsx_xyz,
+	emit2(context, (rgb_flags & 0x02) ? _rsx_fp_dp3 : _rsx_fp_mul, ab_register, _rsx_xyz,
 		temporary(_register_a), temporary(_register_b));
-	emit2(context, _rsx_fp_mul, _register_ab, _rsx_w, temporary(_register_a), temporary(_register_b));
-	emit2(context, (rgb_flags & 0x01) ? _rsx_fp_dp3 : _rsx_fp_mul, _register_cd, _rsx_xyz,
+	emit2(context, _rsx_fp_mul, ab_register, _rsx_w, temporary(_register_a), temporary(_register_b));
+	emit2(context, (rgb_flags & 0x01) ? _rsx_fp_dp3 : _rsx_fp_mul, cd_register, _rsx_xyz,
 		temporary(_register_c), temporary(_register_d));
-	emit2(context, _rsx_fp_mul, _register_cd, _rsx_w, temporary(_register_c), temporary(_register_d));
+	emit2(context, _rsx_fp_mul, cd_register, _rsx_w, temporary(_register_c), temporary(_register_d));
 	if ((rgb_flags | alpha_flags) & 0x04)
 		mux_selector(context);
 	for (portion = 0; portion < 2; portion++)
@@ -660,18 +666,18 @@ static void combiner_stage(struct context *context, int stage)
 		{
 			/* sum = selector ? cd : ab, as ab - ab * s + cd * s: exact for s 0 or 1. (cd - ab) * s + ab can
 			miss cd by an ulp, and a later mux that reads such an r0.a of +-0.5 then selects the other side. */
-			emit(context, _rsx_fp_mad, _register_sum, mask, negated(temporary(_register_ab)),
-				replicated(temporary(_register_scratch2), 0), temporary(_register_ab));
-			emit(context, _rsx_fp_mad, _register_sum, mask, temporary(_register_cd),
-				replicated(temporary(_register_scratch2), 0), temporary(_register_sum));
+			emit(context, _rsx_fp_mad, sum_register, mask, negated(temporary(ab_register)),
+				replicated(temporary(_register_scratch2), 0), temporary(ab_register));
+			emit(context, _rsx_fp_mad, sum_register, mask, temporary(cd_register),
+				replicated(temporary(_register_scratch2), 0), temporary(sum_register));
 		}
 		else
 		{
-			emit2(context, _rsx_fp_add, _register_sum, mask, temporary(_register_ab), temporary(_register_cd));
+			emit2(context, _rsx_fp_add, sum_register, mask, temporary(ab_register), temporary(cd_register));
 		}
-		output_mapping(context, _register_ab, mask, flags);
-		output_mapping(context, _register_cd, mask, flags);
-		output_mapping(context, _register_sum, mask, flags);
+		output_mapping(context, ab_register, mask, flags);
+		output_mapping(context, cd_register, mask, flags);
+		output_mapping(context, sum_register, mask, flags);
 	}
 
 	/* the writes, after both portions have read their inputs, in nv2a_psh.c's order */
@@ -686,18 +692,18 @@ static void combiner_stage(struct context *context, int stage)
 
 		if (ab >= 0)
 		{
-			emit1(context, _rsx_fp_mov, ab, mask, temporary(_register_ab));
+			emit1(context, _op_clamp_signed, ab, mask, temporary(ab_register));
 			if (!portion && (flags & 0x80))
-				emit1(context, _rsx_fp_mov, ab, _rsx_w, replicated(temporary(_register_ab), 2));
+				emit1(context, _op_clamp_signed, ab, _rsx_w, replicated(temporary(ab_register), 2));
 		}
 		if (cd >= 0)
 		{
-			emit1(context, _rsx_fp_mov, cd, mask, temporary(_register_cd));
+			emit1(context, _op_clamp_signed, cd, mask, temporary(cd_register));
 			if (!portion && (flags & 0x40))
-				emit1(context, _rsx_fp_mov, cd, _rsx_w, replicated(temporary(_register_cd), 2));
+				emit1(context, _op_clamp_signed, cd, _rsx_w, replicated(temporary(cd_register), 2));
 		}
 		if (sum >= 0)
-			emit1(context, _rsx_fp_mov, sum, mask, temporary(_register_sum));
+			emit1(context, _op_clamp_signed, sum, mask, temporary(sum_register));
 	}
 }
 
@@ -913,6 +919,7 @@ static int source_count(int opcode)
 	case _rsx_fp_rcp:
 	case _rsx_fp_ex2:
 	case _rsx_fp_lg2:
+	case _op_clamp_signed:
 		return 1;
 	case _rsx_fp_mad:
 		return 3;
@@ -925,6 +932,7 @@ static int per_component(int opcode)
 {
 	switch (opcode)
 	{
+	case _op_clamp_signed:
 	case _rsx_fp_mov:
 	case _rsx_fp_mul:
 	case _rsx_fp_add:
@@ -1178,6 +1186,7 @@ static float fold(int opcode, float a, float b, float c)
 	case _rsx_fp_seq: return a == b ? 1.0f : 0.0f;
 	case _rsx_fp_frc: return a - floorf(a);
 	case _rsx_fp_flr: return floorf(a);
+	case _op_clamp_signed: return a < -1.0f ? -1.0f : a > 1.0f ? 1.0f : a;
 	default: return a;
 	}
 }
@@ -1222,6 +1231,10 @@ static void bounds(int opcode, const struct operand *operands, int lane, float *
 	case _rsx_fp_mov:
 		*low = a->low;
 		*high = a->high;
+		break;
+	case _op_clamp_signed:
+		*low = a->low > -1.0f ? (a->low < 1.0f ? a->low : 1.0f) : -1.0f;
+		*high = a->high < 1.0f ? (a->high > -1.0f ? a->high : -1.0f) : 1.0f;
 		break;
 	case _rsx_fp_mul:
 		product_bounds(a, b, low, high);
@@ -1346,6 +1359,10 @@ static void simplify(struct rsx_instruction *instruction, struct operand operand
 			{
 			case _rsx_fp_mov:
 				outcome = 0;
+				break;
+			case _op_clamp_signed:
+				if (a->low >= -1.0f && a->high <= 1.0f)
+					outcome = 0;
 				break;
 			case _rsx_fp_mul:
 				if (is_number(a, 0.0f) || is_number(b, 0.0f))
@@ -1677,6 +1694,328 @@ static int same_instruction(const struct rsx_instruction *a, const struct rsx_in
 	return 1;
 }
 
+/* ---------- reading what made a value */
+
+/* the value a name gives, if it is still to be read: a temporary at its version, an input, a uniform, a number */
+static int named_value(const struct optimizer *o, const struct name *name, struct value *value)
+{
+	if (name->kind == _value_number)
+	{
+		float x;
+
+		memcpy(&x, &name->bits, sizeof(x));
+		*value = number_value(x);
+		return 1;
+	}
+	if (name->type == _rsx_register_temporary)
+	{
+		int index = name->index & (TEMPORARIES - 1), component = name->component & 3;
+
+		if (o->versions[index][component] != name->version)
+			return 0;
+		*value = held_value(o, index, component);
+	}
+	else
+	{
+		*value = register_value(name->type, name->index, name->component, 0);
+		/* as resolve: the colours and the colour uniforms are 0..1 */
+		if ((name->type == _rsx_register_input &&
+			(name->index == _rsx_fp_input_color0 || name->index == _rsx_fp_input_color1)) ||
+			(name->type == _rsx_register_constant && name->index < _rsx_uniform_fog))
+		{
+			value->low = 0.0f;
+			value->high = 1.0f;
+		}
+	}
+	*value = modified(*value, name->flags & 1, (name->flags >> 1) & 1);
+	return 1;
+}
+
+/* what made a value, if it is a per-component instruction's own result, unsaturated, and still held */
+static const struct expression *value_maker(const struct optimizer *o, const struct value *value)
+{
+	int index = value->index & (TEMPORARIES - 1), component = value->component & 3;
+	const struct expression *made = &o->made[index][component];
+
+	if (value->kind != _value_register || value->type != _rsx_register_temporary || value->absolute ||
+		o->versions[index][component] != value->version || o->made_versions[index][component] != value->version ||
+		made->saturate || !per_component(made->opcode))
+		return NULL;
+	return made;
+}
+
+/* the value a clamp to [-1, 1] took, if a clamp made this one (through its negate) and that value is still held */
+static int clamped_base(const struct optimizer *o, const struct value *value, struct value *base)
+{
+	const struct expression *made = value_maker(o, value);
+
+	if (!made || made->opcode != _op_clamp_signed || !named_value(o, &made->operands[0][0], base))
+		return 0;
+	*base = modified(*base, value->negate, 0);
+	return 1;
+}
+
+/* reads through the clamps to [-1, 1] the instruction makes redundant: a saturated MOV; a saturated ADD whose other
+operand is 0..1; a saturated MIN or MAX whose other is -1..1; MAX(t, 0..1) as MAX_SAT(x, 0..1) */
+static void clamp_through(const struct optimizer *o, struct rsx_instruction *instruction, struct operand operands[3],
+	int count)
+{
+	int lanes = instruction->mask, position, lane;
+
+	for (position = 0; position < count && count <= 2; position++)
+	{
+		struct value bases[4];
+		int through = 0, all = 1;
+
+		for (lane = 0; lane < 4; lane++)
+		{
+			const struct value *other = &operands[1 - position].values[lane];
+			int fits;
+
+			if (!(lanes & (1 << lane)))
+				continue;
+			fits = clamped_base(o, &operands[position].values[lane], &bases[lane]);
+			switch (instruction->opcode)
+			{
+			case _rsx_fp_mov:
+				fits = fits && instruction->saturate;
+				break;
+			case _rsx_fp_add:
+				fits = fits && instruction->saturate && other->low >= 0.0f && other->high <= 1.0f;
+				break;
+			case _rsx_fp_min:
+				fits = fits && instruction->saturate && other->low >= -1.0f && other->high <= 1.0f;
+				break;
+			case _rsx_fp_max:
+				fits = fits && (instruction->saturate ? other->low >= -1.0f && other->high <= 1.0f :
+					other->low >= 0.0f && other->high <= 1.0f);
+				break;
+			default:
+				fits = 0;
+				break;
+			}
+			if (fits)
+				through |= 1 << lane;
+			else
+				all = 0;
+		}
+		/* max(clamp(x), y) for y 0..1 is clamp(max(x, y), 0, 1): every component saturated then */
+		if (!through || (instruction->opcode == _rsx_fp_max && !instruction->saturate && !all))
+			continue;
+		instruction->saturate = 1;
+		for (lane = 0; lane < 4; lane++)
+		{
+			if (through & (1 << lane))
+				operands[position].values[lane] = bases[lane];
+		}
+		operands[position].source = source_none();
+	}
+}
+
+/* t's maker as x * m + n with numbers m and n: a MUL, ADD or MAD of numbers and one value */
+static int linear_maker(const struct optimizer *o, const struct value *t, struct value *x, float *m, float *n)
+{
+	const struct expression *made = value_maker(o, t);
+	struct value values[3];
+	int position, count, variable = -1;
+
+	if (!made || (made->opcode != _rsx_fp_mul && made->opcode != _rsx_fp_add && made->opcode != _rsx_fp_mad))
+		return 0;
+	count = source_count(made->opcode);
+	for (position = 0; position < count; position++)
+	{
+		if (!named_value(o, &made->operands[position][0], &values[position]))
+			return 0;
+		if (values[position].kind != _value_number)
+		{
+			if (variable >= 0)
+				return 0;
+			variable = position;
+		}
+	}
+	if (variable < 0)
+		return 0;
+	*x = values[variable];
+	switch (made->opcode)
+	{
+	case _rsx_fp_mul:
+		*m = values[1 - variable].number;
+		*n = 0.0f;
+		break;
+	case _rsx_fp_add:
+		*m = 1.0f;
+		*n = values[1 - variable].number;
+		break;
+	default:
+		if (variable == 2)
+			return 0;
+		*m = values[1 - variable].number;
+		*n = values[2].number;
+		break;
+	}
+	/* the reader's negate of t */
+	if (t->negate)
+	{
+		*m = -*m;
+		*n = -*n;
+	}
+	return 1;
+}
+
+static void numbers_operand(struct operand *operand, const float numbers[4])
+{
+	int lane;
+
+	operand->source = source_none();
+	for (lane = 0; lane < 4; lane++)
+		operand->values[lane] = number_value(numbers[lane]);
+}
+
+/* the instruction from what made an operand: an ADD of a product as a MAD of its factors; numbers times or plus a
+value numbers made from another as one MAD of that; (x + 1) * b as a MAD of x, b and b. 1 if it changed */
+static int combine(const struct optimizer *o, struct rsx_instruction *instruction, struct operand operands[3], int *count)
+{
+	int lanes = instruction->mask, position, lane, fits;
+	struct operand result[3];
+
+	if (!lanes || (instruction->opcode != _rsx_fp_add && instruction->opcode != _rsx_fp_mul &&
+		instruction->opcode != _rsx_fp_mad))
+		return 0;
+	memset(result, 0, sizeof(result));
+	/* t + t is t * 2 */
+	if (instruction->opcode == _rsx_fp_add)
+	{
+		for (lane = 0, fits = 1; lane < 4 && fits; lane++)
+			fits = !(lanes & (1 << lane)) || same_value(&operands[0].values[lane], &operands[1].values[lane]);
+		if (fits)
+		{
+			const float two[4] = { 2.0f, 2.0f, 2.0f, 2.0f };
+
+			instruction->opcode = _rsx_fp_mul;
+			numbers_operand(&operands[1], two);
+			return 1;
+		}
+	}
+	/* numbers and one value t = x * m + n: x * (m * p) + (n * p + q) */
+	for (position = 0; position < *count; position++)
+	{
+		float multiplier[4], addend[4];
+		int other;
+
+		for (lane = 0, fits = 1; lane < 4 && fits; lane++)
+		{
+			float m, n, p = 1.0f, q = 0.0f;
+
+			if (!(lanes & (1 << lane)))
+			{
+				multiplier[lane] = 1.0f;
+				addend[lane] = 0.0f;
+				result[0].values[lane] = number_value(0.0f);
+				continue;
+			}
+			for (other = 0; other < *count && fits; other++)
+				fits = other == position || operands[other].values[lane].kind == _value_number;
+			if (!fits || !linear_maker(o, &operands[position].values[lane], &result[0].values[lane], &m, &n))
+			{
+				fits = 0;
+				break;
+			}
+			switch (instruction->opcode)
+			{
+			case _rsx_fp_mul:
+				p = operands[1 - position].values[lane].number;
+				break;
+			case _rsx_fp_add:
+				q = operands[1 - position].values[lane].number;
+				break;
+			default:
+				if (position == 2)
+					q = operands[0].values[lane].number * operands[1].values[lane].number;
+				else
+				{
+					p = operands[1 - position].values[lane].number;
+					q = operands[2].values[lane].number;
+				}
+				break;
+			}
+			multiplier[lane] = m * p;
+			addend[lane] = n * p + q;
+		}
+		if (!fits)
+			continue;
+		result[0].source = source_none();
+		numbers_operand(&result[1], multiplier);
+		numbers_operand(&result[2], addend);
+		memcpy(operands, result, sizeof(result));
+		instruction->opcode = _rsx_fp_mad;
+		*count = 3;
+		return 1;
+	}
+	/* (x + n) * b with n +-1: x * b + n * b */
+	if (instruction->opcode == _rsx_fp_mul)
+	{
+		for (position = 0; position < 2; position++)
+		{
+			for (lane = 0, fits = 1; lane < 4 && fits; lane++)
+			{
+				float m, n;
+
+				if (!(lanes & (1 << lane)))
+					continue;
+				fits = linear_maker(o, &operands[position].values[lane], &result[0].values[lane], &m, &n) &&
+					(m == 1.0f || m == -1.0f) && (n == 1.0f || n == -1.0f);
+				if (!fits)
+					break;
+				result[0].values[lane] = modified(result[0].values[lane], m < 0.0f, 0);
+				result[1].values[lane] = operands[1 - position].values[lane];
+				result[2].values[lane] = modified(operands[1 - position].values[lane], n < 0.0f, 0);
+			}
+			if (!fits)
+				continue;
+			for (lane = 0; lane < 3; lane++)
+				result[lane].source = source_none();
+			memcpy(operands, result, sizeof(result));
+			instruction->opcode = _rsx_fp_mad;
+			*count = 3;
+			return 1;
+		}
+		return 0;
+	}
+	/* t + y with t a product: the factors' MAD */
+	if (instruction->opcode == _rsx_fp_add)
+	{
+		for (position = 0; position < 2; position++)
+		{
+			for (lane = 0, fits = 1; lane < 4 && fits; lane++)
+			{
+				const struct value *t = &operands[position].values[lane];
+				const struct expression *made;
+
+				if (!(lanes & (1 << lane)))
+					continue;
+				made = value_maker(o, t);
+				fits = made && made->opcode == _rsx_fp_mul &&
+					named_value(o, &made->operands[0][0], &result[0].values[lane]) &&
+					named_value(o, &made->operands[1][0], &result[1].values[lane]);
+				if (!fits)
+					break;
+				result[0].values[lane] = modified(result[0].values[lane], t->negate, 0);
+				result[2].values[lane] = operands[1 - position].values[lane];
+			}
+			if (!fits)
+				continue;
+			result[0].source = source_none();
+			result[1].source = source_none();
+			result[2].source = operands[1 - position].source;
+			memcpy(operands, result, sizeof(result));
+			instruction->opcode = _rsx_fp_mad;
+			*count = 3;
+			return 1;
+		}
+	}
+	return 0;
+}
+
 /* one instruction with what is known before it: simpler, its sources read at their origin */
 static int forward_instruction(struct optimizer *o, struct rsx_instruction *instruction)
 {
@@ -1702,7 +2041,12 @@ static int forward_instruction(struct optimizer *o, struct rsx_instruction *inst
 		}
 	}
 	if (per_component(result.opcode))
+	{
+		clamp_through(o, &result, operands, count);
 		simplify(&result, operands, &count);
+		if (combine(o, &result, operands, &count))
+			simplify(&result, operands, &count);
+	}
 	for (lane = 0; lane < 4; lane++)
 	{
 		if (!(result.mask & (1 << lane)))
@@ -2013,10 +2357,12 @@ static void allocate(struct optimizer *o)
 {
 	uint32_t count = o->count, index;
 	int16_t writer[TEMPORARIES][4];
-	int *memory = malloc(count * 19 * sizeof(int) + 1), *parent, *webs, *start, *end, *last, *physical, *removed;
+	/* (one translation at a time: fixed, not the heap's) */
+	static int memory[RSX_FP_MAXIMUM_INSTRUCTIONS * 19];
+	int *parent, *webs, *start, *end, *last, *physical, *removed;
 	int output = -1, web_count = 0, highest = 0, position, lane, web;
 
-	if (!memory)
+	if (count > RSX_FP_MAXIMUM_INSTRUCTIONS)
 		return;
 	parent = memory;
 	webs = parent + count;
@@ -2062,10 +2408,7 @@ static void allocate(struct optimizer *o)
 						continue;
 					maker = writer[source->index & (TEMPORARIES - 1)][source->swizzle[lane] & 3];
 					if (maker < 0)
-					{
-						free(memory);
 						return;
-					}
 					if (first < 0)
 						first = maker;
 					else
@@ -2234,10 +2577,7 @@ static void allocate(struct optimizer *o)
 			highest = choice > highest ? choice : highest;
 		}
 		if (highest >= TEMPORARIES)
-		{
-			free(memory);
 			return;
-		}
 
 		for (index = 0; index < count; index++)
 		{
@@ -2258,14 +2598,15 @@ static void allocate(struct optimizer *o)
 			}
 		}
 	}
-	free(memory);
 	compact(o);
 }
 
 /* the program with fewer instructions and temporaries; as it was where it tests the condition outside KIL */
 static uint32_t optimize(const struct rsx_fragment_key *key, struct rsx_instruction *instructions, uint32_t count)
 {
-	struct optimizer *o;
+	/* (one translation at a time: fixed, not the heap's) */
+	static struct optimizer optimizer;
+	struct optimizer *o = &optimizer;
 	uint32_t index;
 	int round;
 
@@ -2274,9 +2615,6 @@ static uint32_t optimize(const struct rsx_fragment_key *key, struct rsx_instruct
 		if (instructions[index].opcode != _rsx_fp_kil && instructions[index].condition != _rsx_condition_always)
 			return count;
 	}
-	o = malloc(sizeof(*o));
-	if (!o)
-		return count;
 	memset(o, 0, sizeof(*o));
 	o->key = key;
 	o->instructions = instructions;
@@ -2305,15 +2643,11 @@ static uint32_t optimize(const struct rsx_fragment_key *key, struct rsx_instruct
 			break;
 	}
 	allocate(o);
-	count = o->count;
-	free(o);
-	return count;
+	return o->count;
 }
 
-/* ---------- half precision: the temporaries only the colour math reads, within half's range, as H registers, two
-in each R register, the colour in H0: fewer registers, so more fragments in flight. The ALU stays 32-bit; what a
-lookup, a test, a floor or a divide reads, and all that makes it, stays a 32-bit R register. Off: the PC check's
-3000 keys took 2.96 R registers on average against 3.07, and 13 missed the NV2A's colour by up to 7.5e-3. */
+/* ---------- half precision: colour-only temporaries as H registers (lookups, tests, floors, divides stay 32-bit).
+Off: the PC check's 3000 keys took 2.96 R registers on average against 3.07; 13 missed the NV2A's by up to 7.5e-3 */
 
 #define HALF_PRECISION 0
 /* the largest magnitude a half temporary may hold: half's 11 bits keep 2^-12 near 1 */
@@ -2504,6 +2838,62 @@ static void half_precision(const struct rsx_fragment_key *key, struct rsx_instru
 }
 #endif
 
+/* each clamp to [-1, 1] as an RSX MAX and MIN on its destination; a source the MAX cannot read beside its number (a
+uniform, an input) is moved there first. 0 if they do not fit */
+static int expand_clamps(struct rsx_instruction *instructions, uint32_t *count, uint32_t maximum)
+{
+	uint32_t index, extra = 0, out;
+
+	for (index = 0; index < *count; index++)
+	{
+		if (instructions[index].opcode == _op_clamp_signed)
+			extra += instructions[index].source[0].type == _rsx_register_temporary ? 1 : 2;
+	}
+	if (*count + extra > maximum)
+		return 0;
+	/* from the end, each in its place */
+	out = *count + extra;
+	for (index = *count; index-- > 0;)
+	{
+		struct rsx_instruction clamp = instructions[index], *instruction;
+		struct rsx_source result = temporary(clamp.destination), limit = fixed(_k_one);
+
+		if (clamp.opcode != _op_clamp_signed)
+		{
+			instructions[--out] = clamp;
+			continue;
+		}
+		result.half = clamp.destination_half;
+		/* the MIN, the MAX, and the MOV, made in place from the last */
+		instruction = &instructions[--out];
+		*instruction = clamp;
+		instruction->opcode = _rsx_fp_min;
+		instruction->uniform = RSX_NO_UNIFORM;
+		instruction->source[0] = result;
+		instruction->source[1] = limit;
+		instruction->source[2] = source_none();
+		memcpy(instruction->constant, fixed_constant, sizeof(instruction->constant));
+		instruction = &instructions[--out];
+		*instruction = clamp;
+		instruction->opcode = _rsx_fp_max;
+		instruction->saturate = 0;
+		instruction->uniform = RSX_NO_UNIFORM;
+		instruction->source[0] = clamp.source[0].type == _rsx_register_temporary ? clamp.source[0] : result;
+		instruction->source[1] = negated(limit);
+		instruction->source[2] = source_none();
+		memcpy(instruction->constant, fixed_constant, sizeof(instruction->constant));
+		if (clamp.source[0].type != _rsx_register_temporary)
+		{
+			instruction = &instructions[--out];
+			*instruction = clamp;
+			instruction->opcode = _rsx_fp_mov;
+			instruction->saturate = 0;
+		}
+	}
+	*count += extra;
+	return 1;
+}
+
 int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 	struct rsx_instruction *instructions, uint32_t maximum, uint32_t *count)
 {
@@ -2542,8 +2932,10 @@ int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 	if (!context.overflow)
 	{
 		context.count = optimize(key, instructions, context.count);
+		context.overflow = !expand_clamps(instructions, &context.count, maximum);
 #if HALF_PRECISION
-		half_precision(key, instructions, context.count);
+		if (!context.overflow)
+			half_precision(key, instructions, context.count);
 #endif
 	}
 	*count = context.count;
@@ -2552,19 +2944,15 @@ int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 
 int rsx_fragment_program_translate(const struct rsx_fragment_key *key, struct rsx_fragment_program *program)
 {
-	struct rsx_instruction *instructions = malloc(RSX_FP_MAXIMUM_INSTRUCTIONS * sizeof(*instructions));
+	/* (one translation at a time, on the thread that runs the Direct3D records: fixed, not the heap's) */
+	static struct rsx_instruction instructions[RSX_FP_MAXIMUM_INSTRUCTIONS];
 	uint32_t count = 0, index, word = 0;
 	int result, half_output = 0;
 
 	memset(program, 0, sizeof(*program));
-	if (!instructions)
-		return -1;
 	result = rsx_fragment_program_instructions(key, instructions, RSX_FP_MAXIMUM_INSTRUCTIONS, &count);
 	if (result < 0 || !(program->microcode = malloc(count * 8 * sizeof(uint32_t))))
-	{
-		free(instructions);
 		return -1;
-	}
 	program->word_count = rsx_fragment_encode(instructions, count, program->microcode);
 	/* each uniform's place: the four words after its instruction */
 	for (index = 0; index < count; index++)
@@ -2609,7 +2997,6 @@ int rsx_fragment_program_translate(const struct rsx_fragment_key *key, struct rs
 	}
 	/* 0x40: R0 is exported (else H0); 0x80: the program kills */
 	program->control = (half_output ? 0 : 0x40) | (result == 1 ? 0x80 : 0);
-	free(instructions);
 	return 0;
 }
 

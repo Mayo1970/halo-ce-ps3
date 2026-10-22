@@ -1394,7 +1394,8 @@ static void shaders_log(void)
 				(unsigned)texture->levels, (unsigned)texture->minify, (unsigned)texture->magnify,
 				(unsigned)texture->anisotropy);
 		}
-		ps3_log_printf("[time] pixel shader %u (%s): %.2f ms, %.1f draws; %u instructions, %u registers, %u "
+		/* (a slot is 16 bytes: an instruction, or the inline constant after one) */
+		ps3_log_printf("[time] pixel shader %u (%s): %.2f ms, %.1f draws; %u slots, %u registers, %u "
 			"combiners, texture modes %05x; textures:%s\n", (unsigned)entry->stamp_key,
 			entry->stamp_part < sizeof(part_names) / sizeof(part_names[0]) ? part_names[entry->stamp_part] : "?",
 			ps3_draw_stamp_nanoseconds[entry->stamp_key] / frames * 1.0e-6,
