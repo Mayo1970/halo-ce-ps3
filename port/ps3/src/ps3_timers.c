@@ -2,6 +2,7 @@
 RSX's time by part from its timestamps. */
 
 #include "ps3_timers.h"
+#include "ps3_spu.h"
 #include "ps3_system.h"
 
 #include <stdio.h>
@@ -77,6 +78,55 @@ static const char *const specular_names[] =
 {
 	"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog",
 };
+
+/* the game thread's SPU jobs (ps3_spu.c), by kind: jobs a frame, the SPU's microseconds a job (its DMA waits), the
+game thread's waits in ms a frame; the copies are the checkpoint's three kinds */
+static void spu_game_log(uint32_t frames, const double *t)
+{
+	static const char *const names[] = { "copies", "shadows", "weather", "particles" };
+	static const int kinds[][3] =
+	{
+		{ SPU_GAME_COPY, SPU_GAME_ZEROES, SPU_GAME_ZERO },
+		{ SPU_GAME_SHADOW, 0, 0 },
+		{ SPU_GAME_WEATHER, 0, 0 },
+		{ SPU_GAME_PARTICLES, 0, 0 },
+	};
+	static const int waits[] =
+	{
+		_ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_shadow_wait, _ps3_timer_spu_game_weather_wait,
+		_ps3_timer_spu_game_particles_wait,
+	};
+	struct ps3_spu_game_statistics s;
+	char line[1024];
+	unsigned long length;
+	unsigned index, part;
+
+	ps3_spu_game_statistics(&s);
+	length = (unsigned long)snprintf(line, sizeof(line), "[time] game SPU%s (jobs a frame; us a job, DMA; the waits, ms "
+		"a frame):", s.up ? "" : " off");
+	for (index = 0; index < 4 && length < sizeof(line); index++)
+	{
+		uint32_t jobs = 0, busy = 0, dma = 0;
+
+		for (part = 0; part < 3 && kinds[index][part]; part++)
+		{
+			jobs += s.jobs[kinds[index][part]];
+			busy += s.busy_microseconds[kinds[index][part]];
+			dma += s.dma_microseconds[kinds[index][part]];
+		}
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f, %.1f; %.3f)",
+			index ? "," : "", names[index], (double)jobs / frames, jobs ? (double)busy / jobs : 0.0,
+			jobs ? (double)dma / jobs : 0.0, t[waits[index]]);
+	}
+	if (length < sizeof(line))
+	{
+		snprintf(line + length, sizeof(line) - length, "; cache %u found, %u fetched; refused %u; shadows checked %u "
+			"(%.3f ms a frame), apart %u\n", (unsigned)s.cache_hits, (unsigned)s.cache_misses, (unsigned)s.refused,
+			(unsigned)ps3_timer_counts[_ps3_timer_spu_shadow_check], t[_ps3_timer_spu_shadow_check],
+			(unsigned)ps3_timer_counts[_ps3_timer_spu_shadow_apart]);
+	}
+	ps3_log_printf("%s", line);
+}
 
 /* the AI's lines: line of sight (ai.c, with its rays' collision parts), action control by action, the move */
 static void ai_log(double tick_scale, const double *k)
@@ -455,6 +505,7 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[_ps3_timer_texture_hash], t[_ps3_timer_texture_upload], t[_ps3_timer_draw_colours],
 		t[_ps3_timer_draw_vertices], t[_ps3_timer_draw_indices], t[_ps3_timer_vblank_wait], t[_ps3_timer_flip_wait],
 		t[_ps3_timer_rsx_wait], t[_ps3_timer_spu_wait]);
+	spu_game_log(frames, t);
 	if (!ps3_rsx_frames)
 		return;
 	/* each part: the RSX's time from the split before to its own; the frame's from its first split to its last */
