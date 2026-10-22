@@ -92,32 +92,8 @@ void halo_menus_art_forget(void)
 {
 }
 
-/* ---------- the high-res HUD and text: none, so the maps' own bitmaps and fonts draw */
-
-long hud_hires_asset_count(void)
-{
-	return 0;
-}
-
-char const *hud_hires_asset_tag(long asset)
-{
-	(void)asset;
-	return "";
-}
-
-long hud_hires_asset_bitmap(long asset)
-{
-	(void)asset;
-	return 0;
-}
-
-long hud_hires_asset_fits(long asset, long width, long height)
-{
-	(void)asset;
-	(void)width;
-	(void)height;
-	return 0;
-}
+/* ---------- the high-res HUD and text: none, so the maps' own bitmaps and fonts draw (the button icons:
+hud_hires_rsx.c) */
 
 struct text_hires_glyph;
 
@@ -156,26 +132,6 @@ void text_hires_set_reset_hook(void (*hook)(void))
 	(void)hook;
 }
 
-unsigned long hud_hires_asset_sprites(long asset)
-{
-	(void)asset;
-	return 0;
-}
-
-int hud_hires_sprites_drawable(long asset, unsigned long address, unsigned long level0_size)
-{
-	(void)asset;
-	(void)address;
-	(void)level0_size;
-	return 0;
-}
-
-void hud_hires_register_placeholder(long asset, unsigned long const *texture)
-{
-	(void)asset;
-	(void)texture;
-}
-
 /* ---------- Custom Edition maps: none (their tags are not swapped to the PS3's byte order) */
 
 const char *platform_custom_edition_root(void)
@@ -208,7 +164,7 @@ void memory_watch_prepare_write(void *address, unsigned long size)
 
 /* ---------- the desktop: window, clipboard, quit */
 
-/* display.interpolation (VIDEO SETTINGS' FRAME RATE): 60 frames a second between the 30 Hz ticks, else 30 */
+/* display.interpolation (EXTRA OPTIONS' FRAME RATE): 60 frames a second between the 30 Hz ticks, else 30 */
 int halo_interpolation_enabled(void)
 {
 	static int enabled;

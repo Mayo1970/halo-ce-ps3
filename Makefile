@@ -137,6 +137,15 @@ $(BUILD)/brokers_txt.h: port/assets/network/brokers.txt
 $(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: $(BUILD)/brokers_txt.h
 $(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: XBOX_DEFINES := -I$(BUILD)
 
+# the button icons' RSX texels (EXTRA OPTIONS' BUTTON ICONS), from port/assets/buttons/ps3's PNGs
+$(BUILD)/ps3_buttons.h: tools/ps3_button_assets.py $(wildcard port/assets/buttons/ps3/*)
+	@mkdir -p $(dir $@)
+	@echo "GEN $@"
+	@python3 tools/ps3_button_assets.py embed --out $@
+
+$(BUILD)/obj/$(PS3_DIR)/xbox/hud_hires_rsx.o: $(BUILD)/ps3_buttons.h
+$(BUILD)/obj/$(PS3_DIR)/xbox/hud_hires_rsx.o: XBOX_DEFINES := -I$(BUILD) -I$(ZLIB_DIR)
+
 $(PLATFORM_SEMANTICS): FORCE
 	@python3 tools/ps3_msvc_semantics.py --output $@ --inlines port/include/xdk
 

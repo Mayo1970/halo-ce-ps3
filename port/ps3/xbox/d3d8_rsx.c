@@ -387,14 +387,17 @@ void halo_screen_ui_offset(unsigned char centered)
 }
 
 void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
+void hud_hires_style_commit(void);
 
-/* VIDEO SETTINGS' WIDESCREEN (display.screen_width), between frames: the game's layout and the targets must agree
+/* EXTRA OPTIONS' WIDESCREEN (display.screen_width), between frames: the game's layout and the targets must agree
 for a whole frame (rasterizer_xbox.c). Returns the width the game draws. */
 long halo_screen_commit(void)
 {
 	long width;
 	float scale[2];
 
+	/* (BUTTON ICONS' style, read on the game thread as the width is) */
+	hud_hires_style_commit();
 	if (!screen_width)
 		return halo_screen_width();
 	if (screen_read_at == config_changes())
@@ -880,6 +883,11 @@ struct texture_entry
 	void *memory;
 	unsigned long bytes;
 	struct ps3_gpu_texture gpu;
+	/* a button icon's texture drawn instead (hud_hires_rsx.c): for its bitmap, for the style it was checked with;
+	for a placeholder's sprites, checked each frame */
+	int hires_style;
+	BOOL hires, placeholder;
+	struct ps3_gpu_texture hires_gpu;
 };
 
 #define TEXTURE_BUCKET_COUNT 1024
@@ -888,6 +896,10 @@ struct texture_entry
 #define TEXTURE_CACHE_BYTES 0x1600000UL
 
 void *physical_memory_get_texture_cache_base_address(void);
+int hud_hires_rsx_style(void);
+int hud_hires_rsx_override(const unsigned char *texels, unsigned long width, unsigned long height,
+	unsigned long level0_size, struct ps3_gpu_texture *gpu);
+int hud_hires_rsx_placeholder(DWORD data, struct ps3_gpu_texture *gpu);
 
 static struct texture_entry *texture_buckets[TEXTURE_BUCKET_COUNT];
 static unsigned long texture_frame = 1;
@@ -995,6 +1007,7 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	__uint64 hash;
 	uint64_t span;
 	BOOL cached;
+	int style = hud_hires_rsx_style();
 
 	for (entry = *bucket; entry; entry = entry->next)
 	{
@@ -1018,9 +1031,12 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	entry->last_used_frame = texture_frame;
 	texture->fresh = 0;
 	if (entry->checked_frame == texture_frame && !fresh)
-		return entry->memory ? entry : NULL;
+		return entry->memory || entry->placeholder ? entry : NULL;
 	/* once a frame: the game writes texels with the CPU (the text cache) */
 	entry->checked_frame = texture_frame;
+	entry->placeholder = hud_hires_rsx_placeholder(data, &entry->hires_gpu);
+	if (entry->placeholder)
+		return entry;
 	source = (const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(data);
 	size = xgpu_texture_face_size(&entry->description) * (entry->description.cube_map ? 6 : 1);
 	if (!size || !platform_is_contiguous(source) || !platform_is_contiguous(source + size - 1))
@@ -1028,7 +1044,7 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	/* the cache sets a header up again, Lock 0, for each texture it loads (fresh); a CPU writer of texels there
 	(Bink, once it decodes) must put Lock to 0 after each write */
 	cached = texture_cache_holds(source, size);
-	if (cached && entry->memory && entry->checked && !fresh)
+	if (cached && entry->memory && entry->checked && !fresh && entry->hires_style == style)
 		return entry;
 	span = ps3_timer_now();
 	hash = hash_bytes(source, size) ^ palette_hash;
@@ -1037,7 +1053,18 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	{
 		texture_upload(entry, source, palette);
 		entry->content_hash = hash;
+		entry->hires_style = -2;
 		ps3_timer_add(_ps3_timer_texture_upload, span);
+	}
+	/* (which bitmap is here may have changed with the texels) */
+	if (entry->memory && entry->hires_style != style)
+	{
+		const struct xgpu_texture_description *description = &entry->description;
+
+		entry->hires_style = style;
+		entry->hires = !palette && !description->linear && !description->cube_map && description->depth == 1 &&
+			hud_hires_rsx_override(source, description->width, description->height, description->levels > 1 ?
+			xgpu_texture_level_offset(description, 1) : xgpu_texture_face_size(description), &entry->hires_gpu);
 	}
 	entry->checked = cached && entry->memory;
 	return entry->memory ? entry : NULL;
@@ -1183,6 +1210,7 @@ static void bind_textures(struct rsx_fragment_key *key)
 		unsigned long mode = stage_texture_mode(stage);
 		struct render_target *target;
 		struct ps3_gpu_texture bound;
+		BOOL hires = FALSE;
 
 		key->sampler_type[stage] = mode == 0x11 ? _rsx_sampler_2d : _rsx_sampler_none;
 		device.texture_scale[stage][0] = device.texture_scale[stage][1] = 1.0f;
@@ -1229,9 +1257,18 @@ static void bind_textures(struct rsx_fragment_key *key)
 				ps3_gpu_set_texture(stage, NULL);
 				continue;
 			}
-			bound = entry->gpu;
+			hires = entry->hires || entry->placeholder;
+			bound = hires ? entry->hires_gpu : entry->gpu;
 		}
 		sampler_fill(stage, &bound);
+		/* a button icon's texture is drawn smaller than it is: every level, filtered (hud_hires_rsx.c) */
+		if (hires)
+		{
+			bound.minify = GCM_TEXTURE_LINEAR_MIPMAP_LINEAR;
+			bound.magnify = GCM_TEXTURE_LINEAR;
+			bound.minimum_level = 0;
+			bound.maximum_level = (uint16_t)((bound.levels - 1) << 8);
+		}
 		ps3_gpu_set_texture(stage, &bound);
 		key->sampler_type[stage] = bound.cube ? _rsx_sampler_cube :
 			bound.dimension == GCM_TEXTURE_DIMS_3D ? _rsx_sampler_3d : _rsx_sampler_2d;

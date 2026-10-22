@@ -134,6 +134,12 @@ static const struct config_setting config_settings[] =
 		"Draw the menus' and HUD's text with the fonts in port/assets/fonts\n"
 		"(Overpass) at the resolution the game draws at, and the menus' titles\n"
 		"from port/assets/titles; false draws the maps' bitmap fonts and titles." },
+#ifdef HALO_PS3
+	{ "display.button_icons", _config_string, "\"style_a\"", "HALO_BUTTON_ICONS", _environment_value, _platform_android,
+		"The controller's buttons in the menus and messages: \"xbox\" for the\n"
+		"maps' own; the PS3's \"style_a\" (colored circles, white symbols) or\n"
+		"\"style_b\" (black circles, colored symbols)." },
+#endif
 	{ "display.shadow_resolution", _config_integer, "128", "HALO_SHADOW_RESOLUTION", _environment_value,
 		_platform_all,
 		"The size the objects' shadows are drawn at, in pixels each way: 128 as\n"

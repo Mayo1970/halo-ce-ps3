@@ -51,6 +51,17 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-22: Matt: "Change video settings into "Extra options". Implement
+  the button changes." SETTINGS' VIDEO SETTINGS is EXTRA OPTIONS, with a
+  third row BUTTON ICONS: XBOX, STYLE A (the default), STYLE B
+  (`display.button_icons`). The PS3 icons stand for the menus' button
+  bitmaps and the message icons' A, B, X and Y (`xbox/hud_hires_rsx.c`,
+  `tools/ps3_button_assets.py`; port/ps3/README.md, "Extra options").
+  `check` passed. PKG of 18:35 in `build/ps3_buttons/` (the tree of
+  `96f6f6d5` and this change only). Not tested on the PS3. The new file
+  `port/ps3/xbox/hud_hires_rsx.c` needs `git add -f` (`.gitignore`'s
+  `xbox/`).
+
 - 2026-10-22: G9 started (Matt: "Work on Goal 9."). The analysis is done:
   see "G9 analysis". Then (Matt: "Work on step 2, 3, 4 and 5 together.
   Enough timers."): the render SPU (a fourth SPU thread group: the
@@ -4241,3 +4252,22 @@ then `./build.sh pkg LOG_IP=<address>`.
     symbol table pointing to upstream's copy). Warnings (`-Wall`): none in
     the new code. `check`: 0 `r2off`, `.got` 0x8710. PKG of 18:00 in
     `build/ps3_g9/`. Not tested on hardware.
+- 2026-10-22: The 18:00 PKG on hardware (b40 through the BSP switch; Matt:
+  "Done"; no fault reported): `[ps3] exit 0`, no `SPU off`, 488 shadows
+  checked, 0 apart. The 128 KB reads changed nothing: the 5.4 MB BSP 566
+  and 567 ms, the tag data 891 ms (before 846). The decals' part outside
+  Direct3D fell from about 4 times its Direct3D part to 1 time (the
+  Direct3D part copies the vertices in both versions; no decal count in
+  the log). The shadows' triangles 0.05-0.19 to 0.01-0.04 ms a frame;
+  their SPU job 43 to 57 us.
+- 2026-10-22: Test 1 (Matt deleted `z/cache000.map` to `cache005.map`; the
+  same PKG): the game made b40's cache file again at the load (the map
+  read in 25 s, written in 4 MB pieces); then the 5.4 MB BSP read in 116
+  ms (before 564-567), the tag data in 327 ms (before 846-891), the 2.1 MB
+  BSP 56 ms (as before). The old cache file's layout on the HDD was the
+  slow read. No BSP switch in play this run. Matt: the stutter seems to
+  come when enemies first shoot. In the 600 frames of the first combat
+  (frames 3600 to 4200): 126 pixel shaders and 4 vertex shaders
+  translated at their first draw (on the Direct3D thread), 72 textures
+  uploaded (1.8 MB), the ticks 4 to 8 ms each (the AI's combat start). The
+  300-frame windows do not show one long frame.
