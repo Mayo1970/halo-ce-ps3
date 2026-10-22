@@ -20,10 +20,17 @@
 #define PS3_POINT_SPAN(span) ((span) = ps3_timer_now())
 #define PS3_POINT_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
 #define PS3_POINT_COUNT(timer) (ps3_timer_counts[(timer)]++)
+/* port: the rays' time, and apart that of those that test no surface (the weather's) */
+#define PS3_POINT_RAYS(flags, span) do { uint64_t ps3_rays_start = (span); \
+	PS3_POINT_ADD(_ps3_timer_point_rays, span); \
+	if (TEST_FLAG((flags), _point_physics_force_no_collisions_bit)) \
+		ps3_timers[_ps3_timer_point_free_rays] += (span) - ps3_rays_start, PS3_POINT_COUNT(_ps3_timer_point_free_rays); \
+	} while (0)
 #else
 #define PS3_POINT_SPAN(span) ((void)0)
 #define PS3_POINT_ADD(timer, span) ((void)0)
 #define PS3_POINT_COUNT(timer) ((void)0)
+#define PS3_POINT_RAYS(flags, span) ((void)0)
 #endif
 
 /* ---------- constants */
@@ -207,6 +214,13 @@ unsigned long point_physics_update(
 			delta.j = translational_velocity->j * dt;
 			delta.k = translational_velocity->k * dt;
 
+			/* port: a test of no surface (the weather's) gives the point plus delta, collision_test_vector's same sum,
+			without its look-up of a location: the weather's shared one, set again before it is read */
+			if (TEST_FLAG(flags, _point_physics_force_no_collisions_bit))
+			{
+				add_vectors3d((real_vector3d const *)position, &delta, (real_vector3d *)position);
+				break;
+			}
 			if (!collision_test_vector(collision_flags, position, &delta, NONE, &collision))
 			{
 				if (collision.location.leaf_index != NONE)
@@ -255,7 +269,7 @@ unsigned long point_physics_update(
 
 			dt -= collision.t * dt;
 		}
-		PS3_POINT_ADD(_ps3_timer_point_rays, ps3_span); /* port: (the timer build) */
+		PS3_POINT_RAYS(flags, ps3_span); /* port: (the timer build) */
 
 		match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 312, global_current_collision_user_depth > 1);
 		--global_current_collision_user_depth;

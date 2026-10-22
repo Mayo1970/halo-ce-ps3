@@ -49,8 +49,47 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
    keep the "why". When you edit a file, shorten its longer comments too.
 8. Commits and PRs: no co-author line, no AI attribution.
 
-## Now (2026-10-19)
+## Now (2026-10-22)
 
+- 2026-10-22: the 01:54 PKG on hardware (b40): the game thread crashed at
+  about t=33 s in `render_player_frame` (step 523); lv2 ended it (see the
+  Log). Then (Matt: "Do 1"): finer `PS3_MAIN_STEP` marks in
+  `render_player_frame` and `render_window`. Built, not tested on the PS3.
+  PKG of 10:57 in `build/ps3_spu/` (the 01:54 tree and this). Run on
+  hardware: the same crash at step 627
+  (`rasterizer_transparent_geometry_draw(TRUE)`: the transparent sort's
+  models' order, the 01:54 tree's step 2). See the Log. Then (Matt: "Go
+  with option 2."; the gain at best about 0.25 ms a frame in heavy
+  scenes): the kept boxes taken out, the models' order exact as in the
+  00:37 build. Built, not tested on the PS3. PKG of 11:16 in
+  `build/ps3_spu/`. Run on hardware (Matt: "Done"; no fault reported):
+  `[ps3] exit 0`, no crash; the weather's update in the snow 0.86 ms a
+  frame (00:37: 1.27). See the Log for the medians and the next steps.
+  Then (Matt: "Do all 4."): the stream buffers from blocks of their own;
+  the ground planes' sphere query on the kept blocks (the same answer: PC
+  check); `render_model_parts` and the objects' shadows timed inside.
+  Built, not tested on the PS3. PKG of 11:54 in `build/ps3_spu/`. Run on
+  hardware (Matt: "Done."; no fault reported): `[ps3] exit 0`; the heap
+  no longer fragments (22.3 MB free at the end, before 19.3); the sphere
+  query 10.3 us a call (before 13.3). With it (Matt: "check what we can
+  place to the SPU"): the SPU candidates in the Log.
+- Handoff (2026-10-20, end of the session; Matt: "Can you save this
+  somewhere? I'll work on it next time."): G8 is in progress. The last
+  PKG is 01:54 in `build/ps3_spu/` (the 5 steps of the entry below;
+  built, not run on the PS3). Not committed since `0966e23c` ("Further
+  optimization"): the shorter pixel shader translation, the sound
+  streams' buffers kept (a pool of 64), the translator's fixed buffers,
+  the weather's rays without surfaces moved without the collision call,
+  the transparent model order from kept boxes, and the timers of both
+  rounds (19 files in `git status`). No listener runs on UDP 18194.
+  Next: Matt installs the 01:54 PKG; at his "Start the listener." check
+  who holds UDP 18194, then log the run. Report the medians (all / under
+  45) of the new lines (`[time] ground planes' features in the sphere`,
+  `[time] render_model but the shadows`, `[time] lights and diffuse
+  passes`, `[time] specular part's Direct3D draws and constants`), the
+  weather's update and the transparent sort's model order against the
+  00:37 run (the Log), the heap's 64 KB stream allocations; then the
+  numbered next steps.
 - 2026-10-19: G8, the SPE tasks (Matt: "Let's work on the SPEs tasks."):
   the first in the proposed order ("SPEs and VMX"): the SPU set-up and the
   DirectSound mixer's decode and mix on an SPU. PKG of 12:52 in
@@ -211,7 +250,29 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   pixel shaders: 96 instructions for 6 combiners (lights), 66 for 5
   (reflections), 36 for 2 (fog). The heap grows with the sound streams'
   64 KB buffers (10 to 25 a second) and the shader translator's
-  temporary buffers: 16.5 MB free at t=200 s. See the Log.
+  temporary buffers: 16.5 MB free at t=200 s. See the Log. Then (Matt: "Go
+  with steps 1-6."): the pixel shader translation shorter (b40's
+  specular lights 384 to 232 words, the reflections 240 to 188, the fog
+  144 to 116; the same results as before: PC check); the sound streams'
+  packet buffers kept and given back; the translator's buffers fixed; the
+  weather's point physics, the ground planes and the transparent sort
+  timed inside. Built, not tested on the PS3. PKG of 00:37 in
+  `build/ps3_spu/`. (Matt committed the state before as `0966e23c`
+  "Further optimization".) Run on hardware (b40; the flycastPS3
+  session's listener held UDP 18194 and logged it; Matt: "Check that
+  log."; no fault reported): a clean exit; 59.0 frames per second on
+  median (5 windows under 45); the RSX's specular part 4.4 ms a frame on
+  median (5.6 before); the heap's growth stops at t=100 s (19.3 MB free
+  to the end). See the Log.
+  Then (Matt: "Ok, do those 5 steps."): the weather's rays that test
+  no surface moved without the collision call (the same positions: PC
+  check); the transparent sort's model order from boxes kept for each
+  part's nodes, the exact bounds only where those cannot tell a side
+  (the same order: PC check); the ground planes' sphere query timed
+  inside; the sound streams' pool 16 to 64 buffers; `render_model`, the
+  lights pass and the diffuse pass timed inside, with each part's
+  Direct3D calls. Built, not tested on the PS3. PKG of 01:54 in
+  `build/ps3_spu/`. See the Log.
 - Handoff (2026-10-19, end of the session; Matt: "Update ROADMAP and
   GOALS. I'll start a new session."): G8 is in progress. The last PKG is
   11:40 in `build/ps3_g8/` (run on hardware: a clean exit, no sound
@@ -417,8 +478,9 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   - `PS3_MAIN_STEP(n)` sets the main loop's place: `main.c` (`main_loop`
     1-70, `main_menu_load` 100-106, `main_game_render` 501-503 and
     540-549, `set_window_camera_values` 560-568 and 5611-5613),
-    `sound_manager.c` 510-519, `render.c` 520-530, `player_effects.c`
-    570-576.
+    `sound_manager.c` 510-519, `render.c` 520-530 (`render_frame`),
+    580-585 (`render_player_frame`), 600-637 (`render_window`, the primary
+    target's; 700-737 the mirror's), `player_effects.c` 570-576.
   - One log line each at the first call of `set_window_camera_values` and
     `player_effect_get_camera_effect_matrix` (`ps3: ...`).
   - Every 10 s (`ps3_main.c` display thread, `platform_heartbeat` in
@@ -505,7 +567,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
-| G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS) |
+| G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20 |
 
 ## G8 analysis (2026-10-18)
 
@@ -3354,3 +3416,340 @@ then `./build.sh pkg LOG_IP=<address>`.
     KB in `rsx_fragment_program_translate`, 45 KB in
     `rsx_fragment_program_instructions`). Of the growths logged: the
     streams' buffers 2.7 MB, the translator's 0.8 MB.
+- 2026-10-20: Steps 1 to 6 (Matt: "Go with steps 1-6."). Matt committed
+  the state before as `0966e23c` ("Further optimization").
+  - 1, the pixel shader translation (`ps3_rsx_fp.c`). The hardware log's
+    "instructions" were 16-byte slots: an instruction, or the inline
+    constant after one (61: 60 instructions and 36 constants). The
+    game's three keys, from `rasterizer_xbox_environment.c` (the specular
+    light, the bumped reflection) and `rasterizer_xbox_environment_fog.c`,
+    translated on the PC: the clamps to [-1, 1] of each combiner write
+    (a `MAX` and a `MIN` each), chains of steps with numbers ((2z - 1) *
+    2 * 4), and `MUL`s added after. Now: a write's clamp is one
+    instruction for the optimizer (`_op_clamp_signed`), at the write and
+    not in place, so the value before it stays; each stage has its own
+    ab, cd and sum until the registers are packed; a reader the clamp
+    does not change reads the value before it (`clamp_through`: a
+    saturated `MOV`; a saturated `ADD` with an operand 0..1; a saturated
+    `MIN` or `MAX` with -1..1; `MAX(t, 0..1)` as `MAX_SAT`); `combine`:
+    `t + t` as `t * 2`, steps of numbers on one value as one `MAD`, `(x +
+    1) * b` as `MAD(x, b, b)`, an `ADD` of a product as a `MAD`; the
+    clamps left become a `MAX` and a `MIN` (`expand_clamps`). The three
+    keys: 61 (lights) 60 instructions and 36 constants (384 words) to 39
+    and 19 (232), 6 to 7 registers; 17 (reflections) 44 and 16 (240) to
+    37 and 10 (188), 4 registers; 66 (fog) 22 and 14 (144) to 17 and 12
+    (116), 4. Random keys: 27 instructions to 26 on average, 3.08 to
+    3.21 registers. Checks: `tools/ps3_rsx_shader_check.c` (cgcomp's
+    encoding, the NV2A's results) 0 failures with 3,000 keys on seeds 1
+    and 7 and 5,000 on 3, 11 and 23, and the game's keys; the translation
+    before (git's) against now, 10,000 keys of 50 inputs each: 0 results
+    apart by over 1e-4 (the largest 1.4e-6), 0 kills apart; faults (an
+    unsaturated `ADD` read through, a step's addend dropped, `(x - 1) * b`
+    as `(x + 1) * b`, a fused product's negate dropped, the expanded clamp
+    at 0) each fail. (A `MAX` read through with an operand down to -1 is
+    not caught: the translation's `MAX`es take 0.)
+  - 2, the sound streams' packet buffers (`dsound_ps3.c`): a packet
+    takes a kept buffer of its size to twice that (`samples_take`), else
+    allocates one; the completed or retired buffers go back to a pool of
+    16 (`samples_give_back`), else are freed. Under the mixer's lock.
+  - 3, the translator's buffers fixed (`ps3_rsx_fp.c`): the instructions
+    (68 KB), the optimizer (45 KB) and the allocator's memory (77 KB) are
+    static (one translation at a time: the thread that runs the Direct3D
+    records).
+  - 4, the weather (`weather_particle_systems.c`, `point_physics.c`):
+    each particle's acceleration and `point_physics_update` timed in the
+    update; the rays that test no surface (the weather's
+    `_point_physics_force_no_collisions_bit`) apart in `[time] point
+    physics`.
+  - 5, the ground planes (`physics.c` `compute_ground_plane`, the new
+    physics' and the old's): the features in the sphere with the
+    features found, and the point test (`[time] ground planes`).
+  - 6, the transparent sort (`rasterizer_transparent_geometry.c`): the
+    qsort and the port's `rasterizer_transparent_geometry_order_models`.
+  - The shader log gives slots, not instructions. Comments over 2 lines
+    shortened: `ps3_rsx_fp.c` (1). Warnings (`-Wall`) in the changed
+    files: none in the new code. `check`: 0 `r2off`, `.got` 0x85d8. PKG
+    of 00:37 in `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-20: PKG of 00:37 on hardware (b40; no fault reported). The
+  flycastPS3 session's listener held UDP 18194 (our listener could not
+  start; the permission system refused to stop another session's
+  process), so its log took the run (`ps3log_g17_stageD_run1.txt`, lines
+  18400 to 21139; Matt: "Check that log."). `[ps3] exit 0`. 33 timer
+  windows of play, 5 under 45 frames per second. Medians of all / under
+  45, and sums of the run for the costs of a call:
+  - The frame 16.90 / 23.60 ms (59.0 / 42.5 frames per second; the last
+    run 56.0 / 42.2 on another path), game ticks 3.20 / 6.20 ms a frame
+    (6.4 / 8.8 each), render 9.20 / 16.70, the RSX 11.50 / 15.90.
+  - The checkpoints: 10.5, 11.4 and 11.2 ms; written in 1.6 to 2.1 s. A
+    revert took the copy; the BSP swap and the main loop went on.
+  - The specular part on the RSX: 4.40 / 4.20 ms a frame (5.60 / 4.50
+    before): reflections 1.54 / 1.68, lights 0.94 / 0.18, fog 0.78 /
+    0.95, reflection masks 0.61 / 0.82. Its pixel shaders (ms and draws
+    a stamped frame; slots, registers): 17 (reflections) 1.34, 16.1; 50,
+    4 (1.50, 16.4 before). 61 (lights) 1.31, 12.0; 58, 7 (1.67, 13.8).
+    66 (fog) 0.48, 13.4; 29, 4 (0.60, 15.3). 15 (reflection masks, not
+    changed) 0.64, 18.8; 10, 2 (0.56, 19.0). A draw of 61 9% cheaper, of
+    17 9%, of 66 8%, of the unchanged 15 16% dearer: the scenes differ.
+  - The heap: 24.8 MB free at t=50 s (after the first copy), 19.3 at
+    t=100 s and to the end (t=200 s); the heap 66.7 to 72.2 MB by t=100,
+    then 72.1 to 72.3. The sound streams still take a new 64 KB buffer
+    about once a second (136 logged from t=45 s: up to 50 streams play,
+    more packets than the pool's 16).
+  - The weather in the snow (under 45): its update 1.27 ms a frame for
+    364 particles: the acceleration 0.02, `point_physics_update` 0.84
+    (of it the rays without surfaces 0.50: 364 calls, 1.4 us each), the
+    rest 0.41.
+  - The transparent sort (under 45): 0.33 ms a frame, of it the qsort
+    0.03 and the port's `rasterizer_transparent_geometry_order_models`
+    0.29.
+  - The ground planes (`compute_ground_plane`, 66,824 calls): the
+    features in the sphere 13.4 us a call, 0.06 features found a call;
+    the point tests (1,592) about 0. The old physics: 341 us a call, its
+    ground planes 253 (19 mass points).
+  - The game thread's render under 45: objects 2.7, lights 2.3,
+    diffuse 2.1, specular 2.0, effects 3.9 (weather 2.0, transparent
+    1.4); its Direct3D calls 3.0 of the 16.7.
+- 2026-10-20: The 5 steps (Matt: "Ok, do those 5 steps.").
+  - 1, the weather (`point_physics.c`): a ray that tests no surface
+    (`_point_physics_force_no_collisions_bit`, the weather's) moves the
+    point by the sum `collision_test_vector` made (`add_vectors3d`),
+    without the call; its look-up of a location set only the weather's
+    shared one, which is set again before it is read. PC check
+    (`weathercheck.c`): 20,000,000 moves of random floats (signs, 1e-30
+    to 1e30, denormals, zeros, infinities), the call's path against the
+    sum: 0 apart.
+  - 2, the transparent sort's model order
+    (`rasterizer_xbox_transparent_geometry.c`): each model part's local
+    vertices boxed by node (the nodes a vertex's weight puts on it), the
+    exact path's weight and node checks, and 14 sample vertices (the
+    furthest along the axes and diagonals), kept for the map: 64 sets of
+    2 parts, 16 nodes a part (more: the exact path); forgotten at a
+    map's load and end (`rasterizer_common.c`). A frame's bounds: the
+    boxes moved by their node matrices, widened by a thousandth of
+    their size and 0.001 (the rounding of both paths, the weights'
+    1e-5). A surface's side is taken from them only past its band (the
+    exact bounds lie inside them, and rounding keeps the order); a
+    plane that the sample vertices, skinned as the draw skins them,
+    pass on both sides past the band crosses the exact bounds too; else
+    the unit's exact bounds as before (each vertex skinned). PC check
+    (`ordercheck`: HEAD's code and the tree's, taken from the sources):
+    400,000 random scenes (planes; models of 1 to 64 nodes, compressed
+    and uncompressed vertices, chains of parts; bad vertices, NaN and
+    far matrices, far scenes; map changes): 0 orders and 0 units'
+    validity or gaps apart; the parts bounded exactly 3.68 M before,
+    now 3.67 M from kept boxes and 0.80 M exactly (the scenes put half
+    the objects within 4 units of a plane). Faults, each fails (scenes
+    apart of 20,000): no reach (5,939), no band (3,953), a crossing on
+    one side (3,954), the crossing's band at +epsilon (3), half the
+    boxes (1,385), one node of two weights (149), valid with a bad
+    vertex (8,144), no margin (2), no range check of a box (1,580), no
+    forget at a map change (1,019).
+  - 3, the ground planes' sphere query (`collisions.c`,
+    `collision_usage.h`; `physics.c` marks `compute_ground_plane`'s
+    query): the bsp's leaves with the leaves a call, the structure's
+    features, the leaves' clusters' objects (the clusters, the objects
+    walked), their tests: `[time] ground planes' features in the
+    sphere`.
+  - 4, the sound streams' pool (`dsound_ps3.c`): 16 to 64 buffers.
+  - 5, the render (`render.c`, `models.c`, `render_objects.c`): the
+    lights pass's parts (the lens flares' occlusion tests, the objects'
+    shadows, the lights' diffuse part, the light and alpha-tested
+    decals), the diffuse pass's (the structure's diffuse textures, the
+    decals), `render_model`'s but the shadows' (the node matrices with
+    the nodes, the begin, the parts' draws with the models, the end),
+    the objects' widgets; each split's and part's share of the game
+    thread's Direct3D draws and constants (`ps3_render_d3d`). New lines:
+    `[time] render_model but the shadows`, `[time] lights and diffuse
+    passes`, `[time] specular part's Direct3D draws and constants`.
+  - Comments over 2 lines shortened:
+    `rasterizer_xbox_transparent_geometry.c` (2),
+    `rasterizer_transparent_geometry.h` (1), `rasterizer_common.c` (1),
+    `render_objects.c` (1), `models.c` (6). Warnings (`-Wall`) in the
+    changed files: none in the new code. `check`: 0 `r2off`, `.got`
+    0x8608. PKG of 01:54 in `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-22: PKG of 01:54 on hardware (b40; our listener). The game
+  thread crashed at about t=33 s (frame 1448, 4 s after the 1200-frame
+  window): from t=40 s the heartbeat shows 1444 frames, main loop pass
+  1446 at step 523 (`render_player_frame`), and at the first stall
+  `[ps3] main thread: priority -1 (0x80010005)` (ESRCH: lv2 ended the
+  thread). No `[host] ... blocked` line; the Direct3D thread had finished
+  frame 1448; the display thread and the sound went on. Matt left by the
+  XMB (`[ps3] no shutdown 5 s after the XMB exit: ending the process`).
+  The log has no address of the fault. The new code of the 01:54 tree in
+  that path: the transparent sort's kept boxes, the render timers
+  (`render.c`, `models.c`, `render_objects.c`). The kept boxes' loops are
+  bounded and their node indices checked: no cause found by reading.
+- 2026-10-22: Finer marks of the main loop's place (Matt: "Do 1"):
+  `render.c`'s `PS3_MAIN_STEP` defined before `render_window`;
+  `render_player_frame` 580 (the camera's cluster), 581 (the fog), 582
+  (the frustums), 583 (the mirror's search), 584 (the mirror's window),
+  585 (the player's window); `render_window` 600 + n in the primary
+  target's window, 700 + n in the mirror's (`PS3_WINDOW_STEP`): 0 the
+  begin, 1 visibility, 2 the screen flash, 3 `rasterizer_window_begin`, 4
+  the sky, 5 the first person weapon, 6 `lights_preprocess_scene`, 7
+  `render_objects`, 8 `structure_render_preprocess`, 9 the lightmaps, 10
+  the lens flares' occlusion tests, 11 the objects' shadows, 12 the
+  lights' diffuse part, 13 the light and alpha-tested decals, 14 the
+  structure's diffuse textures, 15 the primary and secondary decals, 16
+  to 22 the specular part (lights, specular lightmaps, reflection masks,
+  mirrors, reflections, transparent structure, fog), 23
+  `game_engine_post_rasterize_objects`, 24 the weather, 25 the particles,
+  26 the contrails, 27 `rasterizer_transparent_geometry_draw(TRUE)`, 28
+  the water decals, 29 the detail objects, 30
+  `rasterizer_transparent_geometry_draw(FALSE)`, 31
+  `rasterizer_transparent_geometry_stop`, 32 the screen fog, lens flares
+  and antialiasing, 33 `interface_draw_screen`, 34 the screen flash, 35
+  the UI widgets, 36 bink and the debug draws, 37
+  `rasterizer_window_end`. `check`: 0 `r2off`, `.got` 0x8608. PKG of
+  10:57 in `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-22: PKG of 10:57 on hardware (b40; our listener; Matt: "It
+  crashed again!"). The same crash, earlier: from t=30 s the heartbeat
+  shows 1163 frames, main loop pass 1165 at step 627
+  (`rasterizer_transparent_geometry_draw(TRUE)` in the primary window:
+  the transparent sort with the models' order, then the draws); at the
+  first stall `[ps3] main thread: priority -1 (0x80010005)`. The 01:54
+  tree changed only the models' order there (the kept boxes, their
+  samples, the exact path as pass 1) and its timers. Trap 23 (a
+  misaligned float access ends only that thread) fits the signs; the
+  kept boxes' static array is at 0x10931620 (aligned, 472 bytes an
+  entry). The cause is not found yet.
+- 2026-10-22: The kept boxes taken out (Matt: "Go with option 2."): the
+  gain at best about 0.25 ms a frame (the models' order 0.29 ms a frame
+  under 45 frames per second in the 00:37 run; the PC check's exact
+  bounds 78% fewer), not worth a debug round.
+  `rasterizer_xbox_transparent_geometry.c`, `rasterizer_common.c` and
+  `rasterizer_transparent_geometry.h` back to `0966e23c` (the 00:37
+  build's code), but their shortened comments; the 01:54 code is in this
+  session's scratchpad only. The ELF has no `transparent_model_boxes`
+  symbols. `check`: 0 `r2off`, `.got` 0x8608. PKG of 11:16 in
+  `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-22: PKG of 11:16 on hardware (b40; our listener; Matt: "Done";
+  no fault reported): `[ps3] exit 0`, no crash. 35 timer windows of play
+  (the menu's left out), 3 under 45 frames per second: the load (34.1),
+  the snow's start (39.9), the last with a revert (43.9); the heavy play
+  of this run is at 45 to 53. Medians of all / under 45 (a window: the
+  lines from `[time] N frames` to the next), and sums of the run for the
+  costs of a call:
+  - The frame 17.90 / 25.10 ms (55.9 / 39.9 frames per second; 00:37
+    59.0 / 42.5 on another path), game ticks 3.90 / 2.80 ms a frame
+    (7.1 / 5.6 each; more combat than 00:37's 3.20), render 11.10 /
+    11.70, the RSX 12.00 / 14.60 (specular 5.30 / 4.80, its lights 1.89
+    for 19.2 draws). Checkpoints 10.5, 11.8, 11.4 ms; written in 1.7 to
+    3.1 s; two reverts took the copy.
+  - The weather in the snow (6 windows of 364 particles): its update
+    0.86 ms a frame (00:37: 1.27): acceleration 0.02, point physics 0.39
+    (0.84), of it the rays without surfaces 0.02 for 364 (0.50), the
+    rest 0.45 (0.41).
+  - The transparent sort (exact again): 0.17 / 0.10 ms a frame, the
+    models' order 0.16 / 0.09.
+  - The ground planes' sphere query (70,148 calls): 13.3 us a call
+    (00:37: 13.4): the bsp's leaves 4.5 (1.8 leaves), the leaves'
+    clusters' objects 7.7 (1.0 cluster, 15.7 objects walked; in it their
+    tests 1.8 for 1.6 objects), the structure 0.05, the rest 1.1. The old
+    physics (3,621 calls) 336 us a call, its ground planes 252 (18.9 mass
+    points).
+  - `render_model` but the shadows: 13.2 models a frame, 84 us a model:
+    the parts 75.9 (of it the Direct3D draws and constants 19.0), the
+    begin 4.3, the node matrices 3.5 (10.9 nodes). Medians: the parts
+    0.93 / 0.53 ms a frame.
+  - The lights pass (ms a frame; its Direct3D): the objects' shadows 1.05
+    / 0.36 (0.24), the lights' diffuse part 0.36 / 0.23 (0.10), the lens
+    flares 0.06; the diffuse pass: the structure 0.34 / 0.37 (0.16), the
+    decals 0.41 / 0.24 (0.11).
+  - The specular part's Direct3D draws and constants: lights 0.14,
+    reflection masks 0.14, reflections 0.14, fog 0.13, transparent 0.05
+    (about 0.6 ms a frame of the game thread's 1.6).
+  - The heap: the streams' new 64 KB buffers from t=45 s 59 (00:37: 136,
+    the pool of 16), but their 32 KB buffers (under the log's 64 KB) grew
+    the heap 111 times (2.9 MB) from t=45 s; the arena 67.5 MB at t=70 s
+    to 73.1, in use flat (65.8 to 66.9): fragments of newlib's heap. Main
+    memory free 22.3 MB at t=100 s, the lowest 17.8 at t=160, 19.3 at the
+    end (00:37: 19.3 from t=100).
+- 2026-10-22: The 4 steps (Matt: "Do all 4.").
+  - 1, the stream packets' buffers (`dsound_ps3.c`): sizes of 16, 32 and
+    64 KB (a packet: up to 8,192 frames of 2 channels; the game's packets
+    are 2,304 or 8,192 bytes, times 2 for 44 kHz and for stereo), cut
+    from blocks of their own, a first of 4 MB, then 1 MB more when those
+    are used up (the last block's rest goes to the smaller sizes), never
+    freed; a buffer given back goes on its size's free list (its first
+    bytes link the next); over 64 KB (none of the game's) the heap's.
+    `DirectSound:` adds `packet buffers N KB (peak P) of B KB in K
+    blocks`. The pool of 64 is gone.
+  - 2, the ground planes' sphere query (`collisions.c`,
+    `object_bounds_cache.c`): the clusters' objects from
+    `object_bounds_cache_first_sphere`/`next_sphere`: the objects
+    `object_bounds_cache_out_of_reach` passes, in the list's order; a
+    cluster's second ask in a generation (the lists' and the copies'
+    changes; a vehicle's mass points ask in a row) reads the rays' kept
+    block (made then: one ask alone walks the list, which costs less);
+    the mark only for those (an object out of reach stays out of reach in
+    the query, so the same objects are tested in the same order).
+    `[time] ground planes' features in the sphere` adds the objects read
+    from kept blocks. PC check (`spherecheck.c`: the file with stand-ins
+    for the game's headers; host gcc 13, `-ffp-contract=off`, also
+    ASan/UBSan): 717,994 queries (random clusters of up to 512 objects,
+    shared and repeated objects, copies with edge values and unknown
+    ones, writes, invalidations, list and index changes, blocks over
+    4,096 entries; the rays' iterator too) against the old loop: 0 apart.
+    Faults, each fails: no `known` test (67,213 of 95,134 apart), the
+    reach without the query's radius (6,838), the list's walk without the
+    reach (13,720), no write count at an update (5,835), one entry past a
+    block (33,339).
+  - 3, `render_model_parts` (`models.c`) timed inside, but the shadows':
+    the solid draws of model shaders and of environment shaders, the
+    decals' draws, the transparent parts' centroids and submits (each
+    with its count and the game thread's Direct3D in it), the loops
+    (`[time] render_model's parts' draws`).
+  - 4, the objects' shadows (`render_objects.c`, `structure_render.c`):
+    the pass's begin and end, the objects' checks and lighting, each
+    shadow's begin, model, volume, structure (the surfaces found with
+    their count, their triangles built, their draws) and end, each with
+    its Direct3D (`[time] objects' shadows`).
+  - Comments over 2 lines shortened: `structure_render.c` (2; the symbol
+    table points to upstream's copy). Warnings (`-Wall`) in the changed
+    files: none in the new code. `check`: 0 `r2off`, `.got` 0x8618. PKG
+    of 11:54 in `build/ps3_spu/`. Not tested on hardware.
+- 2026-10-22: PKG of 11:54 on hardware (b40; our listener; Matt: "Done.";
+  no fault reported): `[ps3] exit 0`, 0 silent or partial port blocks.
+  35 timer windows of play, 4 under 45 frames per second (the load 33.9,
+  a revert 42.1, combat 40.6, the last 35.0). Medians of all / under 45,
+  and sums of the run for the costs of a call:
+  - The frame 16.90 / 26.65 ms (59.0 / 37.8 frames per second), game
+    ticks 3.60 / 4.40 ms a frame, render 9.70 / 11.90, the RSX 11.30 /
+    13.25; the Direct3D thread busy 15.0 (its flip waits 8.9), the game
+    thread's waits for it 3.10 / 4.15. Checkpoints 10.7 to 12.0 ms.
+  - 1, the stream buffers: in use up to 3,040 KB, 5,120 KB in 2 blocks;
+    the heap's arena and use equal (70.0 / 70.0 MB at the end; before
+    73.1 / 66.7); main memory free 22.3 MB at the end, the lowest 21.8
+    (before 19.3 and 17.8). The heap's other growths from t=45 s: 104,
+    about 4 KB each (the Direct3D thread's).
+  - 2, the ground planes' sphere query (72,261 calls): 10.3 us a call
+    (before 13.3); its objects part 4.1 (before 7.7): 20.0 objects read
+    from kept blocks and 2.4 walked a call (before 15.7 walked). The old
+    physics 277 us a call (before 336), its ground planes 191 (252).
+  - 3, `render_model_parts`: 14.7 models a frame, 68.7 us a model; a
+    model shader's draw 21.7 us (its Direct3D 5.8; 27.8 a frame), an
+    environment shader's 15.7 (5.6; 8.3), a transparent submit 15.4
+    (4.3; 12.8), the loops 4.6 us a model. Medians: model shaders 0.55 /
+    0.83 ms a frame.
+  - 4, the objects' shadows: 0.77 / 0.91 ms a frame, 3.2 shadows a
+    frame (11.0 objects checked); a shadow 281 us: its model 78 (Direct3D
+    29), the structure 203: the surfaces found 103 (184 surfaces), their
+    triangles 24, their draws 75 (Direct3D 41).
+  - The effects' particles: `particles_update` 0.50 / 0.46 ms a frame,
+    118 particles with physics, 3.9 us each. The weather under 45: 0.57
+    ms a frame (266 particles), visibility 0.35, sprites 0.29.
+  - The SPU (Matt: "check what we can place to the SPU"). Not the
+    simulation (ticks: AI, objects, physics): the SPU's single precision
+    rounds toward zero and flushes denormals, so its results differ from
+    the PPE's and the PC builds' (the machines must compute the same).
+    Candidates, exact or render-only, on compact data: (1) the
+    checkpoint's copy of 17.9 MB (bytes: exact) by SPU DMA, the game
+    thread's 10.7 to 12.0 ms hold a checkpoint to an estimated 2 to 3;
+    (2) the weather (update, visibility, sprites; 1.2 ms a frame in the
+    snow); (3) the effects' particles (0.5 ms a frame; their rays need
+    the structure by DMA); (4) the shadows' surface search (0.33 ms a
+    frame; a bsp walk by DMA); (5) on the Direct3D thread the fragment
+    programs' constants (`colours`, 1.2 ms a frame; that thread waits on
+    flips most of the frame). Not a fit: `render_model_parts`' setup and
+    the transparent sort (short, branchy, in the Direct3D calls' order).

@@ -94,11 +94,16 @@ schedule without the external COMDAT (the symbol invariant of COLLISION_POINT_FR
 #define PS3_PHYSICS_TIMED(timer, call) ({ uint64_t ps3_timed_start = ps3_timer_now(); \
 	__typeof__(call) ps3_timed_result = (call); \
 	ps3_timer_add((timer), ps3_timed_start); ps3_timer_counts[(timer)]++; ps3_timed_result; })
+/* port: the ground plane's sphere query, its parts timed in it (collisions.c) */
+#define PS3_PHYSICS_GROUND(call) ({ boolean ps3_ground_result; ps3_timer_ground_query = 1; \
+	ps3_ground_result = PS3_PHYSICS_TIMED(_ps3_timer_ground_features, call); ps3_timer_ground_query = 0; \
+	ps3_ground_result; })
 #else
 #define PS3_PHYSICS_SPAN(span) ((void)0)
 #define PS3_PHYSICS_ADD(timer, span) ((void)0)
 #define PS3_PHYSICS_COUNT(timer, count) ((void)0)
 #define PS3_PHYSICS_TIMED(timer, call) (call)
+#define PS3_PHYSICS_GROUND(call) (call)
 #endif
 
 /* ---------- structures */
@@ -604,15 +609,18 @@ static void compute_ground_plane(
 	mass_point->ground_depth = mass_point_definition->radius -
 		plane3d_distance_to_point(&mass_point->ground_plane, &mass_point->position);
 
-	if (collision_get_features_in_sphere(
+	/* port: (the timer build) */
+	if (PS3_PHYSICS_GROUND(collision_get_features_in_sphere(
 			_collision_test_for_bipeds_dead_flags,
 			&mass_point->position,
 			mass_point_definition->radius,
 			0.0f,
 			mass_point_definition->radius,
 			object_index,
-			&features) &&
-		collision_features_test_point(&features, &mass_point->position, &collision))
+			&features)) &&
+		(PS3_PHYSICS_COUNT(_ps3_timer_ground_feature_count, features.count[0] + features.count[1] + features.count[2]),
+		PS3_PHYSICS_TIMED(_ps3_timer_ground_point_test,
+			collision_features_test_point(&features, &mass_point->position, &collision))))
 	{
 		mass_point->ground_plane = collision.plane;
 		mass_point->ground_depth = collision.t;

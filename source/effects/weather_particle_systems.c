@@ -66,10 +66,12 @@ enum
 /* port: the timer build's parts of the render (port/ps3/include/ps3_timers.h) */
 #define PS3_WEATHER_SPAN(span) ((span) = ps3_timer_now())
 #define PS3_WEATHER_ADD(timer, span) ((void)ps3_timer_add((timer), (span)))
+#define PS3_WEATHER_NEXT(timer, span) ((span) = ps3_timer_add((timer), (span)))
 #define PS3_WEATHER_COUNT(timer, count) (ps3_timer_counts[(timer)] += (uint32_t)(count))
 #else
 #define PS3_WEATHER_SPAN(span) ((void)0)
 #define PS3_WEATHER_ADD(timer, span) ((void)0)
+#define PS3_WEATHER_NEXT(timer, span) ((void)0)
 #define PS3_WEATHER_COUNT(timer, count) ((void)0)
 #endif
 
@@ -936,7 +938,11 @@ static void weather_particle_update_physics(
 	struct weather_particle *particle = datum_get(weather_particle_data, particle_index);
 	unsigned long flags;
 	real_vector3d random_direction;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
 
+	PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
 	if ((type_definition->acceleration_lower_bound!=0.f || type_definition->acceleration_upper_bound!=0.f) &&
 		weather_particle_update_ticks<=0)
 	{
@@ -957,6 +963,7 @@ static void weather_particle_update_physics(
 		scale_vector3d(&particle->acceleration, magnitude, &particle->acceleration);
 		point_from_line3d((real_point3d *)&particle->velocity, &particle->acceleration, system->time_delta_sec, (real_point3d *)&particle->velocity);
 	}
+	PS3_WEATHER_NEXT(_ps3_timer_weather_acceleration, ps3_span); /* port: (the timer build) */
 
 	{
 		unsigned long seed = particle_index;
@@ -976,6 +983,7 @@ static void weather_particle_update_physics(
 			NULL,
 			particle->radius,
 			system->time_delta_sec);
+		PS3_WEATHER_NEXT(_ps3_timer_weather_point, ps3_span); /* port: (the timer build) */
 		point_from_line3d(&particle->position, seed_random_direction3d(&seed, &random_direction), 0.001f*system->time_delta_sec*TICKS_PER_SECOND, &particle->position);
 	}
 	weather_particle_system_wrap_point(type->box_width, &particle->position, &particle->position);

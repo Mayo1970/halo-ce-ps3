@@ -83,9 +83,20 @@ enum
 /* port: the timer build's spans in render_objects (port/ps3/include/ps3_timers.h) */
 #define PS3_RENDER_SPAN(span) ((span) = ps3_timer_now())
 #define PS3_RENDER_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+/* port: the objects' shadows' parts, each with the game thread's Direct3D draws and constants in it (d3d8_rsx.c): a
+part ends where the next starts */
+static uint64_t ps3_shadow_span, ps3_shadow_d3d;
+#define PS3_SHADOW_D3D() (ps3_timers[_ps3_timer_front_draws] + ps3_timers[_ps3_timer_front_constants])
+#define PS3_SHADOW_BEGIN() ((void)(ps3_shadow_span = ps3_timer_now(), ps3_shadow_d3d = PS3_SHADOW_D3D()))
+#define PS3_SHADOW_PART(timer) ((void)(ps3_shadow_span = ps3_timer_add((timer), ps3_shadow_span), \
+	ps3_render_d3d[(timer)] += PS3_SHADOW_D3D() - ps3_shadow_d3d, ps3_shadow_d3d = PS3_SHADOW_D3D()))
+#define PS3_SHADOW_COUNT(timer) ((void)ps3_timer_counts[(timer)]++)
 #else
 #define PS3_RENDER_SPAN(span) ((void)0)
 #define PS3_RENDER_ADD(timer, span) ((void)0)
+#define PS3_SHADOW_BEGIN() ((void)0)
+#define PS3_SHADOW_PART(timer) ((void)0)
+#define PS3_SHADOW_COUNT(timer) ((void)0)
 #endif
 
 /* ---------- structures */
@@ -326,12 +337,16 @@ void render_object_shadows(
 	{
 		struct object_render_data data;
 
+		PS3_SHADOW_BEGIN(); /* port: (the timer build) */
 		rasterizer_environment_shadows_begin();
+		PS3_SHADOW_PART(_ps3_timer_shadow_pass); /* port: (the timer build) */
 
 		data.shadow = TRUE;
 		process_rendered_objects(&data);
 
+		PS3_SHADOW_PART(_ps3_timer_shadow_objects); /* port: (the timer build) */
 		rasterizer_environment_shadows_end();
+		PS3_SHADOW_PART(_ps3_timer_shadow_pass); /* port: (the timer build) */
 	}
 
 	profile_exit(render_object_shadows_section);
@@ -415,9 +430,8 @@ static void render_object_list(
 	while (object_index != NONE)
 	{
 		struct object_datum *object = object_get(object_index);
-		/* port: the player's own legs, seen looking down in first person
-		(port/linux/game/first_person_legs.c): its body drawn from the waist
-		down, nothing it carries */
+		/* port: the player's own legs, seen looking down in first person (port/linux/game/first_person_legs.c):
+		its body drawn from the waist down, nothing it carries */
 		boolean legs = !data->shadow && !render.camera.mirrored &&
 			object_is_first_person_camera(object_index) && first_person_legs_wanted(object_index);
 		real_matrix4x3 const *node_matrices = legs ?
@@ -598,10 +612,15 @@ static void render_object_list(
 			if (!data->shadow && !legs && object->object.first_widget_index != NONE)
 			{
 				struct render_animation animation;
+#ifdef HALO_PS3
+				uint64_t ps3_span; /* port: (the timer build) */
+#endif
 
+				PS3_RENDER_SPAN(ps3_span); /* port: (the timer build) */
 				animation.colors = object->object.outgoing_change_colors;
 				animation.values = object->object.outgoing_function_values;
 				widgets_render(object_index, data->lighting, &animation);
+				PS3_RENDER_ADD(_ps3_timer_render_widgets, ps3_span); /* port: (the timer build) */
 			}
 
 			if (object->object.first_child_object_index != NONE && !legs)
@@ -823,14 +842,17 @@ static void render_object_shadow_end(
 	shadow_volume_bounds.z1 = shadow_volume_bounds.z1 * data->shadow_bounding_radius +
 		data->shadow_matrix.position.z;
 
+	PS3_SHADOW_PART(_ps3_timer_shadow_volume); /* port: (the timer build) */
 	structure_render_shadow(
 		&data->shadow_matrix.position,
 		data->shadow_bounding_radius * 4.f,
 		&shadow_volume_bounds,
 		NUMBER_OF_SHADOW_VOLUME_PLANES,
 		shadow_volume_planes);
+	PS3_SHADOW_PART(_ps3_timer_shadow_structure); /* port: (the timer build) */
 
 	rasterizer_environment_shadow_end();
+	PS3_SHADOW_PART(_ps3_timer_shadow_end); /* port: (the timer build) */
 
 	return;
 }
@@ -1058,6 +1080,7 @@ static void render_object(
 	{
 		struct object_datum *object = object_get(data->object_index);
 
+		PS3_SHADOW_COUNT(_ps3_timer_shadow_objects); /* port: (the timer build) */
 		if (!object_is_first_person_camera(data->object_index) &&
 			!TEST_FLAG(object->object.flags, _object_shadowless_bit) &&
 			(!TEST_FLAG(object->object.flags, _object_invisible_bit) ||
@@ -1084,11 +1107,17 @@ static void render_object(
 				size_fraction = PIN(size_fraction, 0.f, 1.f);
 				darkness_fraction = PIN(darkness_fraction, 0.f, 1.f);
 
+				PS3_SHADOW_PART(_ps3_timer_shadow_objects); /* port: (the timer build) */
+				PS3_SHADOW_COUNT(_ps3_timer_shadow_begin); /* port: (the timer build) */
 				if (render_object_shadow_begin(data, darkness_fraction * size_fraction))
 				{
+					PS3_SHADOW_PART(_ps3_timer_shadow_begin); /* port: (the timer build) */
 					render_object_list(data, NULL, data->object_index);
+					PS3_SHADOW_PART(_ps3_timer_shadow_model); /* port: (the timer build) */
+					PS3_SHADOW_COUNT(_ps3_timer_shadow_model); /* port: (the timer build) */
 					render_object_shadow_end(data);
 				}
+				PS3_SHADOW_PART(_ps3_timer_shadow_begin); /* port: (the timer build: a begin that failed) */
 			}
 		}
 	}

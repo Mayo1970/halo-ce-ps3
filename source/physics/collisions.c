@@ -808,6 +808,9 @@ boolean collision_get_features_in_sphere(
 	struct collision_feature_list *features)
 {
 	unsigned long structure_flags;
+#ifdef HALO_PS3
+	uint64_t ps3_span = 0, ps3_test = 0; /* port: (the timer build) */
+#endif
 
 	collision_features_new(features);
 	structure_flags = flags & FLAG(_collision_test_structure_bit);
@@ -828,15 +831,17 @@ boolean collision_get_features_in_sphere(
 		collision_log_start_time(&collision_usage_times.features);
 		radius += 0.0625f;
 
-		if (collision_bsp_test_sphere(
+		/* port: (the timer build) */
+		if (PS3_SPHERE_TIMED(_ps3_timer_ground_leaves, collision_bsp_test_sphere(
 			collision_bsp,
 			MAXIMUM_BREAKABLE_SURFACES_PER_MAP,
 			breakable_surface_flags_get(),
 			center,
 			radius,
-			&result) &&
+			&result)) &&
 			structure_flags)
 		{
+			PS3_SPHERE_SPAN(ps3_span); /* port: (the timer build) */
 			collision_bsp_get_features_in_sphere(
 				collision_bsp,
 				&result,
@@ -845,8 +850,12 @@ boolean collision_get_features_in_sphere(
 				width,
 				NONE,
 				features);
+			PS3_SPHERE_ADD(_ps3_timer_ground_structure, ps3_span); /* port: (the timer build) */
+			PS3_SPHERE_COUNT(_ps3_timer_ground_structure, 1); /* port: (the timer build) */
 		}
+		PS3_SPHERE_COUNT(_ps3_timer_ground_leaf_count, result.leaf_count); /* port: (the timer build) */
 
+		PS3_SPHERE_SPAN(ps3_span); /* port: (the timer build) */
 		if (objects && result.leaf_count > 0)
 		{
 			short leaf_reference_index;
@@ -868,20 +877,22 @@ boolean collision_get_features_in_sphere(
 
 				if (structure_cluster_mark(cluster_index))
 				{
-					long reference_index;
+					/* port: the cluster's objects but those out of reach on the copies of their bounding spheres, in
+					order (object_bounds_cache.c): their mark only stops one out of reach too */
+					struct object_bounds_sphere_iterator bounds;
 					long object_index;
+#ifdef HALO_PS3
+					uint32_t ps3_walked = ps3_bounds_walked, ps3_read = ps3_bounds_read; /* port: (the timer build) */
+#endif
 
-					for (object_index = cluster_get_first_collideable_object(
-							&reference_index,
-							cluster_index);
+					PS3_SPHERE_COUNT(_ps3_timer_ground_objects, 1); /* port: (the timer build) */
+					for (object_index = object_bounds_cache_first_sphere(&bounds, cluster_index, center, radius);
 						object_index != NONE;
-						object_index = cluster_get_next_collideable_object(&reference_index))
+						object_index = object_bounds_cache_next_sphere(&bounds))
 					{
-						/* port: (the far ones passed over on a packed copy
-						of their bounding spheres: object_bounds_cache.c) */
-						if (object_mark_function(object_index) &&
-							!object_bounds_cache_out_of_reach(object_index, center, radius))
+						if (object_mark_function(object_index))
 						{
+							PS3_SPHERE_SPAN(ps3_test); /* port: (the timer build) */
 							object_get_features_in_sphere(
 								flags,
 								object_index,
@@ -891,13 +902,19 @@ boolean collision_get_features_in_sphere(
 								width,
 								ignore_object_index,
 								features);
+							PS3_SPHERE_ADD(_ps3_timer_ground_object_tests, ps3_test); /* port: (the timer build) */
+							PS3_SPHERE_COUNT(_ps3_timer_ground_object_tests, 1); /* port: (the timer build) */
 						}
 					}
+					/* port: (the timer build) */
+					PS3_SPHERE_COUNT(_ps3_timer_ground_objects_walked, ps3_bounds_walked - ps3_walked);
+					PS3_SPHERE_COUNT(_ps3_timer_ground_objects_read, ps3_bounds_read - ps3_read);
 				}
 			}
 			object_marker_end();
 			structure_cluster_marker_end();
 		}
+		PS3_SPHERE_ADD(_ps3_timer_ground_objects, ps3_span); /* port: (the timer build) */
 
 		collision_log_end_time(
 			_collision_function_vector_bounds_object,

@@ -143,9 +143,8 @@ enum
 
 enum
 {
-	/* port: the stages a generic shader has room for, one combiner of the 8
-	kept for the fog stage after them (the tag's own maximum; retail has 7 at
-	most) */
+	/* port: the stages a generic shader has room for, one combiner of the 8 kept for the fog stage after them
+	(the tag's own maximum; retail has 7 at most) */
 	MAXIMUM_SHADER_TRANSPARENT_GENERIC_STAGES = 7,
 	/* port: how deep extra layers may nest (a map's layer can name its own
 	shader, which never ended); retail's layers have no layers of their own */
@@ -3676,10 +3675,8 @@ static short transparent_chain_root(short index, long count)
 	return NONE;
 }
 
-/* port: preserve the order of surfaces and unrelated groups. Move a model
-   block immediately after its last required surface, or before its first.
-   Stable gaps avoid the old topological sort moving a floor across other
-   objects. Conflicting planes or malformed links leave the input untouched. */
+/* port: surfaces and unrelated groups keep their order; a model block moves just after its last required surface
+or before its first (stable gaps). Conflicting planes or malformed links leave the input untouched */
 void rasterizer_transparent_geometry_order_models(short *order, long count)
 {
 	short roots[RASTERIZER_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS];

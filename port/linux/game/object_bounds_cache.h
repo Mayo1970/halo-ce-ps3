@@ -28,4 +28,21 @@ long object_bounds_cache_first_vector(struct object_bounds_vector_iterator *iter
 	real_point3d const *point, real_vector3d const *vector);
 long object_bounds_cache_next_vector(struct object_bounds_vector_iterator *iterator);
 
+/* a cluster's collideable objects but those whose copy is out of a sphere query's reach, in the cluster's order; entry
+NONE: the list is walked */
+struct object_bounds_sphere_iterator
+{
+	long entry;
+	long end;
+	long reference_index;
+	real_point3d const *point;
+	real radius;
+};
+
+/* the same objects as object_bounds_cache_out_of_reach passes; the kept block from a cluster's second ask in a
+generation (a vehicle's mass points ask in a row); NONE at the end */
+long object_bounds_cache_first_sphere(struct object_bounds_sphere_iterator *iterator, short cluster_index,
+	real_point3d const *point, real radius);
+long object_bounds_cache_next_sphere(struct object_bounds_sphere_iterator *iterator);
+
 #endif

@@ -1,6 +1,4 @@
-/*
-RASTERIZER_COMMON.C
-*/
+/* RASTERIZER_COMMON.C */
 
 /* ---------- headers */
 

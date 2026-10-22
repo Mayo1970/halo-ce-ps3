@@ -1,85 +1,5 @@
-/*
-STRUCTURE_RENDER.C
-
-symbols in this file:
-00184D30 0050:
-	_structure_render_set_fog_offset (0000)
-00184D80 0020:
-	_compare_surface_indices (0000)
-00184DA0 0100:
-	_structure_render_dynamic_triangles_from_bitvector (0000)
-00184EA0 0080:
-	_structure_render_dynamic_triangles_from_indices (0000)
-00184F20 00c0:
-	_structure_render_build_dynamic_triangles (0000)
-00184FE0 0260:
-	_structure_render_pass (0000)
-00185240 0120:
-	_structure_render_preprocess (0000)
-00185360 00b0:
-	_structure_render_lightmaps (0000)
-00185410 0080:
-	_structure_render_diffuse_texture (0000)
-00185490 0070:
-	_structure_render_specular_lightmaps (0000)
-00185500 0050:
-	_structure_render_reflection_lightmap_masks (0000)
-00185550 0040:
-	_structure_render_reflection_mirrors (0000)
-00185590 0080:
-	_structure_render_reflections (0000)
-00185610 0080:
-	_structure_render_transparent_geometry (0000)
-00185690 0080:
-	_structure_render_fog (0000)
-00185710 0070:
-	_structure_render_fog_screen (0000)
-00185780 0130:
-	_structure_render_specular_light (0000)
-001858B0 0130:
-	_structure_render_diffuse_light (0000)
-001859E0 0100:
-	_structure_render_shadow (0000)
-002A17E8 001e:
-	??_C@_0BO@IFCJOOII@render_structure_shadows_draw?$AA@ (0000)
-002A1808 0019:
-	??_C@_0BJ@LHNNMHCN@render_structure_shadows?$AA@ (0000)
-002A1824 0025:
-	??_C@_0CF@BNBKIEIJ@render_structure_diffuse_lights_@ (0000)
-002A184C 0020:
-	??_C@_0CA@HHIKFCNA@render_structure_diffuse_lights?$AA@ (0000)
-002A186C 0026:
-	??_C@_0CG@DKGBAEP@render_structure_specular_lights@ (0000)
-002A1894 0021:
-	??_C@_0CB@HDMNCMAJ@render_structure_specular_lights@ (0000)
-002A18B8 0015:
-	??_C@_0BF@FGONPFDO@render_structure_fog?$AA@ (0000)
-002A18D0 0026:
-	??_C@_0CG@INKKMOOJ@render_structure_transparent_geo@ (0000)
-002A18F8 001d:
-	??_C@_0BN@HGHIIJ@render_structure_reflections?$AA@ (0000)
-002A1918 0022:
-	??_C@_0CC@GOLKDEIH@render_structure_diffuse_texture@ (0000)
-002A193C 001b:
-	??_C@_0BL@MIJLHPO@render_structure_lightmaps?$AA@ (0000)
-002A1958 0027:
-	??_C@_0CH@CNKEDOPG@render_structure_build_triangle_@ (0000)
-002A1980 002b:
-	??_C@_0CL@FLJBJLNG@?$CBstructure_render_globals?4fog_of@ (0000)
-002A19AC 002d:
-	??_C@_0CN@IJHJEMLI@c?3?2halo?2SOURCE?2structures?2struct@ (0000)
-002A19DC 003c:
-	??_C@_0DM@OPJNGOOB@surface_index_index?$DO?$DN0?5?$CG?$CG?5surfac@ (0000)
-002A1A18 0030:
-	??_C@_0DA@GELBPONP@unable?5to?5allocate?5dynamic?5struc@ (0000)
-002A1A48 0044:
-	??_C@_0EE@DHHGDPGL@there?5are?5more?5surfaces?5than?5mat@ (0000)
-0030F340 47aa:
-	_debug_leaf_index (0000)
-	_debug_leaf_portal_index (0004)
-004C0CD0 0018:
-	_structure_render_globals (0000)
-*/
+/* STRUCTURE_RENDER.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/structures/structure_render.c. */
 
 /* ---------- headers */
 
@@ -101,6 +21,22 @@ symbols in this file:
 #include "structures/structure_bsp_definitions.h"
 #include "structures/structure_visibility.h"
 #include "tag_files/tag_groups.h"
+
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of an object's shadow on the structure (render_objects.c's part), each with the game
+thread's Direct3D draws and constants in it (d3d8_rsx.c); a part's time added starts the next */
+#define PS3_STRUCTURE_D3D() (ps3_timers[_ps3_timer_front_draws] + ps3_timers[_ps3_timer_front_constants])
+#define PS3_STRUCTURE_SPAN(span, d3d) ((void)((span) = ps3_timer_now(), (d3d) = PS3_STRUCTURE_D3D()))
+#define PS3_STRUCTURE_ADD(timer, span, d3d) ((void)(ps3_timers[(timer)] += ps3_timer_now() - (span), \
+	ps3_render_d3d[(timer)] += PS3_STRUCTURE_D3D() - (d3d)), PS3_STRUCTURE_SPAN((span), (d3d)))
+#define PS3_STRUCTURE_COUNT(timer, count) ((void)(ps3_timer_counts[(timer)] += (uint32_t)(count)))
+#else
+#define PS3_STRUCTURE_SPAN(span, d3d) ((void)0)
+#define PS3_STRUCTURE_ADD(timer, span, d3d) ((void)0)
+#define PS3_STRUCTURE_COUNT(timer, count) ((void)0)
+#endif
 
 /* ---------- constants */
 
@@ -326,10 +262,8 @@ static void structure_render_dynamic_triangles_from_bitvector(
 	return;
 }
 
-/* port: the surface indices in ascending order, as qsort_4byte with
-compare_surface_indices puts them, sorted by their bytes (a radix sort)
-instead of by comparisons through a function: the sort took a twentieth of
-the web build's frame */
+/* port: the surface indices in ascending order as qsort_4byte with compare_surface_indices puts them, by their bytes
+(a radix sort): the sort by comparisons through a function took a twentieth of the web build's frame */
 static void structure_render_sort_surface_indices(
 	long *surface_indices,
 	long surface_count)
@@ -1092,9 +1026,13 @@ void structure_render_shadow(
 	long surface_indices[MAXIMUM_LOCALLY_RENDERED_SURFACES];
 	long surface_count;
 	long dynamic_triangles_index;
+#ifdef HALO_PS3
+	uint64_t ps3_span, ps3_d3d; /* port: (the timer build) */
+#endif
 
 	profile_enter(render_structure_shadows_section);
 
+	PS3_STRUCTURE_SPAN(ps3_span, ps3_d3d); /* port: (the timer build) */
 	surface_count = structure_visibility_build_surfaces(
 		surface_indices,
 		MAXIMUM_LOCALLY_RENDERED_SURFACES,
@@ -1105,11 +1043,15 @@ void structure_render_shadow(
 		bounding_surfaces,
 		0,
 		NULL);
+	/* port: (the timer build) */
+	PS3_STRUCTURE_ADD(_ps3_timer_shadow_surfaces, ps3_span, ps3_d3d);
+	PS3_STRUCTURE_COUNT(_ps3_timer_shadow_surfaces, surface_count);
 
 	dynamic_triangles_index = structure_render_build_dynamic_triangles(
 		surface_indices,
 		surface_count,
 		NULL);
+	PS3_STRUCTURE_ADD(_ps3_timer_shadow_triangles, ps3_span, ps3_d3d); /* port: (the timer build) */
 
 	if (dynamic_triangles_index != NONE)
 	{
@@ -1128,6 +1070,7 @@ void structure_render_shadow(
 
 		profile_exit(render_structure_shadows_draw_section);
 	}
+	PS3_STRUCTURE_ADD(_ps3_timer_shadow_draws, ps3_span, ps3_d3d); /* port: (the timer build) */
 
 	profile_exit(render_structure_shadows_section);
 

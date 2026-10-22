@@ -48,6 +48,8 @@ static struct
 	long cluster_entry_counts[MAXIMUM_CLUSTERS_PER_STRUCTURE];
 } object_bounds_kept __attribute__((aligned(16)));
 static unsigned long object_bounds_writes;
+/* the generation each cluster was last asked in by a sphere query, which reads the block from the second ask on */
+static unsigned long object_bounds_sphere_asks[MAXIMUM_CLUSTERS_PER_STRUCTURE];
 #endif
 
 void object_bounds_cache_update(
@@ -160,13 +162,19 @@ static boolean vector_batch_flush(
 	return room;
 }
 
+static unsigned long object_bounds_kept_generation(
+	void)
+{
+	return 1 + collideable_object_cluster_partition.port_modification_count + object_bounds_writes;
+}
+
 /* the cluster's block (its first entry and count), made from its list when this generation has none; NONE: not kept
 (an index out of the clusters, or more objects than fit), its list is walked */
 static long object_bounds_kept_cluster(
 	short cluster_index,
 	long *entry_count)
 {
-	unsigned long generation = 1 + collideable_object_cluster_partition.port_modification_count + object_bounds_writes;
+	unsigned long generation = object_bounds_kept_generation();
 	long reference_index;
 	long object_index;
 	long first;
@@ -299,4 +307,79 @@ long object_bounds_cache_next_vector(
 	if (iterator->count == NONE)
 		return vector_list_next(iterator, cluster_get_next_collideable_object(&iterator->reference_index));
 	return iterator->next < iterator->count ? iterator->objects[iterator->next++] : NONE;
+}
+
+/* the cluster's list from object_index on, past the objects out of the query's reach */
+static long sphere_list_next(
+	struct object_bounds_sphere_iterator *iterator,
+	long object_index)
+{
+	while (object_index != NONE)
+	{
+#ifdef HALO_PS3
+		ps3_bounds_walked++; /* the timer build's (ps3_timers.h) */
+#endif
+		if (!object_bounds_cache_out_of_reach(object_index, iterator->point, iterator->radius))
+			break;
+		object_index = cluster_get_next_collideable_object(&iterator->reference_index);
+	}
+	return object_index;
+}
+
+long object_bounds_cache_first_sphere(
+	struct object_bounds_sphere_iterator *iterator,
+	short cluster_index,
+	real_point3d const *point,
+	real radius)
+{
+	iterator->entry = NONE;
+	iterator->point = point;
+	iterator->radius = radius;
+#ifdef HALO_PS3
+	/* a block kept, or made at the second ask: one ask alone walks the list, which costs less than making it */
+	if (cluster_index >= 0 && cluster_index < MAXIMUM_CLUSTERS_PER_STRUCTURE)
+	{
+		unsigned long generation = object_bounds_kept_generation();
+
+		if ((object_bounds_kept.generation == generation &&
+			object_bounds_kept.cluster_generations[cluster_index] == generation) ||
+			object_bounds_sphere_asks[cluster_index] == generation)
+		{
+			long count;
+			long entry = object_bounds_kept_cluster(cluster_index, &count);
+
+			if (entry != NONE)
+			{
+				ps3_bounds_read += (uint32_t)count; /* the timer build's (ps3_timers.h) */
+				iterator->entry = entry;
+				iterator->end = entry + count;
+				return object_bounds_cache_next_sphere(iterator);
+			}
+		}
+		object_bounds_sphere_asks[cluster_index] = generation;
+	}
+#endif
+	return sphere_list_next(iterator, cluster_get_first_collideable_object(&iterator->reference_index, cluster_index));
+}
+
+long object_bounds_cache_next_sphere(
+	struct object_bounds_sphere_iterator *iterator)
+{
+#ifdef HALO_PS3
+	if (iterator->entry != NONE)
+	{
+		while (iterator->entry < iterator->end)
+		{
+			long entry = iterator->entry++;
+			float const *sphere = object_bounds_kept.spheres[entry];
+
+			/* object_bounds_cache_out_of_reach's test, on the block's copy of the same values */
+			if (!object_bounds_kept.known[entry] ||
+				point_in_sphere(iterator->point, (real_point3d const *)sphere, sphere[3] + iterator->radius))
+				return object_bounds_kept.objects[entry];
+		}
+		return NONE;
+	}
+#endif
+	return sphere_list_next(iterator, cluster_get_next_collideable_object(&iterator->reference_index));
 }

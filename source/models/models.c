@@ -1,65 +1,5 @@
-/*
-MODELS.C
-
-symbols in this file:
-00112DB0 0430:
-	_render_model_parts (0000)
-001131E0 0110:
-	_model_interpolate_node_orientations (0000)
-001132F0 0090:
-	_model_get_node_orientations (0000)
-00113380 0140:
-	_model_get_node_matrices (0000)
-001134C0 0110:
-	_model_node_matrices_from_orientations (0000)
-001135D0 00a0:
-	_model_find_marker (0000)
-00113670 0030:
-	_model_get_default_inverse_matrix (0000)
-001136A0 0070:
-	_model_find_node (0000)
-00113710 0010:
-	_model_geometry_part_build_tangent_matrices (0000)
-00113720 0860:
-	_render_model (0000)
-00113F80 01d0:
-	_model_get_marker_by_name (0000)
-00114150 0070:
-	_model_build_tangent_matrices (0000)
-0027F98C 000d:
-	??_C@_0N@PBHIAIOK@render_model?$AA@ (0000)
-0027F9A0 0061:
-	??_C@_0GB@CAHPCM@part?9?$DOcentroid_secondary_node_in@ (0000)
-0027FA08 005d:
-	??_C@_0FN@MLJHGCND@part?9?$DOcentroid_primary_node_inde@ (0000)
-0027FA68 002c:
-	??_C@_0CM@MBIKHGBC@?$CBTEST_FLAG?$CIflags?0?5_render_model_@ (0000)
-0027FA94 001f:
-	??_C@_0BP@PJEILNMK@c?3?2halo?2SOURCE?2models?2models?4c?$AA@ (0000)
-0027FAB4 001e:
-	??_C@_0BO@FFDGBNA@node?9?$DOparent_node_index?$CB?$DNNONE?$AA@ (0000)
-0027FAD8 0064:
-	??_C@_0GE@EAOMEKOC@?$CIactual_detail_level_index?5?$DO?$DN?50?$CJ@ (0000)
-0027FB3C 001e:
-	??_C@_0BO@INPHBEBB@actual_detail_level_index?5?$DO?50?$AA@ (0000)
-0027FB60 0060:
-	??_C@_0GA@CEBIGMGH@geometry_detail_level_index?$DO?$DN0?5?$CG@ (0000)
-0027FBC0 0009:
-	??_C@_08OEDKDIOB@lighting?$AA@ (0000)
-0027FBD0 0073:
-	??_C@_0HD@NKPBNIND@object_marker?9?$DOnode_index?$DO?$DN0?5?$CG?$CG?5@ (0000)
-0027FC44 0008:
-	??_C@_07LGFKJAB@markers?$AA@ (0000)
-0027FC4C 000e:
-	??_C@_0O@BKFGBDDJ@node_matrices?$AA@ (0000)
-0030A390 05f8:
-	_render_model_section (0000)
-00456650 0088:
-	_default_function_values (0000)
-	_default_render_model_change_colors (0000)
-	_default_render_model_effect (0000)
-	_default_render_model_region_permutation_indices (0000)
-*/
+/* MODELS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/models/models.c. */
 
 /* ---------- headers */
 
@@ -86,6 +26,22 @@ symbols in this file:
 /* port: model tags and static enclosure recognition at map initialization. */
 #include "cache/cache_files.h"
 #include "rasterizer/rasterizer_transparent_geometry.h"
+
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+
+/* port: the timer build's parts of render_model but the shadows' (port/ps3/include/ps3_timers.h): a span's start with
+the game thread's Direct3D draws and constants so far (d3d8_rsx.c); its time, and theirs since, added to a timer */
+#define PS3_MODEL_D3D() (ps3_timers[_ps3_timer_front_draws] + ps3_timers[_ps3_timer_front_constants])
+#define PS3_MODEL_SPAN(span, d3d) ((void)((span) = ps3_timer_now(), (d3d) = PS3_MODEL_D3D()))
+#define PS3_MODEL_ADD(timed, timer, span, d3d) ((void)((timed) ? (ps3_timers[(timer)] += ps3_timer_now() - (span), \
+	ps3_render_d3d[(timer)] += PS3_MODEL_D3D() - (d3d)) : 0), PS3_MODEL_SPAN((span), (d3d)))
+#define PS3_MODEL_COUNT(timed, timer, count) ((void)((timed) ? (ps3_timer_counts[(timer)] += (uint32_t)(count)) : 0))
+#else
+#define PS3_MODEL_SPAN(span, d3d) ((void)0)
+#define PS3_MODEL_ADD(timed, timer, span, d3d) ((void)0)
+#define PS3_MODEL_COUNT(timed, timer, count) ((void)0)
+#endif
 
 /* ---------- constants */
 
@@ -281,16 +237,19 @@ static void render_model_parts(
 	struct render_sort_filth sort_filth[MAXIMUM_PARTS_PER_MODEL_GEOMETRY];
 	real_point3d centroid;
 	short pass;
+#ifdef HALO_PS3
+	boolean ps3_timed = !TEST_FLAG(flags, _render_model_shadow_bit); /* port: (the timer build) */
+	uint64_t ps3_span, ps3_d3d;
+#endif
 
+	PS3_MODEL_SPAN(ps3_span, ps3_d3d); /* port: (the timer build) */
 	for (pass = _render_model_pass_solid; pass<=last_pass; pass++)
 	{
 		short sort_filth_count = 0;
 		short region_index;
 		short i, j;
-		/* port: no more regions than the permutations passed in hold: an
-		object's MAXIMUM_REGIONS_PER_OBJECT, or the default's
-		MAXIMUM_REGIONS_PER_MODEL (a map's count; retail models have 8 at
-		most) */
+		/* port: no more regions than the permutations passed in hold: an object's MAXIMUM_REGIONS_PER_OBJECT, or the
+		default's MAXIMUM_REGIONS_PER_MODEL (a map's count; retail models have 8 at most) */
 		short region_count = (short)MIN(model->regions.count, region_permutation_count);
 
 		for (region_index = 0; region_index<region_count; region_index++)
@@ -368,6 +327,7 @@ static void render_model_parts(
 										446,
 										part->centroid_secondary_node_index>=0 && part->centroid_secondary_node_index<model->nodes.count);
 
+									PS3_MODEL_ADD(ps3_timed, _ps3_timer_parts_rest, ps3_span, ps3_d3d); /* port: (the timer build) */
 									matrix4x3_transform_point(
 										&skinning->node_matrices[centroid_node_index],
 										&part->centroid,
@@ -384,13 +344,15 @@ static void render_model_parts(
 										/* port: no sort record once all of sort_filth is
 										used (it wrote one past it) */
 										sort_filth_count<MAXIMUM_PARTS_PER_MODEL_GEOMETRY ? &sort_filth[sort_filth_count] : NULL);
+									/* port: (the timer build) */
+									PS3_MODEL_ADD(ps3_timed, _ps3_timer_parts_transparent, ps3_span, ps3_d3d);
+									PS3_MODEL_COUNT(ps3_timed, _ps3_timer_parts_transparent, 1);
 
 									if (sort_filth_count<MAXIMUM_PARTS_PER_MODEL_GEOMETRY &&
 										sort_filth[sort_filth_count].group_index!=NONE &&
 										!immediate &&
-										/* port: part zero can head a link
-										(models_fix_transparent_part_links); no stock
-										model's part has a previous part of 0 */
+										/* port: part zero can head a link (models_fix_transparent_part_links);
+										no stock model's part has a previous part of 0 */
 										(part->next_part_index>0 || part->previous_part_index>=0))
 									{
 										sort_filth[sort_filth_count].part_index = part_index;
@@ -406,6 +368,7 @@ static void render_model_parts(
 								{
 									match_assert("c:\\halo\\SOURCE\\models\\models.c", 491, !TEST_FLAG(flags, _render_model_shadow_bit));
 
+									PS3_MODEL_ADD(ps3_timed, _ps3_timer_parts_rest, ps3_span, ps3_d3d); /* port: (the timer build) */
 									rasterizer_model_draw(
 										shader,
 										forced_shader_permutation_index ? forced_shader_permutation_index : shader_reference->permutation_index,
@@ -414,6 +377,9 @@ static void render_model_parts(
 										part->triangle_buffer.count,
 										&part->vertex_buffer,
 										NONE);
+									/* port: (the timer build) */
+									PS3_MODEL_ADD(ps3_timed, _ps3_timer_parts_decals, ps3_span, ps3_d3d);
+									PS3_MODEL_COUNT(ps3_timed, _ps3_timer_parts_decals, 1);
 								}
 							}
 							else if (pass==_render_model_pass_solid)
@@ -428,6 +394,13 @@ static void render_model_parts(
 								}
 								else
 								{
+#ifdef HALO_PS3
+									/* port: (the timer build) */
+									int ps3_timer = shader->base.type==_shader_type_environment ?
+										_ps3_timer_parts_environment : _ps3_timer_parts_model;
+#endif
+
+									PS3_MODEL_ADD(ps3_timed, _ps3_timer_parts_rest, ps3_span, ps3_d3d); /* port: (the timer build) */
 									rasterizer_model_draw(
 										shader,
 										forced_shader_permutation_index ? forced_shader_permutation_index : shader_reference->permutation_index,
@@ -436,6 +409,9 @@ static void render_model_parts(
 										part->triangle_buffer.count,
 										&part->vertex_buffer,
 										NONE);
+									/* port: (the timer build) */
+									PS3_MODEL_ADD(ps3_timed, ps3_timer, ps3_span, ps3_d3d);
+									PS3_MODEL_COUNT(ps3_timed, ps3_timer, 1);
 									rasterizer_debug_model_vertices(object_index, skinning, part);
 								}
 							}
@@ -458,17 +434,15 @@ static void render_model_parts(
 			}
 		}
 	}
+	PS3_MODEL_ADD(ps3_timed, _ps3_timer_parts_rest, ps3_span, ps3_d3d); /* port: (the timer build) */
 
 	return;
 }
 
 /* ---------- public code */
 
-/* port: a pickup's energy inside its two-sided glass shell is drawn before
-the shell with the engine's own part links (render_model_parts), as Halo CE
-Restored's tags link them, so that the centroid sort cannot put it after the
-glass; models with links of their own, skinned ones and those with other
-transparent parts are left as they are */
+/* port: a pickup's energy in its two-sided glass shell gets the engine's part links (as Halo CE Restored's tags), so the
+centroid sort cannot draw it after the glass; models with links, skinned ones and other transparent parts are left */
 static void model_geometry_fix_transparent_part_links(
 	struct model const *model, struct model_geometry *geometry)
 {
@@ -861,9 +835,8 @@ short model_get_marker_by_name(
 		{
 			struct model_marker_instance* instance = TAG_BLOCK_GET_ELEMENT(&marker->instances, i, struct model_marker_instance);
 
-			/* port: a marker on a region or node the model doesn't have is
-			skipped (a map's indices); the permutations passed in are an
-			object's (retail's markers are on regions 5 at most) */
+			/* port: a marker on a region or node the model doesn't have is skipped (a map's indices); the permutations
+			passed in are an object's (retail's markers are on regions 5 at most) */
 			if ((region_permutations && instance->region_index>=MAXIMUM_REGIONS_PER_OBJECT) ||
 				instance->node_index>=MIN(model->nodes.count, MAXIMUM_NODES_PER_MODEL))
 			{
@@ -1001,7 +974,12 @@ void render_model(
 			MAXIMUM_REGIONS_PER_MODEL;
 		/* port: no more nodes than relative_node_matrices holds (a map's count) */
 		short node_count = (short)MIN(model->nodes.count, MAXIMUM_NODES_PER_MODEL);
+#ifdef HALO_PS3
+		boolean ps3_timed = !TEST_FLAG(flags, _render_model_shadow_bit); /* port: (the timer build) */
+		uint64_t ps3_span, ps3_d3d;
+#endif
 
+		PS3_MODEL_SPAN(ps3_span, ps3_d3d); /* port: (the timer build) */
 		if (!region_permutation_indices)
 		{
 			region_permutation_indices = default_render_model_region_permutation_indices;
@@ -1042,6 +1020,8 @@ void render_model(
 				relative_node_matrices[node_index] = render.frustum.world_to_view;
 			}
 		}
+		PS3_MODEL_ADD(ps3_timed, _ps3_timer_model_nodes, ps3_span, ps3_d3d); /* port: (the timer build) */
+		PS3_MODEL_COUNT(ps3_timed, _ps3_timer_model_nodes, node_count); /* port: (the timer build) */
 
 		geometry_detail_level_index = NUMBER_OF_DETAIL_LEVELS_PER_MODEL-1;
 		while (geometry_detail_level_index>0 &&
@@ -1258,6 +1238,7 @@ void render_model(
 		{
 			rasterizer_model_begin(&model_parameters, FALSE);
 		}
+		PS3_MODEL_ADD(ps3_timed, _ps3_timer_model_begin, ps3_span, ps3_d3d); /* port: (the timer build) */
 		render_model_parts(
 			model,
 			region_permutation_indices,
@@ -1267,6 +1248,8 @@ void render_model(
 			geometry_detail_level_index,
 			forced_shader_permutation_index,
 			flags);
+		PS3_MODEL_ADD(ps3_timed, _ps3_timer_model_parts, ps3_span, ps3_d3d); /* port: (the timer build) */
+		PS3_MODEL_COUNT(ps3_timed, _ps3_timer_model_parts, 1); /* port: (the timer build) */
 		if (TEST_FLAG(flags, _render_model_shadow_bit))
 		{
 			rasterizer_environment_shadow_model_end();
@@ -1275,6 +1258,7 @@ void render_model(
 		{
 			rasterizer_model_end();
 		}
+		PS3_MODEL_ADD(ps3_timed, _ps3_timer_model_end, ps3_span, ps3_d3d); /* port: (the timer build) */
 	}
 
 	rasterizer_model_cortana_hack = FALSE;
@@ -1291,9 +1275,8 @@ boolean model_data_report_once(
 {
 	static void const *reported_data[32];
 	static long next_reported_index = 0;
-	/* (and no more than this many reports in all: with more bad tags than
-	the list holds, each would push another out and be reported again
-	every frame) */
+	/* (and no more than this many reports in all: with more bad tags than the list holds, each would push
+	another out and be reported again every frame) */
 	static long report_count = 0;
 	long reported_index;
 
