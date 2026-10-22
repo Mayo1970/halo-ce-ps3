@@ -51,6 +51,8 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-22: G9 started (Matt: "Work on Goal 9."). The analysis is done:
+  see "G9 analysis". Next: Matt's choice of its proposed steps.
 - 2026-10-22: G8, the SPU offload (Matt chose all four candidates: 1 the
   checkpoint's copy, 2 the weather, 3 the effects' particles, 4 the
   shadows' surfaces): a third SPU thread group, the game thread's jobs
@@ -614,6 +616,96 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20; on hardware 2026-10-22 the kept boxes crashed the game thread twice (step 627, the transparent sort; cause not found): taken out (Matt: option 2), then a clean run (the weather in the snow 1.27 to 0.86 ms a frame); the stream buffers' blocks (no heap fragments: 22.3 MB free at the end, before 19.3), the sphere query on the kept blocks (13.3 to 10.3 us a call; the same answer: PC check), `render_model_parts` and the shadows timed inside: run on hardware 2026-10-22 (SUCCESS); the SPU candidates written down (the Log); the game thread's jobs on a third SPU (the checkpoint's copies, the shadows' surfaces, the weather, the particles' rays; PC check on the 23 maps): built 2026-10-22, run on hardware 2026-10-22 (the checkpoint 12.9-15.1 to 3.1 ms; the shadows' surfaces 103 to 4.7 us a shadow; the weather 1.2 to 0.05 ms a frame; the particles 3.8 to 2.9 us each); the pixel shaders' copies on the conversions' SPU and the particles' rays taken a frame late: built 2026-10-22 |
+| G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis") |
+
+## G9 analysis (2026-10-22)
+
+Matt: "Work on Goal 9." The game thread's render (14.65 ms a frame in the
+windows under 50 fps) read part by part for work that an SPU can take:
+render-only, a batch a frame or a window, compact data by DMA. Steps of
+`render_window` as in the Log (`PS3_WINDOW_STEP`).
+
+SPU candidates, the largest expected first:
+
+1. The dynamic lights' surfaces (`object_lights.c` `lights_render_diffuse`
+   and `lights_render_specular`; `structure_render.c`
+   `structure_render_diffuse_light` and `_specular_light`). Each dynamic
+   light searches the BSP for its surfaces twice a frame (the diffuse
+   sphere, then the specular one: `structure_visibility_build_surfaces`),
+   and twice sorts and gathers their triangles
+   (`structure_render_build_dynamic_triangles`). It is the shadows' search
+   (the PPE 103 us a search and 24 us the triangles; with the SPU 4.7 to
+   8.3 us on the game thread). The spheres and cluster lists are final
+   after `lights_preprocess_scene` (step 6); the passes use them at steps
+   12 and 16. The SHADOW job serves the search as it is (no planes, the
+   sphere's box, the light's clusters; the walk from the root under radius
+   2.0). Not timed: the lights' searches have no timer, and the dynamic
+   lights a frame are not logged.
+2. The window's visible surfaces (`structure_visibility.c`
+   `traverse_subclusters`, `structure_render.c`
+   `structure_render_preprocess`): the subclusters' frustum tests and the
+   surface flags, then the ascending surface list and its triangles (up to
+   32,768 surfaces), and each material's chunk (first triangle, count).
+   The portal walk stays on the PPE (`render_objects` and the lights need
+   its clusters at once). On the PPE nothing reads the flags before step 8;
+   the shadows' jobs read them on the same SPU, after. Submitted at the end
+   of `structure_visibility_compute`, taken at step 8: it overlaps the sky,
+   first person, lights and `render_objects`. With the chunks, the 10
+   passes on the window's list (`structure_render_pass`: lightmaps,
+   diffuse, specular lightmaps, masks, mirrors, reflections, transparent,
+   fog, the fog screen twice) stop walking every visible surface each. Its
+   time is inside the visibility split (0.4 ms with the portals and
+   `rasterizer_window_begin`) and the lightmaps split (1.05 with the
+   lightmaps' draws): not split yet.
+3. The effects' particles' sprites (`render_particles.c`): the gather,
+   sort and groups, the attached particles, the first person groups and
+   the write-backs (`last_rendered_frame_index`, `particle_delete`, the
+   shader's radius) stay on the PPE; each group's sprites built as the
+   weather's job builds them (`weather_sprite`, `spu_game.c`, with the
+   size, distance and fade cuts and the u/v mirrors added) into vertex
+   buffers locked first. Earlier runs: the particles' render 0.3 to 1.8 ms
+   a frame (with `particle_systems_render`).
+4. The contrails' strips (`render_contrails.c` `render_contrail`): two
+   vertices a point (colour, width, fade), no write-back. Up to 0.7 ms a
+   frame. Every contrail is built each frame (no visibility test).
+5. The render's node matrices (`render_interpolation.c`, `models.c`
+   1004-1022, `rasterizer_set_model_skinning`): the blend of the two ticks,
+   the matrices relative to the model's and the skinning constants for all
+   the window's objects at once; the shadows' pass uses them again. 3.5 us
+   a model for the relative matrices: about 0.05 to 0.3 ms a frame.
+
+Not for an SPU (state set-up a draw, the texture cache, tag reads): a model
+part's draw (21.7 us, its Direct3D 5.8: 4 texture cache lookups, about 50
+small calls, periodic functions, the fog's colours again each part), the
+structure passes' draws, the transparent groups' draws, the decals, the
+detail objects (built only when the camera enters a new cell), the HUD.
+
+Found on the game thread, not SPU work:
+
+- The lens flares' occlusion tests draw their quads, but
+  `GetVisibilityTestResult` gives 0 on the PS3, so no flare is drawn (0.06
+  ms a frame and the RSX's quads for nothing).
+- `particle_systems_render` makes a vertex buffer and a transparent group
+  (a full group draw later) for each particle of a particle system.
+- `draw_prologue` compares all render and texture stage states (144 + 4 x
+  32 words) at every draw; a dynamic index list is copied into the ring at
+  every draw (the window's list once a pass).
+- 3 of the 6 SPUs are free. The game's jobs share one SPU and one ring (the
+  shadows' jobs already wait behind the particles').
+
+Proposed steps (Matt's choice):
+
+1. Timers, one run: the lights' searches and triangles (diffuse, specular,
+   the dynamic lights a frame), the visibility split's parts (portals,
+   subclusters, `rasterizer_window_begin`), `structure_render_preprocess`
+   alone, the passes' walks, `render_particles`' sprites,
+   `particle_systems_render`, the contrails' build, the render's node
+   matrices.
+2. The lights' surfaces and triangles on the SPU (candidate 1).
+3. The window's visible surfaces, triangles and chunks on the SPU
+   (candidate 2).
+4. The particles' and the contrails' sprites on the SPU (candidates 3, 4).
+5. A second game SPU for the render's jobs (a ring of its own).
 
 ## G8 analysis (2026-10-18)
 
