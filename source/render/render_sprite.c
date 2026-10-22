@@ -660,6 +660,95 @@ void build_sprite_spu_add(
 	build_sprite_globals.big_sprite_count = (short)big_sprite_count;
 	build_sprite_globals.screen_coverage += coverage;
 }
+
+void build_sprite_spu_add_more(
+	int32_t big_sprite_count,
+	float coverage)
+{
+	build_sprite_globals.big_sprite_count += (short)big_sprite_count;
+	build_sprite_globals.screen_coverage += coverage;
+}
+
+boolean build_sprite_spu_table(
+	long bitmap_group_index,
+	spu_game_weather_sprites *sprites,
+	struct bitmap_data **bitmaps,
+	short *slot_count,
+	unsigned long *size)
+{
+	struct bitmap_group *bitmap_group;
+	long sequence_index;
+	long sprite_total = 0;
+
+	*slot_count = 0;
+	if (bitmap_group_index == NONE)
+	{
+		return FALSE;
+	}
+	bitmap_group = bitmap_group_get(bitmap_group_index);
+	if (bitmap_group->sequences.count > SPU_GAME_WEATHER_SEQUENCES)
+	{
+		return FALSE;
+	}
+	sprites->sequence_count = bitmap_group->sequences.count;
+	for (sequence_index = 0; sequence_index < bitmap_group->sequences.count; sequence_index++)
+	{
+		struct bitmap_group_sequence *sequence = TAG_BLOCK_GET_ELEMENT(&bitmap_group->sequences, sequence_index, struct bitmap_group_sequence);
+		long sprite_index;
+
+		sprites->sprite_count[sequence_index] = (int16_t)sequence->sprites.count;
+		sprites->first_sprite[sequence_index] = NONE;
+		if (sequence->first_bitmap_index == NONE)
+		{
+			continue;
+		}
+		if (sprite_total + sequence->sprites.count > SPU_GAME_WEATHER_SPRITES || sequence->sprites.count > SHORT_MAX)
+		{
+			return FALSE;
+		}
+		sprites->first_sprite[sequence_index] = (int16_t)sprite_total;
+		for (sprite_index = 0; sprite_index < sequence->sprites.count; sprite_index++)
+		{
+			struct bitmap_group_sprite *sprite = TAG_BLOCK_GET_ELEMENT(&sequence->sprites, sprite_index, struct bitmap_group_sprite);
+			spu_game_weather_sprite *entry = &sprites->sprites[sprite_total++];
+			short slot;
+
+			entry->bounds[0] = sprite->bounds.x0;
+			entry->bounds[1] = sprite->bounds.x1;
+			entry->bounds[2] = sprite->bounds.y0;
+			entry->bounds[3] = sprite->bounds.y1;
+			entry->registration[0] = sprite->registration_point.x;
+			entry->registration[1] = sprite->registration_point.y;
+			entry->slot = NONE;
+			if (sprite->bitmap_index < 0 || sprite->bitmap_index >= bitmap_group->bitmaps.count)
+			{
+				continue;
+			}
+			for (slot = 0; slot < *slot_count; slot++)
+			{
+				if (bitmaps[slot] == TAG_BLOCK_GET_ELEMENT(&bitmap_group->bitmaps, sprite->bitmap_index, struct bitmap_data))
+				{
+					break;
+				}
+			}
+			if (slot == *slot_count)
+			{
+				if (*slot_count >= SPU_GAME_WEATHER_GROUPS)
+				{
+					return FALSE;
+				}
+				bitmaps[*slot_count] = TAG_BLOCK_GET_ELEMENT(&bitmap_group->bitmaps, sprite->bitmap_index, struct bitmap_data);
+				sprites->widths[*slot_count] = (real)bitmaps[*slot_count]->width;
+				(*slot_count)++;
+			}
+			entry->slot = slot;
+		}
+	}
+	sprites->sprite_total = sprite_total;
+	*size = (unsigned long)(offsetof(spu_game_weather_sprites, sprites) + sprite_total * sizeof(spu_game_weather_sprite));
+
+	return TRUE;
+}
 #endif
 
 /* ---------- private code */

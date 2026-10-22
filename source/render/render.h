@@ -127,6 +127,11 @@ void render_contrails_media_mapped(
 	void);
 void render_contrails_normal(
 	void);
+#ifdef HALO_PS3
+/* port: the window's contrails' strips built on the render SPU; render_contrails_normal draws them */
+void render_contrails_spu_begin(
+	void);
+#endif
 
 /* ---------- prototypes/RENDER_OBJECTS.C */
 

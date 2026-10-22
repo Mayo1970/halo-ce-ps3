@@ -1,8 +1,4 @@
-/*
-OBJECT_LIGHTS_RENDERING.H
-
-Narrow cross-translation-unit rendering interface owned by OBJECT_LIGHTS.C.
-*/
+/* OBJECT_LIGHTS_RENDERING.H: the narrow cross-unit rendering interface owned by OBJECT_LIGHTS.C. */
 
 #ifndef __OBJECT_LIGHTS_RENDERING_H
 #define __OBJECT_LIGHTS_RENDERING_H
@@ -32,6 +28,12 @@ boolean lights_distant_lighting_at_point(
 void lights_prepare_for_object_static(
 	long object_index,
 	struct render_lighting *lighting);
+#ifdef HALO_PS3
+/* port: the window's dynamic lights' surfaces searched on the render SPU from after lights_preprocess_scene; the
+diffuse and specular passes take them */
+void lights_render_spu_begin(
+	void);
+#endif
 
 /* ---------- globals */
 

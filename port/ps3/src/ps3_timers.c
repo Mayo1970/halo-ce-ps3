@@ -79,40 +79,50 @@ static const char *const specular_names[] =
 	"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog",
 };
 
-/* the game thread's SPU jobs (ps3_spu.c), by kind: jobs a frame, the SPU's microseconds a job (its DMA waits), the
-game thread's waits in ms a frame; the copies are the checkpoint's three kinds */
+/* the game thread's jobs on the game and render SPUs (ps3_spu.c), by kind: jobs a frame, the SPU's microseconds a job
+(its DMA waits), the game thread's waits in ms a frame; the copies are the checkpoint's three kinds */
 static void spu_game_log(uint32_t frames, const double *t)
 {
-	static const char *const names[] = { "copies", "shadows", "weather", "particles" };
+	static const char *const names[] =
+	{
+		"copies", "shadows", "weather", "particles", "lights", "visibility", "sprites", "contrails",
+	};
 	static const int kinds[][3] =
 	{
 		{ SPU_GAME_COPY, SPU_GAME_ZEROES, SPU_GAME_ZERO },
 		{ SPU_GAME_SHADOW, 0, 0 },
 		{ SPU_GAME_WEATHER, 0, 0 },
 		{ SPU_GAME_PARTICLES, 0, 0 },
+		{ SPU_GAME_LIGHTS, 0, 0 },
+		{ SPU_GAME_VISIBILITY, 0, 0 },
+		{ SPU_GAME_SPRITES, 0, 0 },
+		{ SPU_GAME_CONTRAILS, 0, 0 },
 	};
 	static const int waits[] =
 	{
 		_ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_shadow_wait, _ps3_timer_spu_game_weather_wait,
-		_ps3_timer_spu_game_particles_wait,
+		_ps3_timer_spu_game_particles_wait, _ps3_timer_spu_game_lights_wait, _ps3_timer_spu_game_visibility_wait,
+		_ps3_timer_spu_game_sprites_wait, _ps3_timer_spu_game_contrails_wait,
 	};
-	struct ps3_spu_game_statistics s;
-	char line[1024];
+	struct ps3_spu_game_statistics s, r;
+	char line[1536];
 	unsigned long length;
 	unsigned index, part;
 
-	ps3_spu_game_statistics(&s);
-	length = (unsigned long)snprintf(line, sizeof(line), "[time] game SPU%s (jobs a frame; us a job, DMA; the waits, ms "
-		"a frame):", s.up ? "" : " off");
-	for (index = 0; index < 4 && length < sizeof(line); index++)
+	ps3_spu_game_statistics(0, &s);
+	ps3_spu_game_statistics(1, &r);
+	length = (unsigned long)snprintf(line, sizeof(line), "[time] game SPU%s, render SPU%s (jobs a frame; us a job, DMA; "
+		"the waits, ms a frame):", s.up ? "" : " off", r.up ? "" : " off");
+	for (index = 0; index < sizeof(names) / sizeof(names[0]) && length < sizeof(line); index++)
 	{
 		uint32_t jobs = 0, busy = 0, dma = 0;
 
+		/* (each kind runs on one of the two) */
 		for (part = 0; part < 3 && kinds[index][part]; part++)
 		{
-			jobs += s.jobs[kinds[index][part]];
-			busy += s.busy_microseconds[kinds[index][part]];
-			dma += s.dma_microseconds[kinds[index][part]];
+			jobs += s.jobs[kinds[index][part]] + r.jobs[kinds[index][part]];
+			busy += s.busy_microseconds[kinds[index][part]] + r.busy_microseconds[kinds[index][part]];
+			dma += s.dma_microseconds[kinds[index][part]] + r.dma_microseconds[kinds[index][part]];
 		}
 		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f, %.1f; %.3f)",
 			index ? "," : "", names[index], (double)jobs / frames, jobs ? (double)busy / jobs : 0.0,
@@ -121,7 +131,8 @@ static void spu_game_log(uint32_t frames, const double *t)
 	if (length < sizeof(line))
 	{
 		snprintf(line + length, sizeof(line) - length, "; cache %u found, %u fetched; refused %u; shadows checked %u "
-			"(%.3f ms a frame), apart %u\n", (unsigned)s.cache_hits, (unsigned)s.cache_misses, (unsigned)s.refused,
+			"(%.3f ms a frame), apart %u\n", (unsigned)(s.cache_hits + r.cache_hits),
+			(unsigned)(s.cache_misses + r.cache_misses), (unsigned)(s.refused + r.refused),
 			(unsigned)ps3_timer_counts[_ps3_timer_spu_shadow_check], t[_ps3_timer_spu_shadow_check],
 			(unsigned)ps3_timer_counts[_ps3_timer_spu_shadow_apart]);
 	}

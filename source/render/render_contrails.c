@@ -458,6 +458,341 @@ static void render_contrails(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
+#include "scenario/scenario.h" /* port: scenario_structure_bsp_generation */
+
+enum
+{
+	CONTRAILS_SPU_INSTANCES = 512,
+	CONTRAILS_SPU_POINTS = 4096,
+	/* an instance render_contrail draws nothing of (no bitmap format, no buffers) */
+	CONTRAILS_SPU_NOTHING = -2,
+};
+
+/* (the SPU reads a state's width, its two colours and its flags in a row) */
+typedef char contrails_spu_state_layout_check[
+	offsetof(struct contrail_point_state, scale_flags) == offsetof(struct contrail_point_state, width) + 36 ? 1 : -1];
+
+/* port: the window's normal contrails in render_contrails' order: each strip built on the render SPU in buffers locked
+at the gather, or by render_contrail (a type or size the SPU does not take); render_contrails_normal draws them */
+static struct
+{
+	spu_game_contrails job;
+	spu_game_answer answer;
+	spu_game_contrail contrails[CONTRAILS_SPU_INSTANCES];
+	spu_game_contrail_point points[CONTRAILS_SPU_POINTS];
+	struct
+	{
+		long contrail_index;
+		short instance_index;
+		/* its job entry, NONE (render_contrail's) or CONTRAILS_SPU_NOTHING */
+		short entry;
+		struct bitmap_data *bitmap;
+		long triangle_buffer_index;
+		long vertex_buffer_index;
+		short triangle_count;
+		real_point3d average_position;
+	} instances[CONTRAILS_SPU_INSTANCES];
+	short instance_count;
+	short entry_count;
+	uint32_t ticket;
+	boolean begun;
+} contrails_spu __attribute__((aligned(128)));
+
+/* port: an instance's points for the SPU, with their positions' average: FALSE when its list is not its count or a
+point's state is not the definition's */
+static boolean render_contrails_spu_points(
+	struct contrail_datum *contrail,
+	struct contrail_definition *definition,
+	short instance_index,
+	spu_game_contrail_point *points,
+	real_point3d *average_position)
+{
+	short point_count = contrail->contrail_point_counts[instance_index];
+	long point_index = contrail->first_contrail_point_indices[instance_index];
+	short count = 0;
+
+	*average_position = *global_origin3d;
+	while (point_index != NONE)
+	{
+		struct contrail_point_datum *point = datum_get(contrail_point_data, point_index);
+		long last_state = point->state_index + ((point->flags & (1 << _contrail_point_transitioning_bit)) ? 1 : 0);
+
+		if (count >= point_count || point->state_index < 0 || last_state >= definition->states.count)
+		{
+			return FALSE;
+		}
+		points[count].position[0] = point->position.x;
+		points[count].position[1] = point->position.y;
+		points[count].position[2] = point->position.z;
+		points[count].density = point->density;
+		points[count].time = point->time;
+		points[count].state_index = point->state_index;
+		points[count].flags = (point->flags & (1 << _contrail_point_transitioning_bit)) ?
+			SPU_GAME_CONTRAIL_TRANSITIONING : 0;
+		points[count].pad = 0;
+		average_position->x += point->position.x;
+		average_position->y += point->position.y;
+		average_position->z += point->position.z;
+		count++;
+		point_index = point->next_contrail_point_index;
+	}
+	if (count != point_count)
+	{
+		return FALSE;
+	}
+	{
+		real one_over_point_count = 1.f / point_count;
+
+		average_position->x *= one_over_point_count;
+		average_position->y *= one_over_point_count;
+		average_position->z *= one_over_point_count;
+	}
+
+	return TRUE;
+}
+
+/* port: an instance's entry of the SPU's job, as render_contrail starts it (its bitmap, buffers and values); the entry
+NONE when the SPU does not take it */
+static void render_contrails_spu_instance(
+	struct contrail_datum *contrail,
+	struct contrail_definition *definition,
+	short instance_index,
+	short *point_total)
+{
+	short instance = contrails_spu.instance_count++;
+	short point_count = contrail->contrail_point_counts[instance_index];
+	spu_game_contrail *entry = &contrails_spu.contrails[contrails_spu.entry_count];
+	spu_game_contrail_point *points = &contrails_spu.points[*point_total];
+	struct bitmap_data *bitmap;
+
+	contrails_spu.instances[instance].entry = NONE;
+	if ((definition->render_type != _contrail_render_type_vertical &&
+		definition->render_type != _contrail_render_type_horizontal &&
+		definition->render_type != _contrail_render_type_viewer) ||
+		point_count > SPU_GAME_CONTRAIL_POINTS || *point_total + point_count > CONTRAILS_SPU_POINTS ||
+		!render_contrails_spu_points(contrail, definition, instance_index, points,
+			&contrails_spu.instances[instance].average_position))
+	{
+		return;
+	}
+	contrails_spu.instances[instance].entry = CONTRAILS_SPU_NOTHING;
+	bitmap = bitmap_group_get_bitmap_from_sequence(
+		definition->bitmap.index,
+		contrail->sequence_index,
+		contrail->frame_index);
+	rasterizer_globals.current_lock_operation = _rasterizer_lock_contrail;
+	if (_texture_cache_bitmap_get_hardware_format(bitmap, FALSE, TRUE))
+	{
+		short segment_count = point_count - 1;
+		short triangle_count = segment_count + segment_count;
+		long triangle_buffer_index = rasterizer_dynamic_triangles_new(triangle_count);
+		long vertex_buffer_index = rasterizer_dynamic_vertices_new(6, triangle_count + 2);
+
+		if (triangle_buffer_index != NONE && vertex_buffer_index != NONE)
+		{
+			short *triangles = rasterizer_dynamic_triangles_lock(triangle_buffer_index);
+			void *vertices = rasterizer_dynamic_vertices_lock(vertex_buffer_index);
+			struct contrail_shader *shader = &definition->shader;
+
+			memset(entry, 0, sizeof(*entry));
+			entry->points = PS3_SPU_EA(points);
+			entry->point_count = point_count;
+			entry->vertices = PS3_SPU_EA(vertices);
+			entry->triangles = PS3_SPU_EA(triangles);
+			entry->states = PS3_SPU_EA(definition->states.address);
+			entry->state_count = definition->states.count;
+			entry->state_size = sizeof(struct contrail_point_state);
+			entry->width_offset = offsetof(struct contrail_point_state, width);
+			entry->color_mask = 1 << _contrail_state_color_bit;
+			entry->width_mask = 1 << _contrail_state_width_bit;
+			entry->render_type = definition->render_type;
+			entry->fade_mode = shader->framebuffer_fade_mode;
+			entry->flags =
+				((definition->flags & (1 << _contrail_fades_slowly_bit)) ? SPU_GAME_CONTRAIL_FADES_SLOWLY : 0) |
+				((definition->flags & (1 << _contrail_first_point_unfaded_bit)) ? SPU_GAME_CONTRAIL_FIRST_UNFADED : 0) |
+				((definition->flags & (1 << _contrail_last_point_unfaded_bit)) ? SPU_GAME_CONTRAIL_LAST_UNFADED : 0);
+			if (contrail->object_index != NONE)
+			{
+				struct object_datum *object = object_get(contrail->object_index);
+				struct object_definition *object_definition = object_definition_get(object->definition_index);
+				struct object_attachment_definition *attachment = TAG_BLOCK_GET_ELEMENT(
+					&object_definition->object.attachments,
+					contrail->attachment_index,
+					struct object_attachment_definition);
+				short change_color_index = attachment->change_color_reference - 1;
+
+				if (change_color_index != NONE &&
+					VALID_INDEX(change_color_index, NUMBER_OF_OBJECT_CHANGE_COLORS))
+				{
+					real_rgb_color const *change_color = &object->object.outgoing_change_colors[change_color_index];
+
+					entry->tinted = TRUE;
+					entry->tint[0] = change_color->red;
+					entry->tint[1] = change_color->green;
+					entry->tint[2] = change_color->blue;
+				}
+				else if (change_color_index != NONE && !reported_bad_change_color)
+				{
+					error(_error_silent, "### ERROR a contrail attachment has a bad change color index; it is left out");
+					reported_bad_change_color = TRUE;
+				}
+			}
+			entry->texture_u = contrail->texture_offset_u;
+			entry->texture_u_step = definition->texture_repeats_u;
+			if (definition->scale_flags & (1 << _contrail_texture_repeats_u_bit))
+				entry->texture_u_step *= contrail->density;
+			entry->texture_u_step = -entry->texture_u_step;
+			entry->texture_offset_v = contrail->texture_offset_v;
+			entry->texture_v_far = definition->texture_repeats_v;
+			if (definition->scale_flags & (1 << _contrail_texture_repeats_v_bit))
+				entry->texture_v_far *= contrail->density;
+			entry->texture_v_far += entry->texture_offset_v;
+			contrails_spu.instances[instance].entry = contrails_spu.entry_count++;
+			contrails_spu.instances[instance].bitmap = bitmap;
+			contrails_spu.instances[instance].triangle_buffer_index = triangle_buffer_index;
+			contrails_spu.instances[instance].vertex_buffer_index = vertex_buffer_index;
+			contrails_spu.instances[instance].triangle_count = triangle_count;
+			*point_total += point_count;
+		}
+	}
+	rasterizer_globals.current_lock_operation = _rasterizer_lock_none;
+
+	return;
+}
+
+void render_contrails_spu_begin(
+	void)
+{
+	short point_total = 0;
+	long instance_count = 0;
+	long contrail_index;
+
+	contrails_spu.begun = FALSE;
+	if (!render_contrails_enabled || !ps3_spu_render_running())
+	{
+		return;
+	}
+	/* (all of the window's instances in the list, or none: render_contrails_normal draws them in its order) */
+	for (contrail_index = data_next_index(contrail_data, NONE);
+		contrail_index != NONE;
+		contrail_index = data_next_index(contrail_data, contrail_index))
+	{
+		struct contrail_datum *contrail = datum_get(contrail_data, contrail_index);
+		struct contrail_definition *definition = contrail_definition_get(contrail->definition_index);
+		short instance_index;
+
+		for (instance_index = 0; instance_index < 4; instance_index++)
+		{
+			if (((1 << definition->render_type) & _contrail_render_mode_normal) &&
+				contrail->contrail_point_counts[instance_index] >= 2)
+			{
+				instance_count++;
+			}
+		}
+	}
+	if (instance_count > CONTRAILS_SPU_INSTANCES)
+	{
+		return;
+	}
+	contrails_spu.instance_count = 0;
+	contrails_spu.entry_count = 0;
+	for (contrail_index = data_next_index(contrail_data, NONE);
+		contrail_index != NONE;
+		contrail_index = data_next_index(contrail_data, contrail_index))
+	{
+		struct contrail_datum *contrail = datum_get(contrail_data, contrail_index);
+		struct contrail_definition *definition = contrail_definition_get(contrail->definition_index);
+		short instance_index;
+
+		for (instance_index = 0; instance_index < 4; instance_index++)
+		{
+			if (((1 << definition->render_type) & _contrail_render_mode_normal) &&
+				contrail->contrail_point_counts[instance_index] >= 2)
+			{
+				contrails_spu.instances[contrails_spu.instance_count].contrail_index = contrail_index;
+				contrails_spu.instances[contrails_spu.instance_count].instance_index = instance_index;
+				render_contrails_spu_instance(contrail, definition, instance_index, &point_total);
+			}
+		}
+	}
+	contrails_spu.begun = TRUE;
+	contrails_spu.ticket = 0;
+	if (contrails_spu.entry_count)
+	{
+		long table_size;
+		byte const *table = transition_function_table(2, &table_size);
+
+		contrails_spu.job.contrails = PS3_SPU_EA(contrails_spu.contrails);
+		contrails_spu.job.contrail_count = contrails_spu.entry_count;
+		contrails_spu.job.transition_table = table ? PS3_SPU_EA(table) : 0;
+		contrails_spu.job.transition_size = table_size;
+		contrails_spu.job.camera[0] = render.camera.position.x;
+		contrails_spu.job.camera[1] = render.camera.position.y;
+		contrails_spu.job.camera[2] = render.camera.position.z;
+		contrails_spu.job.answer = PS3_SPU_EA(&contrails_spu.answer);
+		contrails_spu.job.generation = (uint32_t)scenario_structure_bsp_generation;
+		contrails_spu.answer.status = 0;
+		contrails_spu.ticket = ps3_spu_render_submit(SPU_GAME_CONTRAILS, sizeof(contrails_spu.job),
+			PS3_SPU_EA(&contrails_spu.job), 0);
+	}
+
+	return;
+}
+
+/* port: the gathered instances drawn in order, the SPU's strips as render_contrail draws its own; FALSE when no
+gather was made for the window */
+static boolean render_contrails_spu_end(
+	void)
+{
+	boolean done;
+	short instance;
+
+	if (!contrails_spu.begun)
+	{
+		return FALSE;
+	}
+	contrails_spu.begun = FALSE;
+	done = contrails_spu.entry_count && ps3_spu_render_wait(contrails_spu.ticket) &&
+		contrails_spu.answer.status == SPU_GAME_DONE;
+	contrails_spu.ticket = 0;
+	for (instance = 0; instance < contrails_spu.instance_count; instance++)
+	{
+		struct contrail_datum *contrail = datum_get(contrail_data, contrails_spu.instances[instance].contrail_index);
+		struct contrail_definition *definition = contrail_definition_get(contrail->definition_index);
+		short entry = contrails_spu.instances[instance].entry;
+
+		if (entry == CONTRAILS_SPU_NOTHING)
+		{
+			continue;
+		}
+		if (entry == NONE || !done || contrails_spu.contrails[entry].status != SPU_GAME_DONE)
+		{
+			render_contrail(contrail, definition, contrails_spu.instances[instance].instance_index);
+			continue;
+		}
+		rasterizer_globals.current_lock_operation = _rasterizer_lock_contrail;
+		rasterizer_dynamic_triangles_unlock(contrails_spu.instances[instance].triangle_buffer_index);
+		rasterizer_dynamic_vertices_unlock(contrails_spu.instances[instance].vertex_buffer_index);
+		rasterizer_dynamic_unlit_geometry_draw(
+			(struct shader const *)&definition->shader,
+			contrails_spu.instances[instance].bitmap,
+			0,
+			contrails_spu.instances[instance].triangle_buffer_index,
+			contrails_spu.instances[instance].vertex_buffer_index,
+			contrails_spu.instances[instance].triangle_count,
+			&contrails_spu.instances[instance].average_position,
+			0);
+		rasterizer_dynamic_triangles_delete(contrails_spu.instances[instance].triangle_buffer_index);
+		rasterizer_dynamic_vertices_delete(contrails_spu.instances[instance].vertex_buffer_index);
+		rasterizer_globals.current_lock_operation = _rasterizer_lock_none;
+	}
+
+	return TRUE;
+}
+#endif
+
 void render_contrails_ground_mapped(
 	void)
 {
@@ -475,6 +810,13 @@ void render_contrails_media_mapped(
 void render_contrails_normal(
 	void)
 {
+#ifdef HALO_PS3
+	/* port: the window's strips from the render SPU (render_contrails_spu_begin) */
+	if (render_contrails_spu_end())
+	{
+		return;
+	}
+#endif
 	render_contrails(_contrail_render_mode_normal);
 	return;
 }

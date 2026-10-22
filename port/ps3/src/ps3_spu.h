@@ -85,7 +85,8 @@ struct ps3_spu_game_statistics
 	uint32_t refused;
 };
 
-void ps3_spu_game_statistics(struct ps3_spu_game_statistics *statistics);
+/* the game SPU's (render 0) or the render SPU's (1) */
+void ps3_spu_game_statistics(int render, struct ps3_spu_game_statistics *statistics);
 
 /* at the exit */
 void ps3_spu_stop(void);

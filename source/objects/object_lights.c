@@ -578,12 +578,8 @@ void lights_dispose(
 	return;
 }
 
-/* port: glows the port lights itself (port/linux/game/shield_glow.c): an
-unattached light (light_new_unattached) on an object's node, kept alive and
-colored and sized each frame by its maker, gone a moment after its maker
-stops. Drawn with a light definition the map has (one without a lens flare
-or a flashlight's flags, a plasma one where there is one), so no new tags;
-NONE if it has none */
+/* port: the port's own glows (shield_glow.c): unattached lights its maker sizes each frame, with a light definition
+the map has (no lens flare or flashlight flags, plasma if any), so no new tags; NONE if it has none */
 static long light_port_glow_definition = NONE - 1;
 
 long light_port_glow_definition_get(
@@ -658,14 +654,8 @@ void lights_dispose_from_old_map(
 	return;
 }
 
-/* port: the lights array out of order in a map (game_state.c's
-game_state_check_data_arrays reports how): Sentry's NATIVE-7 found it made
-for no map, every light lost, and the next light made or looked up crashed.
-Lights are only seen, so they all go: the array is made again, valid and
-empty, its clusters' references with it, and the objects let go of the
-lights they had (their attachments, light_delete and
-object_get_self_illumination take none for lost). Lights made from then on
-are as ever. Whether it did. */
+/* port: a lights array out of order (game_state_check_data_arrays; Sentry's NATIVE-7: the next light crashed) made
+again empty, with its clusters' references and the objects' lights let go; whether it did */
 boolean lights_port_recover(
 	void)
 {
@@ -735,9 +725,8 @@ long light_new(
 			light->definition_index = definition_index;
 			light->object_index = object_index;
 			light->attachment_marker_index = object_attachment_index;
-			/* port: a function and a change color the object holds, or none
-			(an attachment's references in a map; retail's are none to d for
-			the function, none to b for the color) */
+			/* port: a function and a change color the object holds, or none (a map's attachment references;
+			retail's are none to d for the function, none to b for the color) */
 			light->function_index = object_function_index;
 			light->color_function_index = object_change_color_index;
 			if ((object_function_index!=NONE && !VALID_INDEX(object_function_index, NUMBER_OF_OUTGOING_OBJECT_FUNCTIONS)) ||
@@ -1206,9 +1195,8 @@ real object_get_self_illumination(
 	struct object_definition *definition = object_definition_get(object->definition_index);
 	real illumination = 0.0f;
 	short attachment_index = 0;
-	/* port: the attachments attachments_new made (a map's count; past them
-	the types and indices were the object's other fields; retail has up to
-	8) */
+	/* port: the attachments attachments_new made (a map's count; past them the types and indices were the object's
+	other fields; retail has up to 8) */
 	short attachment_count = (short)MIN(definition->object.attachments.count, MAXIMUM_NUMBER_OF_ATTACHMENTS_PER_OBJECT);
 
 	if (attachment_count > 0)
@@ -1675,6 +1663,182 @@ static void light_get_bounding_sphere(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
+
+extern real structure_sphere_threshold; /* port: structure_visibility.c */
+
+enum
+{
+	LIGHTS_SPU_PASSES = 2,
+	LIGHTS_SPU_CLUSTERS = 4096,
+	LIGHTS_SPU_SURFACES = 12288,
+};
+
+/* port: the window's dynamic lights' searches on the render SPU, a job a pass (diffuse, specular): the lights' entries,
+clusters and handles, the arenas for their surfaces and triangles; each pass takes its entries in order */
+static struct
+{
+	spu_game_lights job[LIGHTS_SPU_PASSES];
+	spu_game_answer answer[LIGHTS_SPU_PASSES];
+	spu_game_light lights[LIGHTS_SPU_PASSES][SPU_GAME_LIGHTS_MAXIMUM];
+	long indices[LIGHTS_SPU_PASSES][LIGHTS_SPU_SURFACES];
+	short triangles[LIGHTS_SPU_PASSES][LIGHTS_SPU_SURFACES * NUMBER_OF_VERTICES_PER_TRIANGLE];
+	short clusters[LIGHTS_SPU_PASSES][LIGHTS_SPU_CLUSTERS];
+	long handles[LIGHTS_SPU_PASSES][SPU_GAME_LIGHTS_MAXIMUM];
+	short first_cluster[LIGHTS_SPU_PASSES][SPU_GAME_LIGHTS_MAXIMUM];
+	uint32_t tickets[LIGHTS_SPU_PASSES];
+	short counts[LIGHTS_SPU_PASSES];
+	short next[LIGHTS_SPU_PASSES];
+	boolean started;
+} lights_spu __attribute__((aligned(128)));
+
+/* port: a pass's light as lights_render_diffuse (pass 0) or _specular (pass 1) draws it: FALSE when it is not drawn
+or draws the window's surfaces */
+static boolean lights_spu_drawn(
+	short pass,
+	long light_index)
+{
+	struct light_datum *light = light_get(light_index);
+	struct point_light_definition *definition;
+
+	if (!TEST_FLAG(light->flags, _point_light_dynamic_bit) || light->rasterizer_light_index == NONE)
+	{
+		return FALSE;
+	}
+	definition = light_definition_get(light->definition_index);
+	if (pass == 1 && TEST_FLAG(definition->flags, _light_definition_no_specular_bit))
+	{
+		return FALSE;
+	}
+
+	return !(TEST_FLAG(light->flags, _point_light_attached_to_first_person_weapon_bit) &&
+		TEST_FLAG(definition->flags, _light_definition_supersize_in_first_person_bit));
+}
+
+void lights_render_spu_begin(
+	void)
+{
+	struct structure_bsp *structure = global_structure_bsp_get();
+	short cluster_indices[MAXIMUM_CLUSTERS_PER_LIGHT];
+	short pass;
+
+	lights_spu.started = FALSE;
+	if (!ps3_spu_render_running() || !should_render_lights() || !structure || !structure_bsp_port_verify(structure))
+	{
+		return;
+	}
+	for (pass = 0; pass < LIGHTS_SPU_PASSES; pass++)
+	{
+		spu_game_lights *job = &lights_spu.job[pass];
+		short clusters_used = 0;
+		short count = 0;
+		short light_index;
+
+		for (light_index = 0;
+			light_index < lights_globals.scene_point_light_count && count < SPU_GAME_LIGHTS_MAXIMUM;
+			light_index++)
+		{
+			long handle = lights_globals.scene_point_lights[light_index];
+			spu_game_light *entry = &lights_spu.lights[pass][count];
+			short cluster_count;
+			real_point3d center;
+			real radius;
+
+			if (!lights_spu_drawn(pass, handle))
+			{
+				continue;
+			}
+			cluster_count = light_build_cluster_array(handle, MAXIMUM_CLUSTERS_PER_LIGHT, cluster_indices);
+			light_compute_bounding_sphere(handle, FALSE, pass == 1, FALSE, &center, &radius);
+			if (clusters_used + cluster_count > LIGHTS_SPU_CLUSTERS || cluster_count > SPU_GAME_LIGHT_CLUSTERS)
+			{
+				continue;
+			}
+			entry->center[0] = center.x;
+			entry->center[1] = center.y;
+			entry->center[2] = center.z;
+			entry->radius = radius;
+			/* (structure_visibility_build_surfaces's box of the sphere, and its walk) */
+			entry->bounds[0] = center.x - radius;
+			entry->bounds[1] = center.x + radius;
+			entry->bounds[2] = center.y - radius;
+			entry->bounds[3] = center.y + radius;
+			entry->bounds[4] = center.z - radius;
+			entry->bounds[5] = center.z + radius;
+			entry->cluster_count = radius < structure_sphere_threshold ? NONE : cluster_count;
+			entry->clusters = PS3_SPU_EA(&lights_spu.clusters[pass][clusters_used]);
+			entry->status = 0;
+			memcpy(&lights_spu.clusters[pass][clusters_used], cluster_indices, cluster_count * sizeof(short));
+			lights_spu.handles[pass][count] = handle;
+			lights_spu.first_cluster[pass][count] = clusters_used;
+			clusters_used += cluster_count;
+			count++;
+		}
+		lights_spu.counts[pass] = count;
+		lights_spu.next[pass] = 0;
+		lights_spu.tickets[pass] = 0;
+		if (!count)
+		{
+			continue;
+		}
+		structure_visibility_spu_structure(&job->structure);
+		job->environment_flags = PS3_SPU_EA(render.environment_surface_flags);
+		job->lights = PS3_SPU_EA(lights_spu.lights[pass]);
+		job->light_count = count;
+		job->indices = PS3_SPU_EA(lights_spu.indices[pass]);
+		job->triangles = PS3_SPU_EA(lights_spu.triangles[pass]);
+		job->arena_count = LIGHTS_SPU_SURFACES;
+		job->answer = PS3_SPU_EA(&lights_spu.answer[pass]);
+		lights_spu.answer[pass].status = 0;
+		lights_spu.tickets[pass] = ps3_spu_render_submit(SPU_GAME_LIGHTS, sizeof(*job), PS3_SPU_EA(job), 0);
+	}
+	lights_spu.started = TRUE;
+
+	return;
+}
+
+/* port: the SPU's surfaces for the pass's light, for its structure_render_diffuse_light or _specular_light call (the
+PPE searches when the SPU has none, or its search was another's) */
+static void lights_render_spu_take(
+	short pass,
+	long handle,
+	real_point3d const *center,
+	real radius,
+	short cluster_count,
+	short const *cluster_indices)
+{
+	short next = lights_spu.next[pass];
+	spu_game_light *entry = &lights_spu.lights[pass][next];
+
+	if (!lights_spu.started || next >= lights_spu.counts[pass] || lights_spu.handles[pass][next] != handle)
+	{
+		return;
+	}
+	lights_spu.next[pass]++;
+	if (!ps3_spu_render_wait(lights_spu.tickets[pass]) || lights_spu.answer[pass].status != SPU_GAME_DONE ||
+		!structure_visibility_spu_flags_final() || entry->status != SPU_GAME_DONE ||
+		entry->center[0] != center->x || entry->center[1] != center->y || entry->center[2] != center->z ||
+		entry->radius != radius || entry->count < 0 || entry->first < 0 ||
+		entry->first + entry->count > LIGHTS_SPU_SURFACES)
+	{
+		return;
+	}
+	if (entry->cluster_count != NONE && (entry->cluster_count != cluster_count ||
+		memcmp(&lights_spu.clusters[pass][lights_spu.first_cluster[pass][next]], cluster_indices,
+			cluster_count * sizeof(short))))
+	{
+		return;
+	}
+	structure_render_light_from_spu(
+		&lights_spu.indices[pass][entry->first],
+		&lights_spu.triangles[pass][entry->first * NUMBER_OF_VERTICES_PER_TRIANGLE],
+		entry->count);
+
+	return;
+}
+#endif
+
 void lights_render_diffuse(
 	void)
 {
@@ -1716,6 +1880,14 @@ void lights_render_diffuse(
 					FALSE,
 					&center,
 					&radius);
+#ifdef HALO_PS3
+				/* port: the render SPU's search (lights_render_spu_begin) */
+				if (!skip_clusters)
+				{
+					lights_render_spu_take(0, lights_globals.scene_point_lights[light_index], &center, radius,
+						cluster_count, cluster_indices);
+				}
+#endif
 				structure_render_diffuse_light(
 					light->rasterizer_light_index,
 					&center,
@@ -1773,6 +1945,14 @@ void lights_render_specular(
 					FALSE,
 					&center,
 					&radius);
+#ifdef HALO_PS3
+				/* port: the render SPU's search (lights_render_spu_begin) */
+				if (!skip_clusters)
+				{
+					lights_render_spu_take(1, lights_globals.scene_point_lights[light_index], &center, radius,
+						cluster_count, cluster_indices);
+				}
+#endif
 				structure_render_specular_light(
 					light->rasterizer_light_index,
 					&center,
@@ -1918,15 +2098,8 @@ static void find_point_light_for_object(
 	}
 }
 
-/* port: a cluster's lights in its list's order, with where each is and how
-far it reaches, kept while none of that changes: while the light partition's
-lists (cluster_partitions.c's port_modification_count) and the lights' radii
-and rasterizer lights (lights_port.radius_writes, written as a frame's lights
-are prepared) are as they were; a light only moves as it joins its clusters
-again. An object lit (each object drawn, each shadow) then passes over the
-lights too far to reach it without their datums or the list's: with hundreds
-of lights in a cluster (network co-op's extra enemies), reading them was
-most of a frame's lighting. FALSE: not kept (the list walked as before). */
+/* port: a cluster's lights with their places and reaches, kept while the partition's lists and the lights' radii are
+unchanged (port_modification_count, radius_writes), so an object lit skips far lights unread; FALSE: not kept */
 static boolean lights_port_cluster(
 	short cluster_index,
 	short *first_entry,
@@ -1954,9 +2127,8 @@ static boolean lights_port_cluster(
 			struct light_datum *light = light_get(light_index);
 			struct lights_port_entry *entry;
 
-			/* (one not drawn this frame lights nothing: reaching an object,
-			it would only be marked, for that object's other clusters to pass
-			over) */
+			/* (one not drawn this frame lights nothing: reaching an object, it would only be marked, for that
+			object's other clusters to pass over) */
 			if (light->rasterizer_light_index == NONE)
 				continue;
 			if (lights_port.entry_count >= LIGHTS_PORT_MAXIMUM_ENTRIES)
@@ -2001,13 +2173,8 @@ static void find_point_lights_for_object_in_cluster(
 		"c:\\halo\\SOURCE\\objects\\object_lights.c",
 		0x544,
 		lights_globals.marker_initialized);
-	/* port: the cluster's lights as kept (lights_port_cluster). A light too
-	far to reach the object is passed over: the Xbox's loop tested it the
-	same, on the same position and radius, and rejected it. Left unmarked, it
-	is tested again in the object's other clusters, and rejected again.
-	Most are far along one axis, which says so without the distance: a
-	distance is never less than one axis of it but for rounding, a few parts
-	in 2^24, well inside the margin here. */
+	/* port: the cluster's lights as kept (lights_port_cluster): one too far is passed over unmarked, as the Xbox's test
+	rejects it; one axis's distance tells most (never over the distance but for rounding, inside the margin) */
 	if (lights_port_cluster(cluster_index, &first_entry, &entry_count))
 	{
 		short entry_index;

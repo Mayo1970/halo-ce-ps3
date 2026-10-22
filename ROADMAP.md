@@ -52,7 +52,16 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 ## Now (2026-10-22)
 
 - 2026-10-22: G9 started (Matt: "Work on Goal 9."). The analysis is done:
-  see "G9 analysis". Next: Matt's choice of its proposed steps.
+  see "G9 analysis". Then (Matt: "Work on step 2, 3, 4 and 5 together.
+  Enough timers."): the render SPU (a fourth SPU thread group: the
+  shadows, the weather and four new jobs: the lights' surfaces, the
+  window's visible surfaces, the particles' sprites, the contrails'
+  strips), and the window's list walked once for its passes. PC check
+  passed (16.5 M checks, 0 apart; 17 injected faults, each found). PKG of
+  17:18 in `build/ps3_g9/` (the tree of `8bee7864` and this change only).
+  Run on hardware (b40; Matt: "Run's done."; no fault reported): a clean
+  exit, no `SPU off`; render 7.8 ms a frame on median (the 15:18 run 9.0);
+  the SPU waits 0. See the Log. No listener runs on UDP 18194.
 - 2026-10-22: G8, the SPU offload (Matt chose all four candidates: 1 the
   checkpoint's copy, 2 the weather, 3 the effects' particles, 4 the
   shadows' surfaces): a third SPU thread group, the game thread's jobs
@@ -616,7 +625,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20; on hardware 2026-10-22 the kept boxes crashed the game thread twice (step 627, the transparent sort; cause not found): taken out (Matt: option 2), then a clean run (the weather in the snow 1.27 to 0.86 ms a frame); the stream buffers' blocks (no heap fragments: 22.3 MB free at the end, before 19.3), the sphere query on the kept blocks (13.3 to 10.3 us a call; the same answer: PC check), `render_model_parts` and the shadows timed inside: run on hardware 2026-10-22 (SUCCESS); the SPU candidates written down (the Log); the game thread's jobs on a third SPU (the checkpoint's copies, the shadows' surfaces, the weather, the particles' rays; PC check on the 23 maps): built 2026-10-22, run on hardware 2026-10-22 (the checkpoint 12.9-15.1 to 3.1 ms; the shadows' surfaces 103 to 4.7 us a shadow; the weather 1.2 to 0.05 ms a frame; the particles 3.8 to 2.9 us each); the pixel shaders' copies on the conversions' SPU and the particles' rays taken a frame late: built 2026-10-22 |
-| G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis") |
+| G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0) |
 
 ## G9 analysis (2026-10-22)
 
@@ -4107,3 +4116,89 @@ then `./build.sh pkg LOG_IP=<address>`.
     copies kept in RSX memory by program and values across frames (no copy
     when the same one comes again); (3) the shadows' jobs before the
     particles' (the particles' on another SPU, or a queue of their own).
+- 2026-10-22: G9 steps 2 to 5 (Matt: "Work on step 2, 3, 4 and 5 together.
+  Enough timers. Let's get to action."). No new timers but the SPU jobs'
+  own (the `[time] game SPU` line has the new kinds and the render SPU).
+  - 5, the render SPU (`ps3_spu.c`): the same `spu_game` image on a fourth
+    SPU thread group (`halo_render`), a ring of its own
+    (`ps3_spu_render_*`). The shadows and the weather moved there; the game
+    SPU keeps the checkpoint's copies and the particles' rays. Its jobs run
+    in order, so each reads what the ones before it wrote.
+  - 3, VISIBILITY (`structure_visibility.c`, `structure_render.c`): after
+    the portal walk `structure_visibility_compute` sends the rendered
+    clusters with their frustums (`render_frustum_cube_visible`'s bounds
+    and four planes); the SPU walks the subclusters (the same order, the
+    cap of 32,768), puts the flags, then the surfaces ascending and their
+    triangles (16 KB fetches of the surfaces block).
+    `structure_render_preprocess` takes it (the PPE walks if the job did
+    not end) and copies the triangles into dynamic triangles. The window's
+    list is then walked once (`structure_render_build_chunks`): the passes
+    on it (lightmaps, diffuse, specular lightmaps, masks, mirrors,
+    reflections, transparent, fog, fog screen, the supersized flashlight)
+    go through the kept chunks with the same calls in the same order.
+  - 2, LIGHTS (`object_lights.c`, `structure_render.c`): after
+    `lights_preprocess_scene` a job for the diffuse pass and one for the
+    specular, each light's sphere, box and clusters (as
+    `lights_render_diffuse` and `_specular` find them); the SPU searches
+    each (the SHADOW job's walks), sorts (the found flags, in order) and
+    gathers the triangles into an arena (12,288 surfaces a pass). Each
+    pass takes its light's entry if the light, sphere and clusters are the
+    same and the window's flags were final (else the PPE searches).
+  - 4, SPRITES (`render_particles.c`, `render_sprite.c`): after the lights'
+    part the gather, sort and groups as `render_particles` makes them;
+    each group not first person, with a sprite table (a bitmap group's,
+    kept for the map, 192 KB) and room (2,048 particles), placed on the
+    PPE (node matrices, deletions as before) and its build_sprite groups
+    made for the slots its particles use; the SPU does
+    `render_particles`' size cut, scale and fades and build_sprite (the
+    weather's builder, shared, with the mirrors). `render_particles` takes
+    each group in order: the counts, the groups in their first sprites'
+    order, `last_rendered_frame_index` and the shader's radius on the PPE;
+    a group the SPU did not build is built on the PPE then.
+  - 4, CONTRAILS (`render_contrails.c`): after the lights' part each
+    normal contrail's points gathered (with their average), its buffers
+    made and locked; the SPU builds the strips (render types vertical,
+    horizontal, viewer; `contrail_fade` with the transition table;
+    `real_argb_color_to_pixel32`'s rint exactly).
+    `render_contrails_normal` draws them in order; the others by
+    `render_contrail` as before.
+  - PC check (scratchpad; flycastPS3's `spusim.c`, the images with their
+    symbols, the new one's `.text` the PKG's; the host in the SPU's
+    rounding): 700 rounds of random structures, lights, particles and
+    contrails, the new jobs against transcriptions of the game's functions
+    (the lights' nodes walk against the SHADOW job), and the weather,
+    shadow and particles jobs of the new image against the old image's:
+    16.5 M and 22.2 M checks, 0 apart. Faults, each found: a corner's test
+    sign, the frustum's bounds untested, the cap, a window place off by
+    one, the arena place not rounded, the flags kept between lights, a
+    triangle's vertices swapped, no u mirror, the slot order after the
+    vertices, the depth's row, the fade out unscaled, the last point's
+    fade, rint's ties, the transition's index, the horizontal side's sign,
+    the tint's channels, the weather's sprite limit.
+  - Memory: 1.38 MB more `.bss` (the jobs' buffers and arenas). The SPU
+    image 54.5 KB of code (before 38.7), 33 KB of LS left for its stack.
+  - Comments over 2 lines shortened in the changed files (the symbol
+    tables of `periodic_functions.c` and `render_particles.c` point to
+    upstream's copy). Warnings (`-Wall`) in the changed files: none in the
+    new code. `check`: 0 `r2off`, `.got` 0x8710. PKG of 17:18 in
+    `build/ps3_g9/`. Not tested on hardware.
+- 2026-10-22: The 17:18 PKG on hardware (b40 into the snow, a death after a
+  checkpoint; Matt: "Run's done."; no fault reported). `[spu] render up`,
+  `[ps3] exit 0`, the four SPU groups down, no `SPU off`, 0 jobs refused,
+  503 shadows checked, 0 apart; the revert put back by an SPU in 2.8 ms.
+  - Medians of 29 play windows (loads left out) / the 7 under 56 fps (1
+    under 50: this run had less heavy combat than the G9 evidence's 12):
+    58.8 / 52.6 fps; the frame 17.0 / 19.0 ms, ticks 3.5 / 4.6, render
+    7.8 / 12.8 (the 15:18 run: 9.0 all; the evidence under 50: 14.65), the
+    RSX 11.2 / 15.3.
+  - The render's parts under 56 fps (the evidence under 50): visibility
+    0.1 (0.4), objects 2.7 (3.2), lightmaps 0.4 (1.05), lights 2.2 (1.65),
+    diffuse 1.8 (1.3), specular 1.5 (2.1), effects 2.0 (2.3), interface
+    1.2 (1.25). The lights part holds the lights' jobs' set-up now and the
+    shadows (1.09, 5.1 shadows a frame); the diffuse part's decals 1.37
+    (immediate mode, 3 calls a vertex).
+  - The render SPU, under 56 fps: lights 2.0 jobs a frame, 342 us a job;
+    visibility 274 us a window; sprites 202 us; contrails 26 us; weather
+    543 us; shadows 48 us each. The game thread's waits for all of them
+    0.000 ms a frame but the shadows' 0.027.
+  - Main memory: 21.1 MB free at t=150 s, 19.1 at the end (the lowest).

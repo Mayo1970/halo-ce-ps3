@@ -27,6 +27,7 @@ upstream halo-ce-universal copy of source/effects/particles.c. */
 #ifdef HALO_PS3
 #include "physics/collisions.h"
 #include "ps3_timers.h"
+#include "render/render_particles.h" /* port: render_particles_spu_dispose */
 
 /* port: the timer build's particles, and their physics' time and calls (port/ps3/include/ps3_timers.h) */
 static uint64_t ps3_particles_physics_span;
@@ -194,6 +195,7 @@ void particles_dispose_from_old_map(
 {
 #ifdef HALO_PS3
 	particles_spu_forget(); /* port: (particles.c) */
+	render_particles_spu_dispose(); /* port: (render_particles.c) */
 #endif
 	data_make_invalid(particle_data);
 

@@ -75,6 +75,13 @@ boolean structure_visibility_build_surfaces_spu(
 	real_rectangle3d const *bounding_box,
 	short bounding_surface_count,
 	real_plane3d const *bounding_surfaces);
+/* port: the window's subcluster walk from the render SPU (structure_visibility_compute starts it): TRUE with the
+window's surfaces and their triangles; FALSE when the PPE walked them now */
+boolean structure_visibility_spu_take(
+	short const **triangles);
+/* port: FALSE when the window's surface flags changed after the render SPU's jobs before the take read them */
+boolean structure_visibility_spu_flags_final(
+	void);
 #endif
 
 #endif /* __STRUCTURE_VISIBILITY_H */

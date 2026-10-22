@@ -893,11 +893,7 @@ it has more than the SPU's tables hold. Kept for the map */
 static struct weather_spu_sprites const *weather_spu_sprites_get(
 	long bitmap_group_index)
 {
-	struct bitmap_group *bitmap_group;
 	struct weather_spu_sprites *table = NULL;
-	short slot_count = 0;
-	long sequence_index;
-	long sprite_total = 0;
 	long index;
 
 	for (index = 0; index<NUMBEROF(weather_spu_sprite_tables); index++)
@@ -916,70 +912,13 @@ static struct weather_spu_sprites const *weather_spu_sprites_get(
 		return NULL;
 	}
 	table->bitmap_group_index = bitmap_group_index;
-	table->valid = FALSE;
-	bitmap_group = bitmap_group_get(bitmap_group_index);
-	if (bitmap_group->sequences.count>SPU_GAME_WEATHER_SEQUENCES)
+	/* port: (render_sprite.c fills it, as for the particles' job) */
+	table->valid = build_sprite_spu_table(bitmap_group_index, &table->sprites, table->bitmaps, &table->slot_count,
+		&table->size);
+	if (!table->valid)
 	{
 		return NULL;
 	}
-	table->sprites.sequence_count = bitmap_group->sequences.count;
-	for (sequence_index = 0; sequence_index<bitmap_group->sequences.count; sequence_index++)
-	{
-		struct bitmap_group_sequence *sequence = TAG_BLOCK_GET_ELEMENT(&bitmap_group->sequences, sequence_index, struct bitmap_group_sequence);
-		long sprite_index;
-
-		table->sprites.sprite_count[sequence_index] = (int16_t)sequence->sprites.count;
-		table->sprites.first_sprite[sequence_index] = NONE;
-		if (sequence->first_bitmap_index==NONE)
-		{
-			continue;
-		}
-		if (sprite_total + sequence->sprites.count>SPU_GAME_WEATHER_SPRITES || sequence->sprites.count>SHORT_MAX)
-		{
-			return NULL;
-		}
-		table->sprites.first_sprite[sequence_index] = (int16_t)sprite_total;
-		for (sprite_index = 0; sprite_index<sequence->sprites.count; sprite_index++)
-		{
-			struct bitmap_group_sprite *sprite = TAG_BLOCK_GET_ELEMENT(&sequence->sprites, sprite_index, struct bitmap_group_sprite);
-			spu_game_weather_sprite *entry = &table->sprites.sprites[sprite_total++];
-			short slot;
-
-			entry->bounds[0] = sprite->bounds.x0;
-			entry->bounds[1] = sprite->bounds.x1;
-			entry->bounds[2] = sprite->bounds.y0;
-			entry->bounds[3] = sprite->bounds.y1;
-			entry->registration[0] = sprite->registration_point.x;
-			entry->registration[1] = sprite->registration_point.y;
-			entry->slot = NONE;
-			if (sprite->bitmap_index<0 || sprite->bitmap_index>=bitmap_group->bitmaps.count)
-			{
-				continue;
-			}
-			for (slot = 0; slot<slot_count; slot++)
-			{
-				if (table->bitmaps[slot]==TAG_BLOCK_GET_ELEMENT(&bitmap_group->bitmaps, sprite->bitmap_index, struct bitmap_data))
-				{
-					break;
-				}
-			}
-			if (slot==slot_count)
-			{
-				if (slot_count>=SPU_GAME_WEATHER_GROUPS)
-				{
-					return NULL;
-				}
-				table->bitmaps[slot_count] = TAG_BLOCK_GET_ELEMENT(&bitmap_group->bitmaps, sprite->bitmap_index, struct bitmap_data);
-				table->sprites.widths[slot_count] = (real)table->bitmaps[slot_count]->width;
-				slot_count++;
-			}
-			entry->slot = slot;
-		}
-	}
-	table->sprites.sprite_total = sprite_total;
-	table->slot_count = slot_count;
-	table->size = (unsigned long)(offsetof(spu_game_weather_sprites, sprites) + sprite_total*sizeof(spu_game_weather_sprite));
-	table->valid = TRUE;
 
 	return table;
 }
@@ -1102,12 +1041,12 @@ void weather_particle_systems_render_begin(
 
 	if (weather_spu.ticket)
 	{
-		ps3_spu_game_wait(weather_spu.ticket);
+		ps3_spu_render_wait(weather_spu.ticket);
 		weather_spu.ticket = 0;
 	}
 	weather_spu.local_player_index = NONE;
 	if (!render_particle_systems_enabled || !weather || render.local_player_index==NONE || debug_sprites ||
-		!ps3_spu_game_running())
+		!ps3_spu_render_running())
 	{
 		return;
 	}
@@ -1183,7 +1122,7 @@ void weather_particle_systems_render_begin(
 
 	weather_spu.type_count = type_count;
 	weather_spu.local_player_index = render.local_player_index;
-	weather_spu.ticket = ps3_spu_game_submit(SPU_GAME_WEATHER, sizeof(*job), PS3_SPU_EA(job), 0);
+	weather_spu.ticket = ps3_spu_render_submit(SPU_GAME_WEATHER, sizeof(*job), PS3_SPU_EA(job), 0);
 
 	return;
 }
@@ -1207,7 +1146,7 @@ static boolean weather_particle_systems_render_end(
 	}
 	weather_spu.local_player_index = NONE;
 	weather_spu.ticket = 0;
-	done = ps3_spu_game_wait(ticket) && job->type_count==-weather_spu.type_count - 1;
+	done = ps3_spu_render_wait(ticket) && job->type_count==-weather_spu.type_count - 1;
 	if (done)
 	{
 		build_sprite_spu_add(job->big_sprite_count, job->coverage);

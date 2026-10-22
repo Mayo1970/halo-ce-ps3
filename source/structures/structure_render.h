@@ -58,6 +58,11 @@ void structure_render_shadow_prepare(
 	real_rectangle3d const *bounding_box,
 	short bounding_surface_count,
 	real_plane3d const *bounding_surfaces);
+/* port: the next structure_render_diffuse_light's or _specular_light's surfaces and triangles, from the render SPU */
+void structure_render_light_from_spu(
+	long *surface_indices,
+	short const *triangles,
+	long surface_count);
 #endif
 void structure_render_shadow(
 	real_point3d const *bounding_sphere_center,

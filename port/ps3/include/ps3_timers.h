@@ -368,6 +368,10 @@ enum
 	_ps3_timer_spu_game_shadow_wait,
 	_ps3_timer_spu_game_weather_wait,
 	_ps3_timer_spu_game_particles_wait,
+	_ps3_timer_spu_game_lights_wait,
+	_ps3_timer_spu_game_visibility_wait,
+	_ps3_timer_spu_game_sprites_wait,
+	_ps3_timer_spu_game_contrails_wait,
 	_ps3_timer_spu_shadow_check,
 	_ps3_timer_spu_shadow_apart,
 	/* RSX splits only (ps3_rsx_timers): the frame's start, before each window, after the render */
