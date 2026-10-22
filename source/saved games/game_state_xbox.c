@@ -12,6 +12,7 @@ upstream halo-ce-universal copy of source/saved games/game_state_xbox.c. */
 #include "sound/sound_manager.h"
 #include <xtl.h>
 #ifdef HALO_PS3
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
 #include "ps3_vmx.h" /* port: port/ps3/src/ps3_vmx.c */
 #endif
 
@@ -84,6 +85,16 @@ static boolean game_state_checkpoint_save(
 	void);
 static void game_state_checkpoint_wait(
 	void);
+static long game_state_checkpoint_spu_save(
+	byte *buffer,
+	long cpu_size,
+	long gpu_size,
+	long gap_size);
+static boolean game_state_checkpoint_spu_revert(
+	byte *buffer,
+	long cpu_size,
+	long gpu_size,
+	long gap_size);
 #endif
 
 /* ---------- globals */
@@ -286,11 +297,15 @@ boolean game_state_read_from_file(
 		byte *buffer = (byte *)xbox_game_state_globals.buffer;
 		long cpu_size = game_state_checkpoint.cpu_size;
 		long gpu_size = game_state_checkpoint.gpu_size;
+		long gap_size = xbox_game_state_globals.buffer_size - cpu_size - gpu_size;
 
-		ps3_vmx_copy(buffer, game_state_checkpoint.image, cpu_size);
-		ps3_vmx_zero(buffer + cpu_size, xbox_game_state_globals.buffer_size - cpu_size - gpu_size);
-		ps3_vmx_copy(buffer + xbox_game_state_globals.buffer_size - gpu_size, game_state_checkpoint.image + cpu_size,
-			gpu_size);
+		if (!game_state_checkpoint_spu_revert(buffer, cpu_size, gpu_size, gap_size))
+		{
+			ps3_vmx_copy(buffer, game_state_checkpoint.image, cpu_size);
+			ps3_vmx_zero(buffer + cpu_size, gap_size);
+			ps3_vmx_copy(buffer + xbox_game_state_globals.buffer_size - gpu_size, game_state_checkpoint.image + cpu_size,
+				gpu_size);
+		}
 		result = game_state_image_accept(buffer, xbox_game_state_globals.buffer_size);
 		if (!result)
 		{
@@ -766,6 +781,63 @@ static void game_state_checkpoint_wait(
 	return;
 }
 
+/* port: the copies by an SPU's DMA (port/ps3/spu/spu_game.c): the middle's check, the used parts; the answer of the
+check is the SPU's own */
+static spu_game_answer game_state_checkpoint_answer;
+
+/* port: 1 when the SPU copied the used parts and found the middle zeroes, 0 when not zeroes, NONE when the SPU did not
+(the PPE does it all) */
+static long game_state_checkpoint_spu_save(
+	byte *buffer,
+	long cpu_size,
+	long gpu_size,
+	long gap_size)
+{
+	byte *image = game_state_checkpoint.image;
+	uint32_t ticket;
+
+	if (!ps3_spu_game_running() ||
+		((PS3_SPU_EA(buffer) | PS3_SPU_EA(image) | (uint32_t)cpu_size | (uint32_t)gpu_size | (uint32_t)gap_size) & 15))
+	{
+		return NONE;
+	}
+	game_state_checkpoint_answer.status = 0;
+	ps3_spu_game_submit(SPU_GAME_ZEROES, (uint32_t)gap_size, PS3_SPU_EA(buffer + cpu_size),
+		PS3_SPU_EA(&game_state_checkpoint_answer));
+	ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)cpu_size, PS3_SPU_EA(buffer), PS3_SPU_EA(image));
+	ticket = ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)gpu_size,
+		PS3_SPU_EA(buffer + xbox_game_state_globals.buffer_size - gpu_size), PS3_SPU_EA(image + cpu_size));
+	if (!ps3_spu_game_wait(ticket) || game_state_checkpoint_answer.status != SPU_GAME_DONE)
+	{
+		return NONE;
+	}
+
+	return game_state_checkpoint_answer.value ? 1 : 0;
+}
+
+/* port: the checkpoint's copy put over the state by the SPU's DMA, the middle zeroed; FALSE when the SPU did not */
+static boolean game_state_checkpoint_spu_revert(
+	byte *buffer,
+	long cpu_size,
+	long gpu_size,
+	long gap_size)
+{
+	byte *image = game_state_checkpoint.image;
+	uint32_t ticket;
+
+	if (!ps3_spu_game_running() ||
+		((PS3_SPU_EA(buffer) | PS3_SPU_EA(image) | (uint32_t)cpu_size | (uint32_t)gpu_size | (uint32_t)gap_size) & 15))
+	{
+		return FALSE;
+	}
+	ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)cpu_size, PS3_SPU_EA(image), PS3_SPU_EA(buffer));
+	ps3_spu_game_submit(SPU_GAME_ZERO, (uint32_t)gap_size, 0, PS3_SPU_EA(buffer + cpu_size));
+	ticket = ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)gpu_size, PS3_SPU_EA(image + cpu_size),
+		PS3_SPU_EA(buffer + xbox_game_state_globals.buffer_size - gpu_size));
+
+	return ps3_spu_game_wait(ticket);
+}
+
 /* port: the state's used parts copied (once the last write is done), then written by a thread of its own, or here if
 none starts; FALSE (written as before) with no memory for the copy, or an unused middle that is not zeroes */
 static boolean game_state_checkpoint_save(
@@ -775,6 +847,7 @@ static boolean game_state_checkpoint_save(
 	long cpu_size;
 	long gpu_size;
 	long gap_size;
+	long spu_copied;
 	LARGE_INTEGER start, checked, copied;
 	char line[256];
 
@@ -798,21 +871,31 @@ static boolean game_state_checkpoint_save(
 		return FALSE;
 
 	QueryPerformanceCounter(&start);
-	if (!ps3_vmx_zeroes(buffer + cpu_size, gap_size))
+	spu_copied = game_state_checkpoint_spu_save(buffer, cpu_size, gpu_size, gap_size);
+	if (!spu_copied)
 		return FALSE;
-	QueryPerformanceCounter(&checked);
-	ps3_vmx_copy(game_state_checkpoint.image, buffer, cpu_size);
-	ps3_vmx_copy(game_state_checkpoint.image + cpu_size, buffer + xbox_game_state_globals.buffer_size - gpu_size,
-		gpu_size);
+	if (spu_copied == NONE)
+	{
+		if (!ps3_vmx_zeroes(buffer + cpu_size, gap_size))
+			return FALSE;
+		QueryPerformanceCounter(&checked);
+		ps3_vmx_copy(game_state_checkpoint.image, buffer, cpu_size);
+		ps3_vmx_copy(game_state_checkpoint.image + cpu_size, buffer + xbox_game_state_globals.buffer_size - gpu_size,
+			gpu_size);
+	}
 	QueryPerformanceCounter(&copied);
+	/* (the SPU checks the middle as it copies) */
+	if (spu_copied != NONE)
+		checked = copied;
 	game_state_checkpoint.cpu_size = cpu_size;
 	game_state_checkpoint.gpu_size = gpu_size;
 	game_state_checkpoint.image_valid = TRUE;
 	/* (microseconds: QueryPerformanceFrequency) */
-	sprintf(line, "[halo] checkpoint: %ld KB of the state's %ld KB copied in %.1f ms (its unused %ld KB checked to be "
-		"zeroes in %.1f ms; the CPU part's %ld KB, the GPU part's %ld KB)\n", (cpu_size + gpu_size) >> 10,
-		xbox_game_state_globals.buffer_size >> 10, (copied.u.LowPart - start.u.LowPart) / 1000.0, gap_size >> 10,
-		(checked.u.LowPart - start.u.LowPart) / 1000.0, cpu_size >> 10, gpu_size >> 10);
+	sprintf(line, "[halo] checkpoint: %ld KB of the state's %ld KB copied by %s in %.1f ms (its unused %ld KB checked to "
+		"be zeroes in %.1f ms; the CPU part's %ld KB, the GPU part's %ld KB)\n", (cpu_size + gpu_size) >> 10,
+		xbox_game_state_globals.buffer_size >> 10, spu_copied != NONE ? "an SPU" : "the PPE",
+		(copied.u.LowPart - start.u.LowPart) / 1000.0, gap_size >> 10, (checked.u.LowPart - start.u.LowPart) / 1000.0,
+		cpu_size >> 10, gpu_size >> 10);
 	OutputDebugStringA(line);
 	game_state_checkpoint.writer = CreateThread(NULL, 0, game_state_checkpoint_writer, NULL, 0, NULL);
 	if (!game_state_checkpoint.writer)

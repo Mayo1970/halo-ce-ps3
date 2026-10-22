@@ -60,6 +60,8 @@ typedef char structure_weather_palette_entry_direction_offset_assert[
 	offsetof(struct structure_weather_palette_entry, wind_direction) == 0x90 ? 1 : -1];
 
 #ifdef HALO_PS3
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
+
 /* port: scenario_get_current's lookups for a cluster: its weather palette entry, its fog region's (in effect below the
 fog plane, if any: scenario_get_fog_region_index) with the fog's water flag, the plane and the water's distance */
 struct wind_cluster_lookup
@@ -381,6 +383,39 @@ void scenario_get_current_from_weather_palette(
 
 	return;
 }
+
+#ifdef HALO_PS3
+/* port: scenario_get_current_from_weather_palette's values, for the SPU's weather (weather_particle_systems.c) */
+void wind_spu_weather_palette(
+	short weather_palette_index,
+	spu_game_weather *job)
+{
+	struct wind_state *state;
+	struct wind_definition *definition;
+
+	job->wind_valid = FALSE;
+	if (!VALID_INDEX(weather_palette_index, wind_globals.count))
+	{
+		return;
+	}
+	state = &wind_globals.wind_states[weather_palette_index];
+	if (!state->valid)
+	{
+		return;
+	}
+	definition = wind_definition_lookup(weather_palette_index);
+	job->wind_valid = TRUE;
+	job->wind_velocity = state->velocity;
+	job->wind_velocity3d[0] = state->velocity3d.i;
+	job->wind_velocity3d[1] = state->velocity3d.j;
+	job->wind_velocity3d[2] = state->velocity3d.k;
+	job->wind_variation_weight = definition->local_variation_weight;
+	job->wind_variation_rate = definition->local_variation_rate;
+	job->wind_damping = definition->damping;
+	job->wind_time = wind_real_time();
+	job->wind_variance = PS3_SPU_EA(wind_globals.variance);
+}
+#endif
 
 void wind_initialize_for_new_map(
 	void)

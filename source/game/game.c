@@ -898,6 +898,13 @@ void game_frame(
 	rasterizer_frame_update(frame_dt);
 	numeric_countdown_timer_update();
 	PS3_GAME_SPLIT(_ps3_timer_frame_other);
+#ifdef HALO_PS3
+	/* port: the particles' rays, made by an SPU meanwhile, and their contacts (particles.c) */
+	particles_update_end();
+	ps3_timer_particles = ps3_timer_game;
+	PS3_PARTICLES_SPLIT(_ps3_timer_particles_update);
+	PS3_GAME_SPLIT(_ps3_timer_frame_particles);
+#endif
 	collision_log_end_period();
 
 	return;

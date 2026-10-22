@@ -97,6 +97,19 @@ void build_sprite(
 	unsigned long flags);
 void build_sprites_end(
 	struct build_sprite_data *data);
+#ifdef HALO_PS3
+/* port: for the weather's SPU job (render_sprite.c) */
+short build_sprite_group_for_bitmap(
+	struct build_sprite_data *data,
+	struct bitmap_data *bitmap);
+void build_sprite_spu_globals(
+	float *viewer_up,
+	float *viewer_forward,
+	int32_t *big_sprite_count);
+void build_sprite_spu_add(
+	int32_t big_sprite_count,
+	float coverage);
+#endif
 void build_sprite_prepare_for_window(
 	void);
 real build_sprite_compute_vertex_fade(

@@ -1016,6 +1016,109 @@ void structure_render_diffuse_light(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
+
+/* port: a shadow's surfaces searched by an SPU (port/ps3/spu/spu_game.c) while its model draws: the job, its answer,
+the indices it finds, its sphere; one shadow at a time. One in 64 is searched by the PPE too, as a check */
+static struct
+{
+	spu_game_shadow job;
+	spu_game_answer answer;
+	long surface_indices[MAXIMUM_LOCALLY_RENDERED_SURFACES];
+	uint32_t ticket;
+	unsigned long shadows;
+	real_point3d center;
+	real radius;
+} __attribute__((aligned(128))) structure_shadow_spu;
+
+void structure_render_shadow_prepare(
+	real_point3d const *bounding_sphere_center,
+	real bounding_sphere_radius,
+	real_rectangle3d const *bounding_box,
+	short bounding_surface_count,
+	real_plane3d const *bounding_surfaces)
+{
+	if (structure_shadow_spu.ticket)
+	{
+		ps3_spu_game_wait(structure_shadow_spu.ticket);
+		structure_shadow_spu.ticket = 0;
+	}
+	if (!ps3_spu_game_running() ||
+		!structure_visibility_build_surfaces_spu(
+			&structure_shadow_spu.job,
+			structure_shadow_spu.surface_indices,
+			MAXIMUM_LOCALLY_RENDERED_SURFACES,
+			bounding_sphere_center,
+			bounding_sphere_radius,
+			bounding_box,
+			bounding_surface_count,
+			bounding_surfaces))
+	{
+		return;
+	}
+	structure_shadow_spu.job.answer = PS3_SPU_EA(&structure_shadow_spu.answer);
+	structure_shadow_spu.answer.status = 0;
+	structure_shadow_spu.center = *bounding_sphere_center;
+	structure_shadow_spu.radius = bounding_sphere_radius;
+	structure_shadow_spu.ticket = ps3_spu_game_submit(
+		SPU_GAME_SHADOW,
+		sizeof(structure_shadow_spu.job),
+		PS3_SPU_EA(&structure_shadow_spu.job),
+		0);
+}
+
+/* port: the SPU's surfaces for this sphere, NONE if it has none (the PPE searches) */
+static long structure_render_shadow_take(
+	long **surface_indices,
+	real_point3d const *bounding_sphere_center,
+	real bounding_sphere_radius,
+	real_rectangle3d const *bounding_box,
+	short bounding_surface_count,
+	real_plane3d const *bounding_surfaces)
+{
+	uint32_t ticket = structure_shadow_spu.ticket;
+	long surface_count;
+
+	structure_shadow_spu.ticket = 0;
+	if (!ticket || !ps3_spu_game_wait(ticket) || structure_shadow_spu.answer.status != SPU_GAME_DONE ||
+		structure_shadow_spu.center.x != bounding_sphere_center->x ||
+		structure_shadow_spu.center.y != bounding_sphere_center->y ||
+		structure_shadow_spu.center.z != bounding_sphere_center->z ||
+		structure_shadow_spu.radius != bounding_sphere_radius)
+	{
+		return NONE;
+	}
+	surface_count = (long)structure_shadow_spu.answer.value;
+	if (!(++structure_shadow_spu.shadows & 63))
+	{
+		static long check_indices[MAXIMUM_LOCALLY_RENDERED_SURFACES];
+		uint64_t check_start = ps3_timer_now();
+		long check_count = structure_visibility_build_surfaces(
+			check_indices,
+			MAXIMUM_LOCALLY_RENDERED_SURFACES,
+			bounding_sphere_center,
+			bounding_sphere_radius,
+			bounding_box,
+			bounding_surface_count,
+			bounding_surfaces,
+			0,
+			NULL);
+
+		ps3_timer_add(_ps3_timer_spu_shadow_check, check_start);
+		ps3_timer_counts[_ps3_timer_spu_shadow_check]++;
+		if (check_count != surface_count ||
+			memcmp(check_indices, structure_shadow_spu.surface_indices, surface_count * sizeof(long)))
+		{
+			ps3_timer_counts[_ps3_timer_spu_shadow_apart]++;
+		}
+	}
+	*surface_indices = structure_shadow_spu.surface_indices;
+
+	return surface_count;
+}
+#endif
+
 void structure_render_shadow(
 	real_point3d const *bounding_sphere_center,
 	real bounding_sphere_radius,
@@ -1023,8 +1126,10 @@ void structure_render_shadow(
 	short bounding_surface_count,
 	real_plane3d const *bounding_surfaces)
 {
-	long surface_indices[MAXIMUM_LOCALLY_RENDERED_SURFACES];
-	long surface_count;
+	long local_surface_indices[MAXIMUM_LOCALLY_RENDERED_SURFACES];
+	/* port: the SPU's, else these (structure_render_shadow_take) */
+	long *surface_indices = local_surface_indices;
+	long surface_count = NONE;
 	long dynamic_triangles_index;
 #ifdef HALO_PS3
 	uint64_t ps3_span, ps3_d3d; /* port: (the timer build) */
@@ -1033,6 +1138,16 @@ void structure_render_shadow(
 	profile_enter(render_structure_shadows_section);
 
 	PS3_STRUCTURE_SPAN(ps3_span, ps3_d3d); /* port: (the timer build) */
+#ifdef HALO_PS3
+	surface_count = structure_render_shadow_take(
+		&surface_indices,
+		bounding_sphere_center,
+		bounding_sphere_radius,
+		bounding_box,
+		bounding_surface_count,
+		bounding_surfaces);
+#endif
+	if (surface_count == NONE)
 	surface_count = structure_visibility_build_surfaces(
 		surface_indices,
 		MAXIMUM_LOCALLY_RENDERED_SURFACES,

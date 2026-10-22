@@ -25,6 +25,7 @@ upstream halo-ce-universal copy of source/effects/particles.c. */
 #include "sound/sound_definitions.h"
 
 #ifdef HALO_PS3
+#include "physics/collisions.h"
 #include "ps3_timers.h"
 
 /* port: the timer build's particles, and their physics' time and calls (port/ps3/include/ps3_timers.h) */
@@ -568,6 +569,129 @@ static boolean particle_update_frame_time(
 	return result;
 }
 
+/* port: particle_update_physics's end: the rest, the direction, the rotation; and of a free particle its contacts
+first (particle_update_physics_contact): apart for its rays on an SPU (particles_update_end) */
+static boolean particle_update_physics_rest(
+	long particle_index,
+	real dt,
+	boolean settled)
+{
+	struct particle_datum *particle = particle_get(particle_index);
+	struct particle_definition *definition = particle_definition_get(particle->definition_index);
+
+	if (magnitude_squared3d(&particle->translational_velocity) < 0.0625f)
+	{
+		if (settled)
+		{
+			if (TEST_FLAG(definition->flags, _particle_definition_dies_at_rest_bit))
+			{
+				particle_die(particle_index);
+
+				return FALSE;
+			}
+
+			SET_FLAG(particle->flags, _particle_datum_at_rest_bit, TRUE);
+		}
+	}
+	else
+	{
+		particle->direction = particle->translational_velocity;
+	}
+
+	particle->rotation = dt * particle->angular_velocity + particle->rotation;
+
+	return TRUE;
+}
+
+static boolean particle_update_physics_contact(
+	long particle_index,
+	real dt,
+	unsigned long collision_flags,
+	real_vector3d const *collision_normal_result,
+	short collision_material_type)
+{
+	struct particle_datum *particle = particle_get(particle_index);
+	struct particle_definition *definition = particle_definition_get(particle->definition_index);
+	real_vector3d collision_normal = *collision_normal_result;
+	boolean settled = FALSE;
+
+	if (TEST_FLAG(collision_flags, _point_physics_collided_with_structure_bit))
+	{
+		long collision_effect_index = definition->collision_effect.index;
+
+		if (collision_effect_index != NONE ||
+			definition->collision_material_effects.index)
+		{
+			real scale = (magnitude3d(&particle->translational_velocity) -
+				particle_collision_effect_scale_bounds[_particle_collision_scale_lower_bound]) /
+				(particle_collision_effect_scale_bounds[_particle_collision_scale_upper_bound] -
+					particle_collision_effect_scale_bounds[_particle_collision_scale_lower_bound]);
+
+			if (scale < 0.0f)
+				scale = 0.0f;
+			else if (scale > 1.0f)
+				scale = 1.0f;
+
+			if (collision_effect_index != NONE)
+			{
+				particle_effect_new(
+					particle,
+					definition->collision_effect.group_tag,
+					collision_effect_index,
+					scale);
+			}
+
+			if (definition->collision_material_effects.index != NONE &&
+				material_effect_visible(&particle->position))
+			{
+				material_effect_new(
+					definition->collision_material_effects.index,
+					_material_effect_impact,
+					collision_material_type,
+					&particle->position,
+					&collision_normal,
+					&particle->location,
+					scale);
+			}
+		}
+
+		if (TEST_FLAG(definition->flags,
+			_particle_definition_dies_on_contact_with_structure_bit))
+		{
+			if (definition->collision_effect.index == NONE)
+				particle_die(particle_index);
+			else
+				particle_delete(particle_index);
+
+			return FALSE;
+		}
+	}
+
+	if ((TEST_FLAG(collision_flags, _point_physics_in_air_bit) &&
+			TEST_FLAG(definition->flags,
+				_particle_definition_dies_on_contact_with_air_bit)) ||
+		(TEST_FLAG(collision_flags, _point_physics_in_water_bit) &&
+			TEST_FLAG(definition->flags,
+				_particle_definition_dies_on_contact_with_water_bit)))
+	{
+		particle_die(particle_index);
+
+		return FALSE;
+	}
+
+	if (TEST_FLAG(collision_flags, _point_physics_collided_with_structure_bit) ||
+		TEST_FLAG(collision_flags, _point_physics_collided_with_water_bit))
+	{
+		if (collision_normal.k > 0.8f)
+			settled = TRUE;
+
+		particle->frame_span = definition->frames_per_second_contact_deterioration +
+			particle->frame_span;
+	}
+
+	return particle_update_physics_rest(particle_index, dt, settled);
+}
+
 static boolean particle_update_physics(
 	long particle_index,
 	real dt)
@@ -599,79 +723,8 @@ static boolean particle_update_physics(
 				particle_get_radius(particle_index),
 				dt);
 
-			if (TEST_FLAG(collision_flags, _point_physics_collided_with_structure_bit))
-			{
-				long collision_effect_index = definition->collision_effect.index;
-
-				if (collision_effect_index != NONE ||
-					definition->collision_material_effects.index)
-				{
-					real scale = (magnitude3d(&particle->translational_velocity) -
-						particle_collision_effect_scale_bounds[_particle_collision_scale_lower_bound]) /
-						(particle_collision_effect_scale_bounds[_particle_collision_scale_upper_bound] -
-							particle_collision_effect_scale_bounds[_particle_collision_scale_lower_bound]);
-
-					if (scale < 0.0f)
-						scale = 0.0f;
-					else if (scale > 1.0f)
-						scale = 1.0f;
-
-					if (collision_effect_index != NONE)
-					{
-						particle_effect_new(
-							particle,
-							definition->collision_effect.group_tag,
-							collision_effect_index,
-							scale);
-					}
-
-					if (definition->collision_material_effects.index != NONE &&
-						material_effect_visible(&particle->position))
-					{
-						material_effect_new(
-							definition->collision_material_effects.index,
-							_material_effect_impact,
-							collision_material_type,
-							&particle->position,
-							&collision_normal,
-							&particle->location,
-							scale);
-					}
-				}
-
-				if (TEST_FLAG(definition->flags,
-					_particle_definition_dies_on_contact_with_structure_bit))
-				{
-					if (definition->collision_effect.index == NONE)
-						particle_die(particle_index);
-					else
-						particle_delete(particle_index);
-
-					return FALSE;
-				}
-			}
-
-			if ((TEST_FLAG(collision_flags, _point_physics_in_air_bit) &&
-					TEST_FLAG(definition->flags,
-						_particle_definition_dies_on_contact_with_air_bit)) ||
-				(TEST_FLAG(collision_flags, _point_physics_in_water_bit) &&
-					TEST_FLAG(definition->flags,
-						_particle_definition_dies_on_contact_with_water_bit)))
-			{
-				particle_die(particle_index);
-
-				return FALSE;
-			}
-
-			if (TEST_FLAG(collision_flags, _point_physics_collided_with_structure_bit) ||
-				TEST_FLAG(collision_flags, _point_physics_collided_with_water_bit))
-			{
-				if (collision_normal.k > 0.8f)
-					settled = TRUE;
-
-				particle->frame_span = definition->frames_per_second_contact_deterioration +
-					particle->frame_span;
-			}
+			return particle_update_physics_contact(particle_index, dt, collision_flags, &collision_normal,
+				collision_material_type);
 		}
 		else
 		{
@@ -716,26 +769,7 @@ static boolean particle_update_physics(
 			settled = TRUE;
 		}
 
-		if (magnitude_squared3d(&particle->translational_velocity) < 0.0625f)
-		{
-			if (settled)
-			{
-				if (TEST_FLAG(definition->flags, _particle_definition_dies_at_rest_bit))
-				{
-					particle_die(particle_index);
-
-					return FALSE;
-				}
-
-				SET_FLAG(particle->flags, _particle_datum_at_rest_bit, TRUE);
-			}
-		}
-		else
-		{
-			particle->direction = particle->translational_velocity;
-		}
-
-		particle->rotation = dt * particle->angular_velocity + particle->rotation;
+		return particle_update_physics_rest(particle_index, dt, settled);
 	}
 	else if (particle->object_index != NONE && !object_try_and_get(particle->object_index))
 	{
@@ -941,12 +975,146 @@ void particle_new(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: the free particles' rays on an SPU (port/ps3/spu/spu_game.c): gathered by particles_update after their forces,
+made while the rest of game_frame runs, taken by particles_update_end at its end (their contacts then) */
+static struct
+{
+	spu_game_particles job;
+	spu_game_answer answer;
+	spu_game_particle particles[SPU_GAME_PARTICLES_MAXIMUM];
+	long particle_indices[SPU_GAME_PARTICLES_MAXIMUM];
+	unsigned long results[SPU_GAME_PARTICLES_MAXIMUM];
+	unsigned long collision_flags[SPU_GAME_PARTICLES_MAXIMUM];
+	long count;
+	uint32_t ticket;
+	real dt;
+	boolean gathering;
+} __attribute__((aligned(128))) particles_spu;
+
+extern boolean debug_point_physics; /* port: point_physics.c */
+
+/* port: a free particle's update after its frame time: its forces now, its rays and contacts later; FALSE when it is
+not one the SPU takes */
+static boolean particles_spu_gather(
+	long particle_index,
+	real dt)
+{
+	struct particle_datum *particle = particle_get(particle_index);
+	struct particle_definition *definition;
+	struct point_physics_definition *physics;
+	spu_game_particle *entry;
+	unsigned long result;
+	unsigned long collision_flags;
+	real radius;
+
+	if (!particles_spu.gathering || particles_spu.count >= SPU_GAME_PARTICLES_MAXIMUM ||
+		TEST_FLAG(particle->flags, _particle_datum_at_rest_bit) || particle->object_index != NONE)
+	{
+		return FALSE;
+	}
+	definition = particle_definition_get(particle->definition_index);
+	physics = point_physics_definition_get(definition->physics.index);
+	radius = particle_get_radius(particle_index);
+	if (!point_physics_update_begin(physics, &particle->location, &particle->position, &particle->translational_velocity,
+		&radius, dt, &result, &collision_flags))
+	{
+		real_vector3d collision_normal = *global_zero_vector3d;
+
+		particle_update_physics_contact(particle_index, dt, result, &collision_normal, NONE);
+		return TRUE;
+	}
+	entry = &particles_spu.particles[particles_spu.count];
+	entry->position[0] = particle->position.x;
+	entry->position[1] = particle->position.y;
+	entry->position[2] = particle->position.z;
+	entry->dt = dt;
+	entry->velocity[0] = particle->translational_velocity.i;
+	entry->velocity[1] = particle->translational_velocity.j;
+	entry->velocity[2] = particle->translational_velocity.k;
+	entry->radius = radius;
+	entry->flags = collision_flags;
+	entry->leaf_index = particle->location.leaf_index;
+	entry->cluster_index = particle->location.cluster_index;
+	entry->material_type = NONE;
+	entry->contact_friction = physics->contact_friction;
+	entry->elasticity = physics->elasticity;
+	particles_spu.particle_indices[particles_spu.count] = particle_index;
+	particles_spu.results[particles_spu.count] = result;
+	particles_spu.collision_flags[particles_spu.count] = collision_flags;
+	particles_spu.count++;
+
+	return TRUE;
+}
+
+void particles_update_end(
+	void)
+{
+	boolean done;
+	long index;
+
+	particles_spu.gathering = FALSE;
+	if (!particles_spu.count)
+	{
+		return;
+	}
+	done = ps3_spu_game_wait(particles_spu.ticket) && particles_spu.answer.status == SPU_GAME_DONE;
+	for (index = 0; index < particles_spu.count; index++)
+	{
+		long particle_index = particles_spu.particle_indices[index];
+		struct particle_datum *particle = datum_try_and_get(particle_data, particle_index);
+		spu_game_particle const *entry = &particles_spu.particles[index];
+		real_vector3d collision_normal = *global_zero_vector3d;
+		short collision_material_type = NONE;
+		unsigned long collision_flags = particles_spu.results[index];
+
+		if (!particle)
+		{
+			continue;
+		}
+		if (done)
+		{
+			particle->position.x = entry->position[0];
+			particle->position.y = entry->position[1];
+			particle->position.z = entry->position[2];
+			particle->translational_velocity.i = entry->velocity[0];
+			particle->translational_velocity.j = entry->velocity[1];
+			particle->translational_velocity.k = entry->velocity[2];
+			particle->location.leaf_index = entry->leaf_index;
+			particle->location.cluster_index = entry->cluster_index;
+			collision_flags |= entry->flags;
+			collision_normal.i = entry->collision_normal[0];
+			collision_normal.j = entry->collision_normal[1];
+			collision_normal.k = entry->collision_normal[2];
+			collision_material_type = entry->material_type;
+		}
+		else
+		{
+			struct particle_definition *definition = particle_definition_get(particle->definition_index);
+
+			collision_flags |= point_physics_update_end(point_physics_definition_get(definition->physics.index),
+				&particle->location, &particle->position, &particle->translational_velocity, &collision_normal,
+				&collision_material_type, entry->radius, particles_spu.dt, particles_spu.collision_flags[index]);
+		}
+		particle_update_physics_contact(particle_index, particles_spu.dt, collision_flags, &collision_normal,
+			collision_material_type);
+	}
+	particles_spu.count = 0;
+}
+#endif
+
 void particles_update(
 	real dt)
 {
 	long particle_index;
 
 	profile_enter(particles_update_section);
+#ifdef HALO_PS3
+	particles_spu.count = 0;
+	particles_spu.dt = dt;
+	particles_spu.gathering = ps3_spu_game_running() && !debug_point_physics &&
+		collision_spu_particles(&particles_spu.job);
+#endif
 
 	{
 		long tick;
@@ -995,12 +1163,28 @@ void particles_update(
 				if (particle_update_frame_time(particle_index, dt))
 				{
 					PS3_PARTICLES_PHYSICS_BEGIN(); /* port: (the timer build) */
+#ifdef HALO_PS3
+					/* port: a free particle's rays on an SPU (particles_spu_gather) */
+					if (!particles_spu_gather(particle_index, dt))
+#endif
 					particle_update_physics(particle_index, dt);
 					PS3_PARTICLES_PHYSICS_END(); /* port: (the timer build) */
 				}
 			}
 		}
 	}
+
+#ifdef HALO_PS3
+	if (particles_spu.count)
+	{
+		particles_spu.job.particles = PS3_SPU_EA(particles_spu.particles);
+		particles_spu.job.particle_count = particles_spu.count;
+		particles_spu.job.answer = PS3_SPU_EA(&particles_spu.answer);
+		particles_spu.answer.status = 0;
+		particles_spu.ticket = ps3_spu_game_submit(SPU_GAME_PARTICLES, sizeof(particles_spu.job),
+			PS3_SPU_EA(&particles_spu.job), 0);
+	}
+#endif
 
 	profile_exit(particles_update_section);
 

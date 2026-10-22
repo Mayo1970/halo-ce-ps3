@@ -1,8 +1,4 @@
-/*
-SCENARIO.H
-
-header included in hcex build.
-*/
+/* SCENARIO.H: header included in hcex build. */
 
 #ifndef __SCENARIO_H
 #define __SCENARIO_H
@@ -162,6 +158,13 @@ extern struct scenario *global_scenario;
 extern struct collision_bsp *global_collision_bsp;
 extern struct bsp3d *global_bsp3d;
 extern struct game_globals *global_game_globals;
+#ifdef HALO_PS3
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
+/* port: wind.c, for the SPU's weather */
+void wind_spu_weather_palette(short weather_palette_index, spu_game_weather *job);
+/* port: changed at each structure bsp's load and unload: the SPU keeps its data while it is the same (spu_game.c) */
+extern unsigned long scenario_structure_bsp_generation;
+#endif
 
 /* ---------- public code */
 

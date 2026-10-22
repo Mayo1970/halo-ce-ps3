@@ -333,6 +333,11 @@ static void render_window(
 	{
 		PS3_WINDOW_STEP(4);
 		build_sprite_prepare_for_window();
+#ifdef HALO_PS3
+		/* port: the weather on an SPU while the window draws (weather_particle_systems_render takes it) */
+		weather_particle_systems_render_begin();
+		PS3_TIMER_PART(_ps3_timer_effects_weather);
+#endif
 		render_sky();
 		PS3_TIMER_PART(_ps3_timer_render_sky);
 		PS3_WINDOW_STEP(5);

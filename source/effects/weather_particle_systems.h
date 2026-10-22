@@ -1,8 +1,4 @@
-/*
-WEATHER_PARTICLE_SYSTEMS.H
-
-header included in hcex build.
-*/
+/* WEATHER_PARTICLE_SYSTEMS.H: header included in hcex build. */
 
 #ifndef __WEATHER_PARTICLE_SYSTEMS_H
 #define __WEATHER_PARTICLE_SYSTEMS_H
@@ -25,6 +21,11 @@ void weather_particle_system_new(
 	short local_player_index,
 	long definition_index,
 	real scale);
+#ifdef HALO_PS3
+/* port: the window's weather started on an SPU (weather_particle_systems.c) */
+void weather_particle_systems_render_begin(
+	void);
+#endif
 void weather_particle_systems_render(
 	void);
 

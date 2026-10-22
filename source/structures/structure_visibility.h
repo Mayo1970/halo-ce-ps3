@@ -1,6 +1,4 @@
-/*
-STRUCTURE_VISIBILITY.H
-*/
+/* STRUCTURE_VISIBILITY.H */
 
 #ifndef __STRUCTURE_VISIBILITY_H
 #define __STRUCTURE_VISIBILITY_H
@@ -60,5 +58,23 @@ short structure_visibility_build_surfaces(
 	short const *cluster_indices);
 void structure_visibility_compute(
 	void);
+
+#ifdef HALO_PS3
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
+
+/* port: the structure bsp's blocks, and structure_visibility_build_surfaces's search, for an SPU's jobs
+(port/ps3/spu/spu_game.c) */
+void structure_visibility_spu_structure(
+	spu_game_structure *structure);
+boolean structure_visibility_build_surfaces_spu(
+	spu_game_shadow *job,
+	long *surface_indices,
+	short maximum_count,
+	real_point3d const *bounding_sphere_center,
+	real bounding_sphere_radius,
+	real_rectangle3d const *bounding_box,
+	short bounding_surface_count,
+	real_plane3d const *bounding_surfaces);
+#endif
 
 #endif /* __STRUCTURE_VISIBILITY_H */

@@ -852,6 +852,10 @@ unsigned long get_random_seed(
 	void);
 
 unsigned short seed_random(unsigned long *seed);
+#ifdef HALO_PS3
+/* port: random_math.c */
+real_vector3d const *random_direction_table_get(short *count);
+#endif
 short seed_random_range(unsigned long *seed, short lower_bound, short upper_bound);
 
 real real_seed_random(unsigned long *seed);

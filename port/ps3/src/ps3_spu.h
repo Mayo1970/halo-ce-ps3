@@ -1,11 +1,12 @@
 /* PS3_SPU.H: the SPU programs (port/ps3/spu) on lv2 SPU threads (ps3_spu.c): the DirectSound mixer's, the Direct3D
-thread's conversions. The Xbox layer calls it, so fixed-width types only. */
+thread's conversions, the game thread's jobs. The Xbox layer calls it, so fixed-width types only. */
 
 #ifndef __HALO_PS3_SPU_H
 #define __HALO_PS3_SPU_H
 
 #include <stdint.h>
 
+#include "ps3_spu_game.h"
 #include "spu_mixer.h"
 #include "spu_vertices.h"
 
@@ -68,6 +69,23 @@ int ps3_spu_vertices_done(uint32_t head);
 /* 1 while the SPU converts */
 int ps3_spu_vertices_running(void);
 void ps3_spu_vertices_statistics(struct ps3_spu_vertices_statistics *statistics);
+
+struct ps3_spu_game_statistics
+{
+	uint32_t up;
+	/* since the last call, by kind: the jobs, the SPU's time in them and its DMA waits, the game thread's waits */
+	uint32_t jobs[SPU_GAME_KINDS];
+	uint32_t busy_microseconds[SPU_GAME_KINDS];
+	uint32_t dma_microseconds[SPU_GAME_KINDS];
+	uint32_t waits[SPU_GAME_KINDS];
+	uint32_t wait_microseconds[SPU_GAME_KINDS];
+	/* the tag data cache's reads found and fetched, the jobs refused */
+	uint32_t cache_hits;
+	uint32_t cache_misses;
+	uint32_t refused;
+};
+
+void ps3_spu_game_statistics(struct ps3_spu_game_statistics *statistics);
 
 /* at the exit */
 void ps3_spu_stop(void);

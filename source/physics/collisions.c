@@ -25,6 +25,10 @@ upstream halo-ce-universal copy of source/physics/collisions.c. */
 #include "structures/structure_bsp_definitions.h"
 #include "units/bipeds.h"
 #include "object_bounds_cache.h" /* port: port/linux/game/object_bounds_cache.c */
+#ifdef HALO_PS3
+#include "collision_bsp_definitions.h"
+#include "structures/structure_visibility.h"
+#endif
 
 #undef REAL_MATH_EXTERNAL_POINT_FROM_LINE3D
 
@@ -384,6 +388,90 @@ collision:
 	PS3_COLLISION_END(_ps3_collision_point);
 	return TRUE;
 }
+
+#ifdef HALO_PS3
+/* port: the clusters' water and the collision materials' types as collision_test_vector reads them, for the
+particles' rays on an SPU (spu_game.c): made once a bsp */
+static struct
+{
+	spu_game_cluster_water cluster_water[MAXIMUM_CLUSTERS_PER_STRUCTURE];
+	int16_t material_types[1024];
+	unsigned long generation;
+	boolean made;
+	boolean valid;
+} __attribute__((aligned(16))) collision_spu_tables;
+
+/* port: the collision bsp's blocks and those tables in an SPU job's parameters; FALSE when the SPU cannot take it */
+boolean collision_spu_particles(
+	spu_game_particles *job)
+{
+	struct structure_bsp *structure_bsp = global_structure_bsp_get();
+	struct collision_bsp *bsp = global_collision_bsp_get();
+
+	if (!structure_bsp || !bsp)
+	{
+		return FALSE;
+	}
+	if (!collision_spu_tables.made || collision_spu_tables.generation != scenario_structure_bsp_generation)
+	{
+		long index;
+
+		collision_spu_tables.made = TRUE;
+		collision_spu_tables.generation = scenario_structure_bsp_generation;
+		collision_spu_tables.valid = structure_bsp->clusters.count <= MAXIMUM_CLUSTERS_PER_STRUCTURE &&
+			structure_bsp->collision_materials.count <= NUMBEROF(collision_spu_tables.material_types);
+		for (index = 0; collision_spu_tables.valid && index < structure_bsp->clusters.count; index++)
+		{
+			spu_game_cluster_water *water = &collision_spu_tables.cluster_water[index];
+			struct structure_fog_plane const *fog_plane;
+			struct fog_definition const *fog;
+
+			memset(water, 0, sizeof(*water));
+			if (collision_cluster_fog_plane(structure_bsp, index, &fog_plane, &fog))
+			{
+				long material_type = fog_plane->runtime_material_type;
+
+				water->plane[0] = fog_plane->plane.n.i;
+				water->plane[1] = fog_plane->plane.n.j;
+				water->plane[2] = fog_plane->plane.n.k;
+				water->plane[3] = fog_plane->plane.d - fog->plane_distance;
+				water->material_type = material_type < 0 || material_type >= NUMBER_OF_MATERIAL_TYPES ? NONE : material_type;
+				water->valid = TRUE;
+			}
+		}
+		for (index = 0; collision_spu_tables.valid && index < structure_bsp->collision_materials.count; index++)
+		{
+			collision_spu_tables.material_types[index] = (int16_t)collision_structure_material_type(structure_bsp,
+				(short)index);
+		}
+	}
+	if (!collision_spu_tables.valid)
+	{
+		return FALSE;
+	}
+	structure_visibility_spu_structure(&job->structure);
+	job->collision_leaves = PS3_SPU_EA(bsp->leaves.address);
+	job->collision_leaf_count = bsp->leaves.count;
+	job->bsp2d_references = PS3_SPU_EA(bsp->bsp2d_references.address);
+	job->bsp2d_reference_count = bsp->bsp2d_references.count;
+	job->bsp2d_nodes = PS3_SPU_EA(bsp->bsp2d.nodes.address);
+	job->bsp2d_node_count = bsp->bsp2d.nodes.count;
+	job->surfaces = PS3_SPU_EA(bsp->surfaces.address);
+	job->surface_count = bsp->surfaces.count;
+	job->edges = PS3_SPU_EA(bsp->edges.address);
+	job->edge_count = bsp->edges.count;
+	job->vertices = PS3_SPU_EA(bsp->vertices.address);
+	job->vertex_count = bsp->vertices.count;
+	job->breakable_flags = PS3_SPU_EA(breakable_surface_flags_get());
+	job->breakable_count = MAXIMUM_BREAKABLE_SURFACES_PER_MAP;
+	job->cluster_water = PS3_SPU_EA(collision_spu_tables.cluster_water);
+	job->material_types = PS3_SPU_EA(collision_spu_tables.material_types);
+	job->material_count = structure_bsp->collision_materials.count;
+	job->water_material_type = _material_water;
+
+	return TRUE;
+}
+#endif
 
 boolean collision_test_vector(
 	unsigned long flags,

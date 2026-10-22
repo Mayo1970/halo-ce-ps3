@@ -1,6 +1,4 @@
-/*
-STRUCTURE_RENDER.H
-*/
+/* STRUCTURE_RENDER.H */
 
 #ifndef __STRUCTURE_RENDER_H
 #define __STRUCTURE_RENDER_H
@@ -52,6 +50,15 @@ void structure_render_diffuse_light(
 	real bounding_sphere_radius,
 	short cluster_count,
 	short *cluster_indices);
+#ifdef HALO_PS3
+/* port: the next structure_render_shadow's surfaces searched by an SPU meanwhile (structure_render.c) */
+void structure_render_shadow_prepare(
+	real_point3d const *bounding_sphere_center,
+	real bounding_sphere_radius,
+	real_rectangle3d const *bounding_box,
+	short bounding_surface_count,
+	real_plane3d const *bounding_surfaces);
+#endif
 void structure_render_shadow(
 	real_point3d const *bounding_sphere_center,
 	real bounding_sphere_radius,

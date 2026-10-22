@@ -204,6 +204,49 @@ struct structure_weather_polyhedron
 	struct tag_block planes;
 };
 
+/* port: weather_particle_system_render's boxes and polyhedra for a type, apart for the SPU's job */
+struct weather_particle_visibility
+{
+	real_plane3d clip_planes[NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES];
+	real_point3d box_positions[MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES];
+	real clip_plane_d_transforms[MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES][NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES];
+	short weather_polyhedra_indices[MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_POLYHEDRA];
+	short visible_polyhedron_count;
+	short box_count;
+};
+
+#ifdef HALO_PS3
+#include "physics/physics.h"
+#include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
+
+extern boolean debug_sprites; /* port: render_sprite.c */
+
+/* port: a bitmap group's sprites for the SPU's weather (weather_spu_sprites_get), with its bitmaps by slot */
+struct weather_spu_sprites
+{
+	spu_game_weather_sprites sprites;
+	long bitmap_group_index;
+	boolean valid;
+	short slot_count;
+	unsigned long size;
+	struct bitmap_data *bitmaps[SPU_GAME_WEATHER_GROUPS];
+};
+
+/* port: the window's job (weather_particle_systems_render_begin), its types' sprites and its local player (NONE with
+no job); preparing while the PPE's part of the update runs for it */
+static struct
+{
+	spu_game_weather job;
+	struct build_sprite_data sprite_data[MAXIMUM_NUMBER_OF_WEATHER_PARTICLE_TYPES];
+	uint32_t ticket;
+	short local_player_index;
+	short type_count;
+	boolean preparing;
+} __attribute__((aligned(128))) weather_spu = { .local_player_index = NONE };
+
+static struct weather_spu_sprites weather_spu_sprite_tables[8] __attribute__((aligned(16)));
+#endif
+
 typedef char structure_weather_palette_entry_size_assert[
 	sizeof(struct structure_weather_palette_entry) == 0xF0 ? 1 : -1];
 typedef char structure_weather_polyhedron_size_assert[
@@ -254,8 +297,25 @@ static void weather_particle_system_update_particle_count(
 	real scale);
 static void weather_particle_system_update(
 	short local_player_index);
+static void weather_particle_system_update_particles(
+	short local_player_index,
+	short type_index);
+static void weather_particle_system_type_visibility(
+	struct weather_particle_type const *type,
+	struct weather_particle_visibility *visibility);
+static void weather_particle_system_type_sprites(
+	short local_player_index,
+	short type_index,
+	struct weather_particle_visibility const *visibility,
+	struct build_sprite_data *sprite_data);
 static void weather_particle_system_render(
 	short local_player_index);
+static struct weather_particle_system *weather_particle_systems_window_system(
+	void);
+#ifdef HALO_PS3
+static boolean weather_particle_systems_render_end(
+	void);
+#endif
 
 /* ---------- globals */
 
@@ -291,6 +351,17 @@ void weather_particle_systems_initialize_for_new_map(
 
 	weather_particle_system_globals.active_system_count = 0;
 	data_make_valid(weather_particle_data);
+#ifdef HALO_PS3
+	{
+		short table_index;
+
+		/* port: the SPU's sprite tables are the map's (weather_spu_sprites_get) */
+		for (table_index = 0; table_index<NUMBEROF(weather_spu_sprite_tables); table_index++)
+		{
+			weather_spu_sprite_tables[table_index].bitmap_group_index = NONE;
+		}
+	}
+#endif
 
 	return;
 }
@@ -470,16 +541,12 @@ static void weather_particle_system_update(
 
 	for (type_index = 0; type_index<weather_particle_system_type_count(definition); type_index++)
 	{
-		struct weather_particle_type *type = weather_particle_system_get_type(system, type_index);
 		struct weather_particle_type_definition *type_definition = TAG_BLOCK_GET_ELEMENT(
 			&definition->particle_types,
 			type_index,
 			struct weather_particle_type_definition);
-		struct bitmap_group *bitmap_group = bitmap_group_get(type_definition->bitmap.index);
-		struct weather_particle *particle;
 		real height = render.camera.position.z;
 		real scale = system->scale;
-		long particle_index;
 
 		scale*= PIN(
 			(height - type_definition->height_fadein_start)/(type_definition->height_fadein_end - type_definition->height_fadein_start),
@@ -489,14 +556,230 @@ static void weather_particle_system_update(
 			0.f, 1.f);
 		weather_particle_system_update_particle_count(local_player_index, type_index, scale);
 
-		for (particle_index = type->first_particle_index; particle_index!=NONE; particle_index = particle->next_particle_index)
+#ifdef HALO_PS3
+		/* port: the particles' own update is the SPU's (weather_particle_systems_render_begin) */
+		if (weather_spu.preparing)
+			continue;
+#endif
+		weather_particle_system_update_particles(local_player_index, type_index);
+	}
+
+	return;
+}
+
+/* port: weather_particle_system_update's particles, apart for the SPU's job (weather_particle_systems_render_end) */
+static void weather_particle_system_update_particles(
+	short local_player_index,
+	short type_index)
+{
+	struct weather_particle_system *system = weather_particle_system_get(local_player_index);
+	struct weather_particle_system_definition *definition = weather_particle_system_definition_get(system->definition_index);
+	struct weather_particle_type *type = weather_particle_system_get_type(system, type_index);
+	struct weather_particle_type_definition *type_definition = TAG_BLOCK_GET_ELEMENT(
+		&definition->particle_types,
+		type_index,
+		struct weather_particle_type_definition);
+	struct bitmap_group *bitmap_group = bitmap_group_get(type_definition->bitmap.index);
+	struct weather_particle *particle;
+	long particle_index;
+
+	for (particle_index = type->first_particle_index; particle_index!=NONE; particle_index = particle->next_particle_index)
+	{
+		particle = datum_get(weather_particle_data, particle_index);
+		particle->sprite_index = (real)fmod(
+			particle->sprite_index+= particle->animation_rate*system->time_delta_sec,
+			TAG_BLOCK_GET_ELEMENT(&bitmap_group->sequences, particle->sequence_index, struct bitmap_group_sequence)->sprites.count);
+		particle->rotation+= (particle_index&1 ? -1 : 1)*particle->rotation_rate*system->time_delta_sec;
+		weather_particle_update_physics(local_player_index, type_index, particle_index);
+	}
+
+	return;
+}
+
+/* port: weather_particle_system_render's tests of a type's boxes and polyhedra, apart for the SPU's job */
+static void weather_particle_system_type_visibility(
+	struct weather_particle_type const *type,
+	struct weather_particle_visibility *visibility)
+{
+	real box_offsets[3];
+	real_rectangle3d bounds;
+	short i, j, k;
+
+	visibility->visible_polyhedron_count = weather_polyhedra_find(visibility->weather_polyhedra_indices, type->box_width);
+	weather_particle_system_build_clipping_planes(visibility->clip_planes, type->box_width);
+	weather_particle_system_box_offset_from_point3d(type->box_width, &render.camera.position, &visibility->box_positions[0]);
+	weather_particle_system_transform_clip_planes_to_box(visibility->clip_plane_d_transforms[0], visibility->clip_planes, &visibility->box_positions[0]);
+
+	bounds.x0 = visibility->box_positions[0].x;
+	bounds.x1 = visibility->box_positions[0].x + type->box_width;
+	bounds.y0 = visibility->box_positions[0].y;
+	bounds.y1 = visibility->box_positions[0].y + type->box_width;
+	bounds.z0 = visibility->box_positions[0].z;
+	bounds.z1 = visibility->box_positions[0].z + type->box_width;
+
+	box_offsets[0] = -type->box_width;
+	box_offsets[1] = 0.f;
+	box_offsets[2] = type->box_width;
+
+	visibility->box_count = 1;
+	for (i = 0; i<3; i++)
+	{
+		for (j = 0; j<3; j++)
 		{
-			particle = datum_get(weather_particle_data, particle_index);
-			particle->sprite_index = (real)fmod(
-				particle->sprite_index+= particle->animation_rate*system->time_delta_sec,
-				TAG_BLOCK_GET_ELEMENT(&bitmap_group->sequences, particle->sequence_index, struct bitmap_group_sequence)->sprites.count);
-			particle->rotation+= (particle_index&1 ? -1 : 1)*particle->rotation_rate*system->time_delta_sec;
-			weather_particle_update_physics(local_player_index, type_index, particle_index);
+			for (k = 0; k<3; k++)
+			{
+				if (i!=1 || j!=1 || k!=1)
+				{
+					real_rectangle3d box_bounds;
+
+					box_bounds.x0 = bounds.x0 + box_offsets[i];
+					box_bounds.x1 = bounds.x1 + box_offsets[i];
+					box_bounds.y0 = bounds.y0 + box_offsets[j];
+					box_bounds.y1 = bounds.y1 + box_offsets[j];
+					box_bounds.z0 = bounds.z0 + box_offsets[k];
+					box_bounds.z1 = bounds.z1 + box_offsets[k];
+
+					/* port: and no more boxes than the arrays hold */
+					if (visibility->box_count<MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES &&
+						render_frustum_cube_visible(&render.frustum, &box_bounds, TRUE))
+					{
+						match_assert("c:\\halo\\SOURCE\\effects\\weather_particle_systems.c", 673, visibility->box_count<MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES);
+						visibility->box_positions[visibility->box_count].x = box_bounds.x0;
+						visibility->box_positions[visibility->box_count].y = box_bounds.y0;
+						visibility->box_positions[visibility->box_count].z = box_bounds.z0;
+						weather_particle_system_transform_clip_planes_to_box(visibility->clip_plane_d_transforms[visibility->box_count], visibility->clip_planes, &visibility->box_positions[visibility->box_count]);
+						visibility->box_count++;
+					}
+				}
+			}
+		}
+	}
+
+	return;
+}
+
+/* port: weather_particle_system_render's sprites of a type's particles, apart for the SPU's job */
+static void weather_particle_system_type_sprites(
+	short local_player_index,
+	short type_index,
+	struct weather_particle_visibility const *visibility,
+	struct build_sprite_data *sprite_data)
+{
+	struct weather_particle_system *system = weather_particle_system_get(local_player_index);
+	struct weather_particle_system_definition *definition = weather_particle_system_definition_get(system->definition_index);
+	struct structure_bsp *structure = global_structure_bsp_get();
+	struct weather_particle_type *type = &system->types[type_index];
+	struct weather_particle_type_definition *type_definition = TAG_BLOCK_GET_ELEMENT(
+		&definition->particle_types,
+		type_index,
+		struct weather_particle_type_definition);
+	struct weather_particle *particle;
+	long particle_index;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
+
+	for (particle_index = type->first_particle_index; particle_index!=NONE; particle_index = particle->next_particle_index)
+	{
+		real plane_evaluations[NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES];
+		short plane_index;
+		short box_index;
+
+		particle = datum_get(weather_particle_data, particle_index);
+
+		for (plane_index = 0; plane_index<NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES; plane_index++)
+		{
+			plane_evaluations[plane_index] = plane3d_distance_to_point(&visibility->clip_planes[plane_index], &particle->position);
+		}
+
+		for (box_index = 0; box_index<visibility->box_count; box_index++)
+		{
+			boolean visible = TRUE;
+
+			for (plane_index = 0; plane_index<NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES && visible; plane_index++)
+			{
+				visible = visibility->clip_plane_d_transforms[box_index][plane_index] + plane_evaluations[plane_index]<0.f;
+			}
+
+			if (visible)
+			{
+				break;
+			}
+		}
+
+		if (box_index<visibility->box_count)
+		{
+			real far_clip_distance = MIN(type_definition->distance_fadeout_end, type->box_width);
+			real_point3d position;
+			real_vector3d camera_to_position;
+			real depth;
+
+			position.x = visibility->box_positions[box_index].x + particle->position.x;
+			position.y = visibility->box_positions[box_index].y + particle->position.y;
+			position.z = visibility->box_positions[box_index].z + particle->position.z;
+			depth = dot_product3d(vector_from_points3d(&render.camera.position, &position, &camera_to_position), &render.camera.forward);
+
+			if (depth>type_definition->distance_fadein_start && depth<far_clip_distance)
+			{
+				real fade_in = PIN(
+					(depth - type_definition->distance_fadein_start)/(type_definition->distance_fadein_end - type_definition->distance_fadein_start),
+					0.f, 1.f);
+				real fade_out = 1.f - PIN(
+					(depth - type_definition->distance_fadeout_start)/(far_clip_distance - type_definition->distance_fadeout_start),
+					0.f, 1.f);
+				short polyhedron_index;
+
+				for (polyhedron_index = 0; polyhedron_index<visibility->visible_polyhedron_count; polyhedron_index++)
+				{
+					struct structure_weather_polyhedron *polyhedron = TAG_BLOCK_GET_ELEMENT(
+						&structure->weather_polyhedra,
+						visibility->weather_polyhedra_indices[polyhedron_index],
+						struct structure_weather_polyhedron);
+					short polyhedron_plane_index;
+
+					for (polyhedron_plane_index = 0; polyhedron_plane_index<polyhedron->planes.count; polyhedron_plane_index++)
+					{
+						real_plane3d *plane = TAG_BLOCK_GET_ELEMENT(&polyhedron->planes, polyhedron_plane_index, real_plane3d);
+
+						if (plane3d_distance_to_point(plane, &position)<0.f)
+						{
+							break;
+						}
+					}
+
+					if (polyhedron_plane_index==polyhedron->planes.count)
+					{
+						break;
+					}
+				}
+
+				if (polyhedron_index==visibility->visible_polyhedron_count)
+				{
+					real_vector3d const *direction = type_definition->render_direction_source==_weather_particle_direction_from_acceleration ?
+						&particle->acceleration : &particle->velocity;
+
+					if (type_definition->render_mode!=_build_sprite_normal && magnitude_squared3d(direction)==0.f)
+					{
+						direction = global_up3d;
+					}
+
+					PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
+					build_sprite(
+						sprite_data,
+						type_definition->render_mode,
+						particle->sequence_index,
+						(short)particle->sprite_index,
+						&position,
+						direction,
+						particle->rotation,
+						2.f*particle->radius*type_definition->runtime_one_over_sprite_width,
+						&particle->color,
+						fade_in*fade_out,
+						0);
+					PS3_WEATHER_ADD(_ps3_timer_weather_sprites, ps3_span); /* port: (the timer build) */
+					PS3_WEATHER_COUNT(_ps3_timer_weather_sprites, 1); /* port: (the timer build) */
+				}
+			}
 		}
 	}
 
@@ -508,7 +791,6 @@ static void weather_particle_system_render(
 {
 	struct weather_particle_system *system = weather_particle_system_get(local_player_index);
 	struct weather_particle_system_definition *definition = weather_particle_system_definition_get(system->definition_index);
-	struct structure_bsp *structure = global_structure_bsp_get();
 	short type_index;
 #ifdef HALO_PS3
 	uint64_t ps3_span;
@@ -529,173 +811,12 @@ static void weather_particle_system_render(
 		PS3_WEATHER_COUNT(_ps3_timer_weather_update, type->particle_count); /* port: (the timer build) */
 		if (type->particle_count)
 		{
-			real_plane3d clip_planes[NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES];
-			real_point3d box_positions[MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES];
-			real clip_plane_d_transforms[MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES][NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES];
-			short weather_polyhedra_indices[MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_POLYHEDRA];
-			short visible_polyhedron_count = weather_polyhedra_find(weather_polyhedra_indices, type->box_width);
+			struct weather_particle_visibility visibility;
 			struct build_sprite_data sprite_data;
-			struct weather_particle *particle;
-			real box_offsets[3];
-			real_rectangle3d bounds;
-			short box_count;
-			short i, j, k;
-			long particle_index;
 
-			weather_particle_system_build_clipping_planes(clip_planes, type->box_width);
-			weather_particle_system_box_offset_from_point3d(type->box_width, &render.camera.position, &box_positions[0]);
-			weather_particle_system_transform_clip_planes_to_box(clip_plane_d_transforms[0], clip_planes, &box_positions[0]);
-
-			bounds.x0 = box_positions[0].x;
-			bounds.x1 = box_positions[0].x + type->box_width;
-			bounds.y0 = box_positions[0].y;
-			bounds.y1 = box_positions[0].y + type->box_width;
-			bounds.z0 = box_positions[0].z;
-			bounds.z1 = box_positions[0].z + type->box_width;
-
-			box_offsets[0] = -type->box_width;
-			box_offsets[1] = 0.f;
-			box_offsets[2] = type->box_width;
-
-			box_count = 1;
-			for (i = 0; i<3; i++)
-			{
-				for (j = 0; j<3; j++)
-				{
-					for (k = 0; k<3; k++)
-					{
-						if (i!=1 || j!=1 || k!=1)
-						{
-							real_rectangle3d box_bounds;
-
-							box_bounds.x0 = bounds.x0 + box_offsets[i];
-							box_bounds.x1 = bounds.x1 + box_offsets[i];
-							box_bounds.y0 = bounds.y0 + box_offsets[j];
-							box_bounds.y1 = bounds.y1 + box_offsets[j];
-							box_bounds.z0 = bounds.z0 + box_offsets[k];
-							box_bounds.z1 = bounds.z1 + box_offsets[k];
-
-							/* port: and no more boxes than the arrays hold */
-							if (box_count<MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES &&
-								render_frustum_cube_visible(&render.frustum, &box_bounds, TRUE))
-							{
-								match_assert("c:\\halo\\SOURCE\\effects\\weather_particle_systems.c", 673, box_count<MAXIMUM_NUMBER_OF_VISIBLE_WEATHER_PARTICLE_BOXES);
-								box_positions[box_count].x = box_bounds.x0;
-								box_positions[box_count].y = box_bounds.y0;
-								box_positions[box_count].z = box_bounds.z0;
-								weather_particle_system_transform_clip_planes_to_box(clip_plane_d_transforms[box_count], clip_planes, &box_positions[box_count]);
-								box_count++;
-							}
-						}
-					}
-				}
-			}
-
+			weather_particle_system_type_visibility(type, &visibility);
 			build_sprites_begin(&sprite_data, type->particle_count, type_definition->bitmap.index, &type_definition->shader, 0);
-
-			for (particle_index = type->first_particle_index; particle_index!=NONE; particle_index = particle->next_particle_index)
-			{
-				real plane_evaluations[NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES];
-				short plane_index;
-				short box_index;
-
-				particle = datum_get(weather_particle_data, particle_index);
-
-				for (plane_index = 0; plane_index<NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES; plane_index++)
-				{
-					plane_evaluations[plane_index] = plane3d_distance_to_point(&clip_planes[plane_index], &particle->position);
-				}
-
-				for (box_index = 0; box_index<box_count; box_index++)
-				{
-					boolean visible = TRUE;
-
-					for (plane_index = 0; plane_index<NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES && visible; plane_index++)
-					{
-						visible = clip_plane_d_transforms[box_index][plane_index] + plane_evaluations[plane_index]<0.f;
-					}
-
-					if (visible)
-					{
-						break;
-					}
-				}
-
-				if (box_index<box_count)
-				{
-					real far_clip_distance = MIN(type_definition->distance_fadeout_end, type->box_width);
-					real_point3d position;
-					real_vector3d camera_to_position;
-					real depth;
-
-					position.x = box_positions[box_index].x + particle->position.x;
-					position.y = box_positions[box_index].y + particle->position.y;
-					position.z = box_positions[box_index].z + particle->position.z;
-					depth = dot_product3d(vector_from_points3d(&render.camera.position, &position, &camera_to_position), &render.camera.forward);
-
-					if (depth>type_definition->distance_fadein_start && depth<far_clip_distance)
-					{
-						real fade_in = PIN(
-							(depth - type_definition->distance_fadein_start)/(type_definition->distance_fadein_end - type_definition->distance_fadein_start),
-							0.f, 1.f);
-						real fade_out = 1.f - PIN(
-							(depth - type_definition->distance_fadeout_start)/(far_clip_distance - type_definition->distance_fadeout_start),
-							0.f, 1.f);
-						short polyhedron_index;
-
-						for (polyhedron_index = 0; polyhedron_index<visible_polyhedron_count; polyhedron_index++)
-						{
-							struct structure_weather_polyhedron *polyhedron = TAG_BLOCK_GET_ELEMENT(
-								&structure->weather_polyhedra,
-								weather_polyhedra_indices[polyhedron_index],
-								struct structure_weather_polyhedron);
-							short polyhedron_plane_index;
-
-							for (polyhedron_plane_index = 0; polyhedron_plane_index<polyhedron->planes.count; polyhedron_plane_index++)
-							{
-								real_plane3d *plane = TAG_BLOCK_GET_ELEMENT(&polyhedron->planes, polyhedron_plane_index, real_plane3d);
-
-								if (plane3d_distance_to_point(plane, &position)<0.f)
-								{
-									break;
-								}
-							}
-
-							if (polyhedron_plane_index==polyhedron->planes.count)
-							{
-								break;
-							}
-						}
-
-						if (polyhedron_index==visible_polyhedron_count)
-						{
-							real_vector3d const *direction = type_definition->render_direction_source==_weather_particle_direction_from_acceleration ?
-								&particle->acceleration : &particle->velocity;
-
-							if (type_definition->render_mode!=_build_sprite_normal && magnitude_squared3d(direction)==0.f)
-							{
-								direction = global_up3d;
-							}
-
-							PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
-							build_sprite(
-								&sprite_data,
-								type_definition->render_mode,
-								particle->sequence_index,
-								(short)particle->sprite_index,
-								&position,
-								direction,
-								particle->rotation,
-								2.f*particle->radius*type_definition->runtime_one_over_sprite_width,
-								&particle->color,
-								fade_in*fade_out,
-								0);
-							PS3_WEATHER_ADD(_ps3_timer_weather_sprites, ps3_span); /* port: (the timer build) */
-							PS3_WEATHER_COUNT(_ps3_timer_weather_sprites, 1); /* port: (the timer build) */
-						}
-					}
-				}
-			}
+			weather_particle_system_type_sprites(local_player_index, type_index, &visibility, &sprite_data);
 
 			PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
 			build_sprites_end(&sprite_data);
@@ -706,6 +827,42 @@ static void weather_particle_system_render(
 	return;
 }
 
+/* port: the window's weather system, made or changed for the place of its camera (weather_particle_systems_render's
+start); NULL with none */
+static struct weather_particle_system *weather_particle_systems_window_system(
+	void)
+{
+	struct weather_particle_system *system = weather_particle_system_get(render.local_player_index);
+	long definition_index = NONE;
+
+	system->location.cluster_index = render.cluster_index;
+	system->location.leaf_index = render.leaf_index;
+	system->under_water = scenario_location_underwater(&system->location, &render.camera.position, &system->weather_palette_index);
+	if (system->weather_palette_index!=NONE)
+	{
+		struct structure_weather_palette_entry *weather_palette_entry = TAG_BLOCK_GET_ELEMENT(
+			&global_structure_bsp_get()->weather_palette,
+			system->weather_palette_index,
+			struct structure_weather_palette_entry);
+
+		definition_index = weather_palette_entry->particle_system.index;
+	}
+
+	if (system->definition_index!=definition_index)
+	{
+		if (system->definition_index!=NONE)
+		{
+			weather_particle_system_delete(render.local_player_index);
+		}
+		if (definition_index!=NONE)
+		{
+			weather_particle_system_new(render.local_player_index, definition_index, 1.f);
+		}
+	}
+
+	return system->definition_index!=NONE ? system : NULL;
+}
+
 void weather_particle_systems_render(
 	void)
 {
@@ -713,35 +870,14 @@ void weather_particle_systems_render(
 	{
 		if (render.local_player_index!=NONE)
 		{
-			struct weather_particle_system *system = weather_particle_system_get(render.local_player_index);
-			long definition_index = NONE;
-
-			system->location.cluster_index = render.cluster_index;
-			system->location.leaf_index = render.leaf_index;
-			system->under_water = scenario_location_underwater(&system->location, &render.camera.position, &system->weather_palette_index);
-			if (system->weather_palette_index!=NONE)
+#ifdef HALO_PS3
+			/* port: the SPU's, started at the window's start (weather_particle_systems_render_begin) */
+			if (weather_particle_systems_render_end())
 			{
-				struct structure_weather_palette_entry *weather_palette_entry = TAG_BLOCK_GET_ELEMENT(
-					&global_structure_bsp_get()->weather_palette,
-					system->weather_palette_index,
-					struct structure_weather_palette_entry);
-
-				definition_index = weather_palette_entry->particle_system.index;
+				return;
 			}
-
-			if (system->definition_index!=definition_index)
-			{
-				if (system->definition_index!=NONE)
-				{
-					weather_particle_system_delete(render.local_player_index);
-				}
-				if (definition_index!=NONE)
-				{
-					weather_particle_system_new(render.local_player_index, definition_index, 1.f);
-				}
-			}
-
-			if (system->definition_index!=NONE)
+#endif
+			if (weather_particle_systems_window_system())
 			{
 				weather_particle_system_render(render.local_player_index);
 			}
@@ -750,6 +886,370 @@ void weather_particle_systems_render(
 
 	return;
 }
+
+#ifdef HALO_PS3
+/* port: a bitmap group's sprites as the SPU reads them (spu_game_weather_sprites), and its bitmaps by slot; NULL when
+it has more than the SPU's tables hold. Kept for the map */
+static struct weather_spu_sprites const *weather_spu_sprites_get(
+	long bitmap_group_index)
+{
+	struct bitmap_group *bitmap_group;
+	struct weather_spu_sprites *table = NULL;
+	short slot_count = 0;
+	long sequence_index;
+	long sprite_total = 0;
+	long index;
+
+	for (index = 0; index<NUMBEROF(weather_spu_sprite_tables); index++)
+	{
+		if (weather_spu_sprite_tables[index].bitmap_group_index==bitmap_group_index)
+		{
+			return weather_spu_sprite_tables[index].valid ? &weather_spu_sprite_tables[index] : NULL;
+		}
+		if (!table && weather_spu_sprite_tables[index].bitmap_group_index==NONE)
+		{
+			table = &weather_spu_sprite_tables[index];
+		}
+	}
+	if (!table || bitmap_group_index==NONE)
+	{
+		return NULL;
+	}
+	table->bitmap_group_index = bitmap_group_index;
+	table->valid = FALSE;
+	bitmap_group = bitmap_group_get(bitmap_group_index);
+	if (bitmap_group->sequences.count>SPU_GAME_WEATHER_SEQUENCES)
+	{
+		return NULL;
+	}
+	table->sprites.sequence_count = bitmap_group->sequences.count;
+	for (sequence_index = 0; sequence_index<bitmap_group->sequences.count; sequence_index++)
+	{
+		struct bitmap_group_sequence *sequence = TAG_BLOCK_GET_ELEMENT(&bitmap_group->sequences, sequence_index, struct bitmap_group_sequence);
+		long sprite_index;
+
+		table->sprites.sprite_count[sequence_index] = (int16_t)sequence->sprites.count;
+		table->sprites.first_sprite[sequence_index] = NONE;
+		if (sequence->first_bitmap_index==NONE)
+		{
+			continue;
+		}
+		if (sprite_total + sequence->sprites.count>SPU_GAME_WEATHER_SPRITES || sequence->sprites.count>SHORT_MAX)
+		{
+			return NULL;
+		}
+		table->sprites.first_sprite[sequence_index] = (int16_t)sprite_total;
+		for (sprite_index = 0; sprite_index<sequence->sprites.count; sprite_index++)
+		{
+			struct bitmap_group_sprite *sprite = TAG_BLOCK_GET_ELEMENT(&sequence->sprites, sprite_index, struct bitmap_group_sprite);
+			spu_game_weather_sprite *entry = &table->sprites.sprites[sprite_total++];
+			short slot;
+
+			entry->bounds[0] = sprite->bounds.x0;
+			entry->bounds[1] = sprite->bounds.x1;
+			entry->bounds[2] = sprite->bounds.y0;
+			entry->bounds[3] = sprite->bounds.y1;
+			entry->registration[0] = sprite->registration_point.x;
+			entry->registration[1] = sprite->registration_point.y;
+			entry->slot = NONE;
+			if (sprite->bitmap_index<0 || sprite->bitmap_index>=bitmap_group->bitmaps.count)
+			{
+				continue;
+			}
+			for (slot = 0; slot<slot_count; slot++)
+			{
+				if (table->bitmaps[slot]==TAG_BLOCK_GET_ELEMENT(&bitmap_group->bitmaps, sprite->bitmap_index, struct bitmap_data))
+				{
+					break;
+				}
+			}
+			if (slot==slot_count)
+			{
+				if (slot_count>=SPU_GAME_WEATHER_GROUPS)
+				{
+					return NULL;
+				}
+				table->bitmaps[slot_count] = TAG_BLOCK_GET_ELEMENT(&bitmap_group->bitmaps, sprite->bitmap_index, struct bitmap_data);
+				table->sprites.widths[slot_count] = (real)table->bitmaps[slot_count]->width;
+				slot_count++;
+			}
+			entry->slot = slot;
+		}
+	}
+	table->sprites.sprite_total = sprite_total;
+	table->slot_count = slot_count;
+	table->size = (unsigned long)(offsetof(spu_game_weather_sprites, sprites) + sprite_total*sizeof(spu_game_weather_sprite));
+	table->valid = TRUE;
+
+	return table;
+}
+
+/* port: a type's part of the SPU's job: its definition's values, its sprites' groups made now (for every bitmap its
+sprites draw from), its boxes and polyhedra; FALSE when the SPU cannot take it */
+static boolean weather_spu_type_prepare(
+	struct weather_particle_system *system,
+	short type_index,
+	spu_game_weather_type *job,
+	struct build_sprite_data *sprite_data)
+{
+	struct weather_particle_system_definition *definition = weather_particle_system_definition_get(system->definition_index);
+	struct weather_particle_type *type = &system->types[type_index];
+	struct weather_particle_type_definition *type_definition = TAG_BLOCK_GET_ELEMENT(
+		&definition->particle_types,
+		type_index,
+		struct weather_particle_type_definition);
+	struct point_physics_definition *physics = point_physics_definition_get(type_definition->physics.index);
+	struct structure_bsp *structure = global_structure_bsp_get();
+	struct weather_spu_sprites const *table = weather_spu_sprites_get(type_definition->bitmap.index);
+	struct weather_particle_visibility visibility;
+	short index;
+	short plane_index;
+
+	memset(job, 0, sizeof(*job));
+	job->first_particle_index = NONE;
+	if (!table)
+	{
+		return FALSE;
+	}
+	job->first_particle_index = type->first_particle_index;
+	job->particle_count = type->particle_count;
+	job->box_width = type->box_width;
+	job->acceleration_bounds[0] = type_definition->acceleration_lower_bound;
+	job->acceleration_bounds[1] = type_definition->acceleration_upper_bound;
+	job->turning_rate = type_definition->acceleration_turning_rate;
+	job->change_rate = type_definition->acceleration_change_rate;
+	job->physics_flags = physics->flags;
+	job->mass_over_radius_cubed = physics->runtime_mass_over_radius_cubed;
+	job->water_buoyancy_scale = physics->runtime_water_buoyancy_scale;
+	job->air_buoyancy_scale = physics->runtime_air_buoyancy_scale;
+	job->air_friction = physics->air_friction;
+	job->water_friction = physics->water_friction;
+	job->distance_fade[0] = type_definition->distance_fadein_start;
+	job->distance_fade[1] = type_definition->distance_fadein_end;
+	job->distance_fade[2] = type_definition->distance_fadeout_start;
+	job->distance_fade[3] = type_definition->distance_fadeout_end;
+	job->one_over_sprite_width = type_definition->runtime_one_over_sprite_width;
+	job->render_mode = type_definition->render_mode;
+	job->direction_source = type_definition->render_direction_source;
+	job->fade_mode = type_definition->shader.framebuffer_fade_mode;
+	job->fade_alpha = type_definition->shader.framebuffer_blend_function &&
+		!TEST_FLAG(type_definition->shader.flags, 1);
+	job->sprites = PS3_SPU_EA(&table->sprites);
+	job->sprites_size = (uint32_t)table->size;
+	if (!type->particle_count)
+	{
+		return TRUE;
+	}
+
+	weather_particle_system_type_visibility(type, &visibility);
+	job->box_count = visibility.box_count;
+	for (index = 0; index<NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES; index++)
+	{
+		job->clip_planes[index][0] = visibility.clip_planes[index].n.i;
+		job->clip_planes[index][1] = visibility.clip_planes[index].n.j;
+		job->clip_planes[index][2] = visibility.clip_planes[index].n.k;
+		job->clip_planes[index][3] = visibility.clip_planes[index].d;
+	}
+	for (index = 0; index<visibility.box_count; index++)
+	{
+		job->boxes[index][0] = visibility.box_positions[index].x;
+		job->boxes[index][1] = visibility.box_positions[index].y;
+		job->boxes[index][2] = visibility.box_positions[index].z;
+		for (plane_index = 0; plane_index<NUMBER_OF_WEATHER_PARTICLE_CLIPPING_PLANES; plane_index++)
+		{
+			job->box_distances[index][plane_index] = visibility.clip_plane_d_transforms[index][plane_index];
+		}
+	}
+	job->polyhedron_count = visibility.visible_polyhedron_count;
+	for (index = 0; index<visibility.visible_polyhedron_count; index++)
+	{
+		struct structure_weather_polyhedron *polyhedron = TAG_BLOCK_GET_ELEMENT(
+			&structure->weather_polyhedra,
+			visibility.weather_polyhedra_indices[index],
+			struct structure_weather_polyhedron);
+
+		job->polyhedron_planes[index] = PS3_SPU_EA(polyhedron->planes.address);
+		job->polyhedron_plane_counts[index] = polyhedron->planes.count;
+	}
+
+	build_sprites_begin(sprite_data, type->particle_count, type_definition->bitmap.index, &type_definition->shader, 0);
+	for (index = 0; index<table->slot_count; index++)
+	{
+		short group_index = build_sprite_group_for_bitmap(sprite_data, table->bitmaps[index]);
+
+		/* (a group a slot, in order: each slot's bitmap is new to the call) */
+		job->vertices[index] = group_index==index ? PS3_SPU_EA(sprite_data->groups[index].vertices) : 0;
+	}
+
+	return TRUE;
+}
+
+/* port: the window's weather on an SPU (spu_game.c) from the window's start: the counts here, the particles' update
+and sprites the SPU's; weather_particle_systems_render draws them (weather_particle_systems_render_end) */
+void weather_particle_systems_render_begin(
+	void)
+{
+	struct weather_particle_system *system;
+	struct weather_particle_system_definition *definition;
+	spu_game_weather *job = &weather_spu.job;
+	real_vector3d const *directions;
+	short direction_count;
+	short type_count;
+	short type_index;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
+
+	if (weather_spu.ticket)
+	{
+		ps3_spu_game_wait(weather_spu.ticket);
+		weather_spu.ticket = 0;
+	}
+	weather_spu.local_player_index = NONE;
+	if (!render_particle_systems_enabled || !weather || render.local_player_index==NONE || debug_sprites ||
+		!ps3_spu_game_running())
+	{
+		return;
+	}
+	system = weather_particle_systems_window_system();
+	if (!system)
+	{
+		return;
+	}
+	definition = weather_particle_system_definition_get(system->definition_index);
+	type_count = weather_particle_system_type_count(definition);
+	directions = random_direction_table_get(&direction_count);
+	if (weather_particle_data->size!=sizeof(struct weather_particle) || !directions)
+	{
+		return;
+	}
+	/* (each type's sprites first: a type the SPU cannot take leaves the window to the PPE, as it was) */
+	for (type_index = 0; type_index<type_count; type_index++)
+	{
+		struct weather_particle_type_definition *type_definition = TAG_BLOCK_GET_ELEMENT(
+			&definition->particle_types,
+			type_index,
+			struct weather_particle_type_definition);
+
+		if (!weather_spu_sprites_get(type_definition->bitmap.index))
+		{
+			return;
+		}
+	}
+
+	PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
+	weather_spu.preparing = TRUE;
+	weather_particle_system_update(render.local_player_index);
+	weather_spu.preparing = FALSE;
+	PS3_WEATHER_ADD(_ps3_timer_weather_update, ps3_span); /* port: (the timer build) */
+
+	memset(job, 0, offsetof(spu_game_weather, types));
+	job->particles = PS3_SPU_EA(weather_particle_data->data);
+	job->particle_size = weather_particle_data->size;
+	job->particle_maximum = weather_particle_data->maximum_count;
+	job->type_count = type_count;
+	job->dt = system->time_delta_sec;
+	job->update_ticks = weather_particle_update_ticks;
+	job->seed = (uint32_t)local_random() << 16 | (uint32_t)local_random();
+	job->under_water = system->under_water;
+	job->directions = PS3_SPU_EA(directions);
+	job->direction_count = direction_count;
+	wind_spu_weather_palette(system->weather_palette_index, job);
+	job->gravity = ((global_gravity * TICKS_PER_SECOND) * TICKS_PER_SECOND);
+	point_physics_air_and_water_masses(&job->air_mass, &job->water_mass);
+	job->camera_position[0] = render.camera.position.x;
+	job->camera_position[1] = render.camera.position.y;
+	job->camera_position[2] = render.camera.position.z;
+	job->camera_forward[0] = render.camera.forward.i;
+	job->camera_forward[1] = render.camera.forward.j;
+	job->camera_forward[2] = render.camera.forward.k;
+	job->world_to_view[0] = render.frustum.world_to_view.scale;
+	for (type_index = 0; type_index<12; type_index++)
+	{
+		job->world_to_view[1 + type_index] = render.frustum.world_to_view.n[type_index/3][type_index%3];
+	}
+	job->projection[0] = render.frustum.projection_matrix[0][0];
+	job->projection[1] = render.frustum.projection_matrix[2][0];
+	job->projection[2] = render.frustum.projection_matrix[1][1];
+	job->projection[3] = render.frustum.projection_matrix[2][1];
+	job->projection_world_to_screen_x = render.frustum.projection_world_to_screen.i;
+	build_sprite_spu_globals(job->viewer_up, job->viewer_forward, &job->big_sprite_count);
+	for (type_index = 0; type_index<type_count; type_index++)
+	{
+		PS3_WEATHER_COUNT(_ps3_timer_weather_update, system->types[type_index].particle_count); /* port: (timers) */
+		/* (it takes every type: their tables passed above) */
+		weather_spu_type_prepare(system, type_index, &job->types[type_index], &weather_spu.sprite_data[type_index]);
+	}
+
+	weather_spu.type_count = type_count;
+	weather_spu.local_player_index = render.local_player_index;
+	weather_spu.ticket = ps3_spu_game_submit(SPU_GAME_WEATHER, sizeof(*job), PS3_SPU_EA(job), 0);
+
+	return;
+}
+
+/* port: the window's weather from the SPU: its sprites drawn as build_sprites_end draws them; if the SPU did not do it,
+the particles' update and sprites here. FALSE when no job was started for the window */
+static boolean weather_particle_systems_render_end(
+	void)
+{
+	spu_game_weather *job = &weather_spu.job;
+	uint32_t ticket = weather_spu.ticket;
+	boolean done;
+	short type_index;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
+
+	if (weather_spu.local_player_index==NONE || weather_spu.local_player_index!=render.local_player_index)
+	{
+		return FALSE;
+	}
+	weather_spu.local_player_index = NONE;
+	weather_spu.ticket = 0;
+	done = ps3_spu_game_wait(ticket) && job->type_count==-weather_spu.type_count - 1;
+	if (done)
+	{
+		build_sprite_spu_add(job->big_sprite_count, job->coverage);
+	}
+
+	for (type_index = 0; type_index<weather_spu.type_count; type_index++)
+	{
+		struct build_sprite_data *sprite_data = &weather_spu.sprite_data[type_index];
+		spu_game_weather_type *type = &job->types[type_index];
+		short group_index;
+
+		if (!type->particle_count)
+		{
+			continue;
+		}
+		if (done)
+		{
+			sprite_data->sprite_count = (short)type->sprite_count;
+			sprite_data->centroid.x = type->centroid[0];
+			sprite_data->centroid.y = type->centroid[1];
+			sprite_data->centroid.z = type->centroid[2];
+			for (group_index = 0; group_index<sprite_data->group_count; group_index++)
+			{
+				sprite_data->groups[group_index].sprite_count = (short)type->slot_sprites[group_index];
+			}
+		}
+		else
+		{
+			struct weather_particle_visibility visibility;
+
+			weather_particle_system_update_particles(render.local_player_index, type_index);
+			weather_particle_system_type_visibility(&weather_particle_system_get(render.local_player_index)->types[type_index], &visibility);
+			weather_particle_system_type_sprites(render.local_player_index, type_index, &visibility, sprite_data);
+		}
+		PS3_WEATHER_SPAN(ps3_span); /* port: (the timer build) */
+		build_sprites_end(sprite_data);
+		PS3_WEATHER_ADD(_ps3_timer_weather_draw, ps3_span); /* port: (the timer build) */
+	}
+
+	return TRUE;
+}
+#endif
 
 void weather_particle_system_delete(
 	short local_player_index)

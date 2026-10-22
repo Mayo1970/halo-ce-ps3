@@ -1,77 +1,5 @@
-/*
-RENDER_SPRITE.C
-
-symbols in this file:
-0017C760 0130:
-	_code_0017c760 (0000)
-0017C890 0070:
-	_code_0017c890 (0000)
-0017C900 0090:
-	_build_sprite_prepare_for_window (0000)
-0017C990 0180:
-	_code_0017c990 (0000)
-0017CB10 00a0:
-	_build_sprites_begin (0000)
-0017CBB0 0130:
-	_build_sprites_end (0000)
-0017CCE0 01e0:
-	_code_0017cce0 (0000)
-0017CEC0 0070:
-	_build_sprite_compute_vertex_fade (0000)
-0017CF30 0610:
-	_build_sprite (0000)
-0017D540 0280:
-	_build_sprite_rotational (0000)
-002A00F4 0004:
-	_one_over_full_circle (0000)
-002A00F8 001b:
-	??_C@_0BL@MGMOMNLP@perpendicular?5to?5direction?$AA@ (0000)
-002A0114 0016:
-	??_C@_0BG@KINAGGNG@parallel?5to?5direction?$AA@ (0000)
-002A012C 000e:
-	??_C@_0O@GDBPHPAN@screen?5facing?$AA@ (0000)
-002A013C 0019:
-	??_C@_0BJ@NOODAMK@?$CBuntransformed_direction?$AA@ (0000)
-002A0158 0016:
-	??_C@_0BG@PMLDPFAJ@transformed_direction?$AA@ (0000)
-002A0170 0013:
-	??_C@_0BD@IDBJDPKL@transformed_origin?$AA@ (0000)
-002A0184 0015:
-	??_C@_0BF@ILAHHFNF@untransformed_origin?$AA@ (0000)
-002A019C 0026:
-	??_C@_0CG@EFAPFCGE@c?3?2halo?2SOURCE?2render?2render_spr@ (0000)
-002A01C4 0022:
-	??_C@_0CC@MKHFOGBB@?5?5?5coverage?3?5?$CF?41f?5big?5sprites?3?5?$CF@ (0000)
-002A01E8 0031:
-	??_C@_0DB@IJJJGION@build_sprite?5failed?5to?5allocate?5@ (0000)
-002A021C 0010:
-	??_C@_0BA@BMIFFLPI@group?9?$DOvertices?$AA@ (0000)
-002A022C 003d:
-	??_C@_0DN@EKFLFNFF@a?5build_sprites_begin?5call?5can?5a@ (0000)
-002A026C 002c:
-	??_C@_0CM@LNKKNFPA@?$CBTEST_FLAG?$CIflags?0?5_build_sprites@ (0000)
-002A0298 0041:
-	??_C@_0EB@NNMLIIBJ@?$CD?$CD?$CD?5ERROR?5sprites?5rendered?5with?5@ (0000)
-002A02DC 0031:
-	??_C@_0DB@ILMICBDJ@TEST_FLAG?$CIdata?9?$DOflags?0?5_build_sp@ (0000)
-002A0310 003b:
-	??_C@_0DL@OIGDNGND@build_sprite?5only?5supports?5norma@ (0000)
-002A034C 0024:
-	??_C@_0CE@EJDAIAFL@build_sprite?5sprite?5count?5exceed@ (0000)
-002A0370 004c:
-	??_C@_0EM@DGAJPPIN@the?5bitmap?5group?5?$CFs?5sequence?5?$CFd?5@ (0000)
-002A03C0 0068:
-	??_C@_0GI@GFCEGJMK@mode?$DN?$DN_build_sprite_normal?5?$HM?$HM?5?$CIu@ (0000)
-002A0428 0004:
-	__real@3ecf817a (0000)
-002A042C 001f:
-	??_C@_0BP@HLIODOFJ@untransformed_axis_of_rotation?$AA@ (0000)
-0030E778 0018:
-	_global_sprite_render_orientations_enum_strings (0000)
-	_global_sprite_render_orientations_enum (000c)
-004C0518 0001:
-	_bss_004c0518 (0000)
-*/
+/* RENDER_SPRITE.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/render/render_sprite.c. */
 
 /* ---------- headers */
 
@@ -700,6 +628,40 @@ void build_sprite_rotational(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: build_sprite's group for a bitmap, made now (the weather's SPU job: weather_particle_systems.c) */
+short build_sprite_group_for_bitmap(
+	struct build_sprite_data *data,
+	struct bitmap_data *bitmap)
+{
+	return build_sprite_get_group(data, bitmap);
+}
+
+/* port: the window's viewer vectors and big sprites so far, for the weather's SPU job */
+void build_sprite_spu_globals(
+	float *viewer_up,
+	float *viewer_forward,
+	int32_t *big_sprite_count)
+{
+	viewer_up[0] = build_sprite_globals.viewer_space_world_up.i;
+	viewer_up[1] = build_sprite_globals.viewer_space_world_up.j;
+	viewer_up[2] = build_sprite_globals.viewer_space_world_up.k;
+	viewer_forward[0] = build_sprite_globals.viewer_space_world_forward.i;
+	viewer_forward[1] = build_sprite_globals.viewer_space_world_forward.j;
+	viewer_forward[2] = build_sprite_globals.viewer_space_world_forward.k;
+	*big_sprite_count = build_sprite_globals.big_sprite_count;
+}
+
+/* port: and the job's sprites' share of them */
+void build_sprite_spu_add(
+	int32_t big_sprite_count,
+	float coverage)
+{
+	build_sprite_globals.big_sprite_count = (short)big_sprite_count;
+	build_sprite_globals.screen_coverage += coverage;
+}
+#endif
+
 /* ---------- private code */
 
 static void build_sprite_transform_origin_and_direction(
@@ -773,9 +735,8 @@ static short build_sprite_get_group(
 	struct build_sprite_data *data,
 	struct bitmap_data *bitmap)
 {
-	/* Name, type and function scope from the 2003 PC demo PDB and the HCEX PDB (static local
-	   unsigned char warned). Neither PDB records the block: placing it at the top of the function
-	   is unattested. January corroborates: its one-byte .bss is referenced only here. */
+	/* Name, type and scope from the 2003 PC demo and HCEX PDBs (static unsigned char warned); its place at the top is
+	   unattested: January's one-byte .bss is referenced only here. */
 	static boolean warned;
 	short group_index;
 
@@ -785,11 +746,8 @@ static short build_sprite_get_group(
 			break;
 	}
 
-	/* port: a Halo PC map's particle may be drawn from more bitmaps than a
-	call takes (beavercreek_rev_beta's fluid bursts have a bitmap a frame, up
-	to 56), which halted a debug build: its sprites on the others are not
-	drawn, as a release build already did, and it is logged once. The Xbox's
-	maps' particles stay within the limit. */
+	/* port: a Halo PC map's particle may draw from more bitmaps than a call takes (beavercreek_rev_beta: up to 56): the
+	sprites past them are not drawn, as a release build did, and that is logged once. Xbox maps stay within it. */
 	if (custom_edition_cache_tags_loaded())
 	{
 		static boolean logged;

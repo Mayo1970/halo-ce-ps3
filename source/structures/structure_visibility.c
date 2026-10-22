@@ -1,104 +1,5 @@
-/*
-STRUCTURE_VISIBILITY.C
-
-symbols in this file:
-00185E20 0020:
-	_debug_pvs (0000)
-00185E40 00c0:
-	_structure_visibility_find_camera (0000)
-00185F00 01a0:
-	_structure_visibility_traverse_subclusters (0000)
-001860A0 0210:
-	_structure_visibility_traverse_surface_lists (0000)
-001862B0 00b0:
-	_bounding_rectangles_intersect (0000)
-00186360 0180:
-	_planes_intersect_rectangle (0000)
-001864E0 00d0:
-	_structure_visibility_find_objects (0000)
-001865B0 00b0:
-	_grow_clipping_rectangle_by_portal_hull (0000)
-00186660 00a0:
-	_structure_visibility_render_debug_portal_hull (0000)
-00186700 0120:
-	_dequantize_byte_to_real_rectangle3d (0000)
-00186820 0160:
-	_structure_visibility_build_surfaces_traverse_clusters (0000)
-00186980 01e0:
-	_structure_visibility_build_surfaces_traverse_leaf (0000)
-00186B60 01e0:
-	_portal_hull_from_points (0000)
-00186D40 0080:
-	_portal_hull_from_portal (0000)
-00186DC0 0070:
-	_points_within_distance (0000)
-00186E30 02c0:
-	_structure_visibility_find_mirror (0000)
-001870F0 0260:
-	_structure_visibility_build_surfaces_traverse_node (0000)
-00187350 0390:
-	_structure_visibility_traverse_cluster (0000)
-001876E0 01e0:
-	_structure_visibility_build_surfaces (0000)
-001878C0 0110:
-	_structure_visibility_find_clusters (0000)
-001879D0 0240:
-	_structure_visibility_compute (0000)
-002A1AF4 0010:
-	_screen_plane (0000)
-002A1B04 002e:
-	??_C@_0CO@GHPNGJCB@render_structure_visibility_surf@ (0000)
-002A1B34 0031:
-	??_C@_0DB@DIILMMGG@render_structure_visibility_subc@ (0000)
-002A1B68 002d:
-	??_C@_0CN@MLHMCLEC@render_structure_visibility_port@ (0000)
-002A1B98 005f:
-	??_C@_0FP@IPNIKPHC@surface_index_buffer?9?$CIlong?5?$CK?$CJ?5cl@ (0000)
-002A1BF8 0031:
-	??_C@_0DB@MPCJDDJE@c?3?2halo?2SOURCE?2structures?2struct@ (0000)
-002A1C2C 0018:
-	??_C@_0BI@CMHFMAEP@valid_portal_hull?$CIhull?$CJ?$AA@ (0000)
-002A1C44 000a:
-	??_C@_09KEGCCCGI@rectangle?$AA@ (0000)
-002A1C50 0048:
-	??_C@_0EI@NFFPBLL@leaf?9?$DOcluster_index?$DO?$DN0?5?$CG?$CG?5leaf?9?$DO@ (0000)
-002A1C98 000c:
-	??_C@_0M@ONJFEIPI@cull_bounds?$AA@ (0000)
-002A1CA4 0013:
-	??_C@_0BD@FKHEAHGO@cull_sphere_center?$AA@ (0000)
-002A1CB8 000e:
-	??_C@_0O@FEFHBCMC@parent_bounds?$AA@ (0000)
-002A1CC8 000d:
-	??_C@_0N@JIFGGPLM@intersection?$AA@ (0000)
-002A1CD8 0008:
-	??_C@_07KLBPNJKH@ooz?$DO0?4f?$AA@ (0000)
-002A1CE0 001b:
-	??_C@_0BL@FCCKLIAE@result?9?$DOvertex_count?$CB?$DNNONE?$AA@ (0000)
-002A1CFC 002a:
-	??_C@_0CK@MFEAOING@two?5mirrors?5visible?5with?5differe@ (0000)
-002A1D28 001c:
-	??_C@_0BM@EAJICMMM@portal?5intersection?5failed?4?$AA@ (0000)
-002A1D44 002f:
-	??_C@_0CP@KGOLAMLM@rendered_cluster?9?$DOcluster_index?$DN@ (0000)
-002A1D74 0020:
-	??_C@_0CA@HGGGAHMD@raise?5MAXIMUM_RENDERED_CLUSTERS?$AA@ (0000)
-002A1D94 0022:
-	??_C@_0CC@IDJIEBBJ@valid_portal_hull?$CIvisible_region@ (0000)
-002A1DB8 002d:
-	??_C@_0CN@EHONMIFE@?$CBbounding_surface_count?5?$HM?$HM?5bound@ (0000)
-002A1DE8 0017:
-	??_C@_0BH@ODLPNGPJ@bounding_sphere_center?$AA@ (0000)
-002A1E00 0053:
-	??_C@_0FD@MFIJDILG@?$CD?$CD?$CD?5WARNING?3?5this?5structure_bsp?5@ (0000)
-00313AF0 11ec:
-	_render_structure_visibility_portal_traversal (0000)
-	_render_structure_visibility_subcluster_traversal (05f8)
-	_render_structure_visibility_surface_traversal (0bf0)
-	_structure_sphere_threshold (11e8)
-004C0CF0 040c:
-	_warned_about_missing_subclusters (0000)
-	_structure_visibility_globals (0008)
-*/
+/* STRUCTURE_VISIBILITY.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/structures/structure_visibility.c. */
 
 /* ---------- headers */
 
@@ -131,10 +32,8 @@ enum
 	_portal_hull_from_portal_discarded,
 	_portal_hull_from_portal_degenerate,
 	MAXIMUM_PORTAL_HULL_VERTICES = 256,
-	/* port: how deep structure_visibility_build_surfaces_traverse_node goes
-	in a bsp (from the map) before it stops: four times the deepest bsp the
-	tools' leaf maps hold (leaf_map.c's 256-node stack), where the retail
-	bsps are at most 66 deep */
+	/* port: how deep traverse_node goes in a map's bsp before it stops: four times the deepest the tools' leaf maps
+	hold (leaf_map.c's 256-node stack); the retail bsps are at most 66 deep */
 	MAXIMUM_STRUCTURE_BSP_TRAVERSAL_DEPTH = 1024,
 	COMPRESSED_STRUCTURE_VERTEX_SIZE = 0x20,
 	_shader_type_environment = 3,
@@ -476,9 +375,8 @@ static void structure_visibility_traverse_subclusters(
 				surface_list_index < subcluster->surface_indices.count;
 				surface_index_buffer++, surface_list_index++)
 			{
-				/* port: a surface index (from the map) that is no surface is
-				skipped (the bsp's surfaces fit the flags, as
-				structure_bsp_port_verify checked) */
+				/* port: a surface index (from the map) that is no surface is skipped (the surfaces fit the flags:
+				structure_bsp_port_verify) */
 				if ((unsigned long)*surface_index_buffer >= (unsigned long)structure->surfaces.count)
 				{
 					continue;
@@ -530,9 +428,8 @@ static void structure_visibility_traverse_surface_lists(
 			long group_end;
 			long vertex_limit;
 
-			/* port: a group (from the map) whose header is not all in the
-			list, or names no lightmap's material, ends the list; its
-			surfaces end with the list */
+			/* port: a group (from the map) whose header is not all in the list, or names no lightmap's material,
+			ends the list and its surfaces */
 			if (consumed_surface_index_count > cluster->surface_indices.count - 3 ||
 				surface_index_buffer[0] < 0 ||
 				surface_index_buffer[0] >= structure->lightmaps.count)
@@ -552,9 +449,8 @@ static void structure_visibility_traverse_surface_lists(
 				materials,
 				surface_index_buffer[1],
 				struct structure_material);
-			/* port: how many vertices the material's compressed vertex data
-			(from the map) holds: a surface with one past them is skipped
-			(the retail clusters have no surface lists) */
+			/* port: how many vertices the material's compressed vertex data holds: a surface with one past them is
+			skipped (the retail clusters have no surface lists) */
 			vertex_limit = material->compressed_vertex_data.size / COMPRESSED_STRUCTURE_VERTEX_SIZE;
 
 			surface_index_buffer += 2;
@@ -1650,6 +1546,107 @@ short structure_visibility_build_surfaces(
 		0);
 }
 
+#ifdef HALO_PS3
+void structure_visibility_spu_structure(
+	spu_game_structure *spu)
+{
+	struct structure_bsp *structure = global_structure_bsp_get();
+	struct collision_bsp *collision = TAG_BLOCK_GET_ELEMENT(&structure->collision_bsp, 0, struct collision_bsp);
+
+	spu->generation = (uint32_t)scenario_structure_bsp_generation;
+	spu->nodes = PS3_SPU_EA(structure->nodes.address);
+	spu->node_count = structure->nodes.count;
+	spu->bsp3d_nodes = PS3_SPU_EA(collision->bsp3d.nodes.address);
+	spu->bsp3d_node_count = collision->bsp3d.nodes.count;
+	spu->planes = PS3_SPU_EA(collision->bsp3d.planes.address);
+	spu->plane_count = collision->bsp3d.planes.count;
+	spu->leaves = PS3_SPU_EA(structure->leaves.address);
+	spu->leaf_count = structure->leaves.count;
+	spu->surface_references = PS3_SPU_EA(structure->surface_references.address);
+	spu->surface_reference_count = structure->surface_references.count;
+	spu->clusters = PS3_SPU_EA(structure->clusters.address);
+	spu->cluster_count = structure->clusters.count;
+	spu->cluster_size = sizeof(struct structure_visibility_cluster);
+	spu->cluster_subclusters_offset = offsetof(struct structure_visibility_cluster, subclusters);
+	spu->subcluster_size = sizeof(struct structure_visibility_subcluster);
+	spu->subcluster_surfaces_offset = offsetof(struct structure_visibility_subcluster, surface_indices);
+	spu->surface_count = structure->surfaces.count;
+	spu->world_bounds[0] = structure->world_bounds.x0;
+	spu->world_bounds[1] = structure->world_bounds.x1;
+	spu->world_bounds[2] = structure->world_bounds.y0;
+	spu->world_bounds[3] = structure->world_bounds.y1;
+	spu->world_bounds[4] = structure->world_bounds.z0;
+	spu->world_bounds[5] = structure->world_bounds.z1;
+}
+
+/* port: structure_visibility_build_surfaces with no clusters given, the clusters in the sphere found here and the rest
+the SPU's: FALSE when it cannot take the search */
+boolean structure_visibility_build_surfaces_spu(
+	spu_game_shadow *job,
+	long *surface_indices,
+	short maximum_count,
+	real_point3d const *bounding_sphere_center,
+	real bounding_sphere_radius,
+	real_rectangle3d const *bounding_box,
+	short bounding_surface_count,
+	real_plane3d const *bounding_surfaces)
+{
+	struct structure_bsp *structure = global_structure_bsp_get();
+	struct location center_location;
+	short found_cluster_indices[MAXIMUM_CLUSTERS_PER_STRUCTURE];
+	short index;
+
+	if (!structure || !structure_bsp_port_verify(structure) || !bounding_box ||
+		bounding_surface_count > SPU_GAME_SHADOW_PLANES || maximum_count > 4096)
+	{
+		return FALSE;
+	}
+	structure_visibility_spu_structure(&job->structure);
+	job->environment_flags = PS3_SPU_EA(render.environment_surface_flags);
+	job->surfaces = PS3_SPU_EA(surface_indices);
+	job->maximum_count = maximum_count;
+	job->center[0] = bounding_sphere_center->x;
+	job->center[1] = bounding_sphere_center->y;
+	job->center[2] = bounding_sphere_center->z;
+	job->radius = bounding_sphere_radius;
+	job->bounds[0] = bounding_box->x0;
+	job->bounds[1] = bounding_box->x1;
+	job->bounds[2] = bounding_box->y0;
+	job->bounds[3] = bounding_box->y1;
+	job->bounds[4] = bounding_box->z0;
+	job->bounds[5] = bounding_box->z1;
+	job->plane_count = bounding_surface_count;
+	for (index = 0; index < bounding_surface_count; index++)
+	{
+		job->planes[index][0] = bounding_surfaces[index].n.i;
+		job->planes[index][1] = bounding_surfaces[index].n.j;
+		job->planes[index][2] = bounding_surfaces[index].n.k;
+		job->planes[index][3] = bounding_surfaces[index].d;
+	}
+	job->cluster_count = NONE;
+	if (bounding_sphere_radius >= structure_sphere_threshold)
+	{
+		scenario_location_from_point(&center_location, bounding_sphere_center);
+		if (center_location.cluster_index != NONE)
+		{
+			job->cluster_count = structure_clusters_in_sphere(
+				center_location.cluster_index,
+				bounding_sphere_center,
+				bounding_sphere_radius,
+				MAXIMUM_CLUSTERS_PER_STRUCTURE,
+				found_cluster_indices);
+			job->cluster_count = MIN(job->cluster_count, SPU_GAME_SHADOW_CLUSTERS);
+			for (index = 0; index < job->cluster_count; index++)
+			{
+				job->clusters[index] = found_cluster_indices[index];
+			}
+		}
+	}
+
+	return TRUE;
+}
+#endif
+
 static void structure_visibility_traverse_cluster(
 	short cluster_index,
 	struct portal_hull const *visible_region)
@@ -1671,10 +1668,8 @@ static void structure_visibility_traverse_cluster(
 		0x3EE,
 		valid_portal_hull(visible_region));
 
-	/* port: a cluster past the rendered clusters' room is not rendered, nor
-	is any past it traversed (render.rendered_clusters is not written past).
-	As the clusters being traversed are each rendered, this bounds how deep
-	the traversal goes, however a map's portals lead */
+	/* port: a cluster past the rendered clusters' room is not rendered nor traversed past; as each traversed cluster
+	is rendered, this bounds the traversal's depth whatever a map's portals */
 	if (!BIT_VECTOR_TEST_FLAG(render.visible_cluster_flags, cluster_index) &&
 		render.rendered_cluster_count >= MAXIMUM_RENDERED_CLUSTERS)
 	{
@@ -1889,9 +1884,8 @@ void structure_visibility_compute(
 {
 	struct structure_bsp *structure = global_structure_bsp_get();
 
-	/* port: a bsp (from the map) bigger than the engine's flags and arrays
-	of its clusters and surfaces hold, or without its clusters' pvs, has
-	nothing of it visible */
+	/* port: a bsp (from the map) bigger than the flags and arrays of its clusters and surfaces, or without its
+	clusters' pvs, has nothing of it visible */
 	if (!structure_bsp_port_verify(structure))
 	{
 		if (!warned_about_invalid_structure_bsp)

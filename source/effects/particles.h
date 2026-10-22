@@ -1,8 +1,4 @@
-/*
-PARTICLES.H
-
-header included in hcex build.
-*/
+/* PARTICLES.H: header included in hcex build. */
 
 #ifndef __PARTICLES_H
 #define __PARTICLES_H
@@ -182,6 +178,11 @@ void particle_new(
 	struct new_particle_data const *data);
 void particles_update(
 	real dt);
+#ifdef HALO_PS3
+/* port: the free particles' rays from the SPU, and their contacts (particles.c) */
+void particles_update_end(
+	void);
+#endif
 
 /* ---------- globals */
 

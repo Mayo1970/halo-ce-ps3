@@ -72,11 +72,238 @@ void point_physics_dispose_from_old_map(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: the air's and water's masses, for the SPU's weather (weather_particle_systems.c) */
+void point_physics_air_and_water_masses(
+	float *air,
+	float *water)
+{
+	*air = global_air_mass_over_radius_cubed;
+	*water = global_water_mass_over_radius_cubed;
+}
+#endif
+
 real point_physics_definition_get_mass(
 	struct point_physics_definition *definition,
 	real radius)
 {
 	return definition->runtime_mass_over_radius_cubed * radius * radius * radius;
+}
+
+/* port: point_physics_update's forces (the wind, the medium, gravity, friction): its result so far and the rays'
+flags; apart for the effects' particles' rays on an SPU (particles.c) */
+static unsigned long point_physics_update_forces(
+	unsigned long flags,
+	struct point_physics_definition const *definition,
+	struct location *location,
+	short force_weather_palette_index,
+	real_point3d *position,
+	real_vector3d *translational_velocity,
+	real_vector3d const *translational_force,
+	real radius,
+	real dt,
+	unsigned long *collision_flags)
+{
+	unsigned long result = 0;
+	real_vector3d wind_vector;
+	real radius_squared = radius * radius;
+	real radius_cubed = radius_squared * radius;
+	real mass = definition->runtime_mass_over_radius_cubed;
+	real buoyancy_scale;
+	real friction;
+	real dt_over_mass;
+	real t;
+	long wind_flags;
+	boolean underwater;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
+
+	PS3_POINT_SPAN(ps3_span); /* port: (the timer build) */
+	wind_flags = 0;
+
+	SET_FLAG(wind_flags, _scenario_current_simple_bit, TEST_FLAG(definition->flags, _point_physics_simple_wind_bit));
+	SET_FLAG(wind_flags, _scenario_current_damped_bit, TEST_FLAG(definition->flags, _point_physics_damped_wind_bit));
+
+	if (TEST_FLAG(flags, _point_physics_ignore_position_bit))
+	{
+		underwater = TEST_FLAG(flags, _point_physics_ignore_position_under_water_bit);
+		scenario_get_current_from_weather_palette(position, &wind_vector, wind_flags, force_weather_palette_index);
+	}
+	else
+	{
+		underwater = scenario_get_current(location, position, &wind_vector, wind_flags);
+	}
+	PS3_POINT_ADD(_ps3_timer_point_wind, ps3_span); /* port: (the timer build) */
+
+	if (underwater)
+	{
+		mass += global_water_mass_over_radius_cubed;
+		buoyancy_scale = definition->runtime_water_buoyancy_scale;
+		friction = definition->water_friction * radius_squared;
+		SET_FLAG(result, _point_physics_in_water_bit, TRUE);
+	}
+	else
+	{
+		mass += global_air_mass_over_radius_cubed;
+		buoyancy_scale = definition->runtime_air_buoyancy_scale;
+		friction = definition->air_friction * radius_squared;
+		SET_FLAG(result, _point_physics_in_air_bit, TRUE);
+	}
+
+	mass = mass * radius_cubed;
+	dt_over_mass = dt / mass;
+
+	if (TEST_FLAG(definition->flags, _point_physics_no_gravity_bit))
+	{
+		buoyancy_scale = 0.0f;
+	}
+
+	if (translational_force && mass != 0.0f)
+	{
+		translational_velocity->i += dt_over_mass * translational_force->i;
+		translational_velocity->j += dt_over_mass * translational_force->j;
+		translational_velocity->k += dt_over_mass * translational_force->k;
+	}
+
+	translational_velocity->k = ((global_gravity * TICKS_PER_SECOND) * TICKS_PER_SECOND) * buoyancy_scale * dt + translational_velocity->k;
+
+	if (mass == 0.0f)
+	{
+		t = (friction == 0.0f) ? 0.0f : 1.0f;
+	}
+	else
+	{
+		t = dt_over_mass * friction;
+		t = PIN(t, 0.0f, 1.0f);
+	}
+
+	translational_velocity->i += (wind_vector.i - translational_velocity->i) * t;
+	translational_velocity->j += (wind_vector.j - translational_velocity->j) * t;
+	translational_velocity->k += (wind_vector.k - translational_velocity->k) * t;
+
+	*collision_flags = FLAG(_collision_test_front_facing_surfaces_bit);
+	SET_FLAG(*collision_flags, _collision_test_media_bit, TEST_FLAG(definition->flags, _point_physics_water_collisions_bit) && !TEST_FLAG(flags, _point_physics_force_no_collisions_bit));
+	SET_FLAG(*collision_flags, _collision_test_structure_bit, TEST_FLAG(definition->flags, _point_physics_structure_collisions_bit) && !TEST_FLAG(flags, _point_physics_force_no_collisions_bit));
+
+	return result;
+}
+
+/* port: point_physics_update's rays: the collided bits of its result (apart as the forces) */
+static unsigned long point_physics_update_rays(
+	unsigned long flags,
+	struct point_physics_definition const *definition,
+	struct location *location,
+	real_point3d *position,
+	real_vector3d *translational_velocity,
+	real_vector3d *collision_normal,
+	short *collision_material_type,
+	real radius,
+	real dt,
+	unsigned long collision_flags)
+{
+	unsigned long result = 0;
+	struct collision_result collision;
+	real_vector3d delta;
+	real_vector3d parallel;
+	real_vector3d perpendicular;
+	real offset;
+	short i;
+#ifdef HALO_PS3
+	uint64_t ps3_span;
+#endif
+
+	match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 269, global_current_collision_user_depth < MAXIMUM_COLLISION_USER_STACK_DEPTH);
+	global_current_collision_users[global_current_collision_user_depth++] = _collision_user_point_physics;
+
+	PS3_POINT_SPAN(ps3_span); /* port: (the timer build) */
+	for (i = 0; dt != 0.0f && i < MAXIMUM_POINT_PHYSICS_COLLISIONS; i++)
+	{
+		PS3_POINT_COUNT(_ps3_timer_point_rays); /* port: (the timer build) */
+		delta.i = translational_velocity->i * dt;
+		delta.j = translational_velocity->j * dt;
+		delta.k = translational_velocity->k * dt;
+
+		/* port: a test of no surface (the weather's) gives the point plus delta, collision_test_vector's same sum,
+		without its look-up of a location: the weather's shared one, set again before it is read */
+		if (TEST_FLAG(flags, _point_physics_force_no_collisions_bit))
+		{
+			add_vectors3d((real_vector3d const *)position, &delta, (real_vector3d *)position);
+			break;
+		}
+		if (!collision_test_vector(collision_flags, position, &delta, NONE, &collision))
+		{
+			if (collision.location.leaf_index != NONE)
+			{
+				*location = collision.location;
+			}
+
+			*position = collision.point;
+			break;
+		}
+
+		offset = MIN(radius, 0.005f);
+
+		if (collision.type == _collision_result_media)
+		{
+			SET_FLAG(result, _point_physics_collided_with_water_bit, TRUE);
+		}
+		else if (collision.type == _collision_result_structure)
+		{
+			SET_FLAG(result, _point_physics_collided_with_structure_bit, TRUE);
+		}
+
+		if (collision_normal)
+		{
+			*collision_normal = collision.plane.n;
+		}
+
+		if (collision_material_type)
+		{
+			*collision_material_type = collision.material_type;
+		}
+
+		component_vectors_from_normal3d(translational_velocity, &collision.plane.n, &parallel, &perpendicular);
+		translational_velocity->i = (1.0f - definition->contact_friction) * perpendicular.i - parallel.i * definition->elasticity;
+		translational_velocity->j = (1.0f - definition->contact_friction) * perpendicular.j - parallel.j * definition->elasticity;
+		translational_velocity->k = (1.0f - definition->contact_friction) * perpendicular.k - parallel.k * definition->elasticity;
+
+		if (collision.location.leaf_index != NONE)
+		{
+			*location = collision.location;
+		}
+
+		position->x = collision.plane.n.i * offset + collision.point.x;
+		position->y = collision.plane.n.j * offset + collision.point.y;
+		position->z = collision.plane.n.k * offset + collision.point.z;
+
+		dt -= collision.t * dt;
+	}
+	PS3_POINT_RAYS(flags, ps3_span); /* port: (the timer build) */
+
+	match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 312, global_current_collision_user_depth > 1);
+	--global_current_collision_user_depth;
+
+	return result;
+}
+
+/* port: a radius below zero, from a custom map, taken as zero (collision takes it as a distance) */
+static real point_physics_radius(
+	real radius)
+{
+	if (!(radius >= 0.0f))
+	{
+		static boolean radius_reported = FALSE;
+
+		if (!radius_reported)
+		{
+			error(_error_silent, "point physics: a radius below zero is treated as zero");
+			radius_reported = TRUE;
+		}
+		radius = 0.0f;
+	}
+
+	return radius;
 }
 
 unsigned long point_physics_update(
@@ -94,185 +321,24 @@ unsigned long point_physics_update(
 {
 	unsigned long result = 0;
 #ifdef HALO_PS3
-	uint64_t ps3_start, ps3_span;
+	uint64_t ps3_start;
 #endif
 
 	PS3_POINT_SPAN(ps3_start); /* port: (the timer build) */
 	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 185, position);
 	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 186, translational_velocity);
 	match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 187, !translational_force || valid_real_vector3d(translational_force));
-	/* A custom map can author a particle radius below zero. Collision uses
-	the radius as a distance, so that value is no radius. */
-	if (!(radius >= 0.0f))
-	{
-		static boolean radius_reported = FALSE;
-
-		if (!radius_reported)
-		{
-			error(_error_silent, "point physics: a radius below zero is treated as zero");
-			radius_reported = TRUE;
-		}
-		radius = 0.0f;
-	}
+	radius = point_physics_radius(radius);
 	match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 188, radius>=0.f);
 
 	if (dt != 0.0f)
 	{
-		struct collision_result collision;
-		real_vector3d wind_vector;
-		real_vector3d delta;
-		real_vector3d parallel;
-		real_vector3d perpendicular;
-		real radius_squared = radius * radius;
-		real radius_cubed = radius_squared * radius;
-		real mass = definition->runtime_mass_over_radius_cubed;
-		real buoyancy_scale;
-		real friction;
-		real dt_over_mass;
-		real offset;
-		real t;
 		unsigned long collision_flags;
-		long wind_flags;
-		boolean underwater;
-		short i;
 
-		PS3_POINT_SPAN(ps3_span); /* port: (the timer build) */
-		wind_flags = 0;
-
-		SET_FLAG(wind_flags, _scenario_current_simple_bit, TEST_FLAG(definition->flags, _point_physics_simple_wind_bit));
-		SET_FLAG(wind_flags, _scenario_current_damped_bit, TEST_FLAG(definition->flags, _point_physics_damped_wind_bit));
-
-		if (TEST_FLAG(flags, _point_physics_ignore_position_bit))
-		{
-			underwater = TEST_FLAG(flags, _point_physics_ignore_position_under_water_bit);
-			scenario_get_current_from_weather_palette(position, &wind_vector, wind_flags, force_weather_palette_index);
-		}
-		else
-		{
-			underwater = scenario_get_current(location, position, &wind_vector, wind_flags);
-		}
-		PS3_POINT_ADD(_ps3_timer_point_wind, ps3_span); /* port: (the timer build) */
-
-		if (underwater)
-		{
-			mass += global_water_mass_over_radius_cubed;
-			buoyancy_scale = definition->runtime_water_buoyancy_scale;
-			friction = definition->water_friction * radius_squared;
-			SET_FLAG(result, _point_physics_in_water_bit, TRUE);
-		}
-		else
-		{
-			mass += global_air_mass_over_radius_cubed;
-			buoyancy_scale = definition->runtime_air_buoyancy_scale;
-			friction = definition->air_friction * radius_squared;
-			SET_FLAG(result, _point_physics_in_air_bit, TRUE);
-		}
-
-		mass = mass * radius_cubed;
-		dt_over_mass = dt / mass;
-
-		if (TEST_FLAG(definition->flags, _point_physics_no_gravity_bit))
-		{
-			buoyancy_scale = 0.0f;
-		}
-
-		if (translational_force && mass != 0.0f)
-		{
-			translational_velocity->i += dt_over_mass * translational_force->i;
-			translational_velocity->j += dt_over_mass * translational_force->j;
-			translational_velocity->k += dt_over_mass * translational_force->k;
-		}
-
-		translational_velocity->k = ((global_gravity * TICKS_PER_SECOND) * TICKS_PER_SECOND) * buoyancy_scale * dt + translational_velocity->k;
-
-		if (mass == 0.0f)
-		{
-			t = (friction == 0.0f) ? 0.0f : 1.0f;
-		}
-		else
-		{
-			t = dt_over_mass * friction;
-			t = PIN(t, 0.0f, 1.0f);
-		}
-
-		translational_velocity->i += (wind_vector.i - translational_velocity->i) * t;
-		translational_velocity->j += (wind_vector.j - translational_velocity->j) * t;
-		translational_velocity->k += (wind_vector.k - translational_velocity->k) * t;
-
-		collision_flags = FLAG(_collision_test_front_facing_surfaces_bit);
-		SET_FLAG(collision_flags, _collision_test_media_bit, TEST_FLAG(definition->flags, _point_physics_water_collisions_bit) && !TEST_FLAG(flags, _point_physics_force_no_collisions_bit));
-		SET_FLAG(collision_flags, _collision_test_structure_bit, TEST_FLAG(definition->flags, _point_physics_structure_collisions_bit) && !TEST_FLAG(flags, _point_physics_force_no_collisions_bit));
-
-		match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 269, global_current_collision_user_depth < MAXIMUM_COLLISION_USER_STACK_DEPTH);
-		global_current_collision_users[global_current_collision_user_depth++] = _collision_user_point_physics;
-
-		PS3_POINT_SPAN(ps3_span); /* port: (the timer build) */
-		for (i = 0; dt != 0.0f && i < MAXIMUM_POINT_PHYSICS_COLLISIONS; i++)
-		{
-			PS3_POINT_COUNT(_ps3_timer_point_rays); /* port: (the timer build) */
-			delta.i = translational_velocity->i * dt;
-			delta.j = translational_velocity->j * dt;
-			delta.k = translational_velocity->k * dt;
-
-			/* port: a test of no surface (the weather's) gives the point plus delta, collision_test_vector's same sum,
-			without its look-up of a location: the weather's shared one, set again before it is read */
-			if (TEST_FLAG(flags, _point_physics_force_no_collisions_bit))
-			{
-				add_vectors3d((real_vector3d const *)position, &delta, (real_vector3d *)position);
-				break;
-			}
-			if (!collision_test_vector(collision_flags, position, &delta, NONE, &collision))
-			{
-				if (collision.location.leaf_index != NONE)
-				{
-					*location = collision.location;
-				}
-
-				*position = collision.point;
-				break;
-			}
-
-			offset = MIN(radius, 0.005f);
-
-			if (collision.type == _collision_result_media)
-			{
-				SET_FLAG(result, _point_physics_collided_with_water_bit, TRUE);
-			}
-			else if (collision.type == _collision_result_structure)
-			{
-				SET_FLAG(result, _point_physics_collided_with_structure_bit, TRUE);
-			}
-
-			if (collision_normal)
-			{
-				*collision_normal = collision.plane.n;
-			}
-
-			if (collision_material_type)
-			{
-				*collision_material_type = collision.material_type;
-			}
-
-			component_vectors_from_normal3d(translational_velocity, &collision.plane.n, &parallel, &perpendicular);
-			translational_velocity->i = (1.0f - definition->contact_friction) * perpendicular.i - parallel.i * definition->elasticity;
-			translational_velocity->j = (1.0f - definition->contact_friction) * perpendicular.j - parallel.j * definition->elasticity;
-			translational_velocity->k = (1.0f - definition->contact_friction) * perpendicular.k - parallel.k * definition->elasticity;
-
-			if (collision.location.leaf_index != NONE)
-			{
-				*location = collision.location;
-			}
-
-			position->x = collision.plane.n.i * offset + collision.point.x;
-			position->y = collision.plane.n.j * offset + collision.point.y;
-			position->z = collision.plane.n.k * offset + collision.point.z;
-
-			dt -= collision.t * dt;
-		}
-		PS3_POINT_RAYS(flags, ps3_span); /* port: (the timer build) */
-
-		match_assert("c:\\halo\\SOURCE\\physics\\point_physics.c", 312, global_current_collision_user_depth > 1);
-		--global_current_collision_user_depth;
+		result = point_physics_update_forces(flags, definition, location, force_weather_palette_index, position,
+			translational_velocity, translational_force, radius, dt, &collision_flags);
+		result |= point_physics_update_rays(flags, definition, location, position, translational_velocity,
+			collision_normal, collision_material_type, radius, dt, collision_flags);
 	}
 
 	if (debug_point_physics)
@@ -284,6 +350,51 @@ unsigned long point_physics_update(
 
 	return result;
 }
+
+#ifdef HALO_PS3
+/* port: point_physics_update with no force, its rays left for an SPU (particles.c): its checks and forces, the result
+so far, the rays' flags, the radius it takes. FALSE with no rays to make (a dt of 0: the result is all) */
+boolean point_physics_update_begin(
+	struct point_physics_definition const *definition,
+	struct location *location,
+	real_point3d *position,
+	real_vector3d *translational_velocity,
+	real *radius,
+	real dt,
+	unsigned long *result,
+	unsigned long *collision_flags)
+{
+	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 185, position);
+	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 186, translational_velocity);
+	*radius = point_physics_radius(*radius);
+	*result = 0;
+	*collision_flags = 0;
+	if (dt == 0.0f)
+	{
+		return FALSE;
+	}
+	*result = point_physics_update_forces(0, definition, location, NONE, position, translational_velocity, NULL, *radius,
+		dt, collision_flags);
+
+	return TRUE;
+}
+
+/* port: and its rays here, when the SPU did not make them */
+unsigned long point_physics_update_end(
+	struct point_physics_definition const *definition,
+	struct location *location,
+	real_point3d *position,
+	real_vector3d *translational_velocity,
+	real_vector3d *collision_normal,
+	short *collision_material_type,
+	real radius,
+	real dt,
+	unsigned long collision_flags)
+{
+	return point_physics_update_rays(0, definition, location, position, translational_velocity, collision_normal,
+		collision_material_type, radius, dt, collision_flags);
+}
+#endif
 
 struct point_physics_definition *point_physics_definition_interpolate(
 	struct point_physics_definition const *physics1,

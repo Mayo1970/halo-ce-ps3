@@ -1,163 +1,5 @@
-/*
-SCENARIO.C
-
-symbols in this file:
-0017DA90 0020:
-	_scenario_call_disconnect_from_structure_bsp_procs (0000)
-0017DAB0 0020:
-	_scenario_call_reconnect_to_structure_bsp_procs (0000)
-0017DAD0 0020:
-	_scenario_initialize (0000)
-0017DAF0 0050:
-	_scenario_initialize_for_new_map (0000)
-0017DB40 0010:
-	_scenario_dispose_from_old_map (0000)
-0017DB50 0010:
-	_scenario_frame_update (0000)
-0017DB60 0070:
-	_scenario_unload (0000)
-0017DBD0 0030:
-	_global_scenario_get (0000)
-0017DC00 0010:
-	_global_scenario_try_and_get (0000)
-0017DC10 0030:
-	_global_structure_bsp_get (0000)
-0017DC40 0030:
-	_global_collision_bsp_get (0000)
-0017DC70 0030:
-	_global_bsp3d_get (0000)
-0017DCA0 0030:
-	_scenario_get_game_globals (0000)
-0017DCD0 0050:
-	_global_structure_bsp_tag_index_get (0000)
-0017DD20 0010:
-	_scenario_location_award_bonus (0000)
-0017DD30 0020:
-	_default_material_definition_get (0000)
-0017DD50 00c0:
-	_scenario_material_definition_get (0000)
-0017DE10 00d0:
-	_scenario_location_deafening (0000)
-0017DEE0 0010:
-	_scenario_fog_at_point (0000)
-0017DEF0 0080:
-	_scenario_illumination_at_point (0000)
-0017DF70 0050:
-	_scenario_leaf_index_from_point (0000)
-0017DFC0 0060:
-	_scenario_get_sky_definition_index (0000)
-0017E020 0030:
-	_scenario_get_sky (0000)
-0017E050 00a0:
-	_scenario_test_pvs (0000)
-0017E0F0 0070:
-	_scenario_test_pas (0000)
-0017E160 00a0:
-	_scenario_location_potentially_visible_local (0000)
-0017E200 00a0:
-	_scenario_location_potentially_visible (0000)
-0017E2A0 0060:
-	_scenario_object_name_index_from_string (0000)
-0017E300 0090:
-	_scenario_fog_region_get_fog_index (0000)
-0017E390 0190:
-	_scenario_switch_structure_bsp (0000)
-0017E520 0050:
-	_scenario_reload_structure_bsp_if_necessary (0000)
-0017E570 0070:
-	_scenario_get_structure_reference_index_from_tag_index (0000)
-0017E5E0 0170:
-	_scenario_trigger_volume_test_point (0000)
-0017E750 0030:
-	_scenario_trigger_volume_test_object (0000)
-0017E780 0150:
-	_scenario_debug_to_file (0000)
-0017E8D0 0010:
-	_global_structure_bsp_index_get (0000)
-0017E8E0 00f0:
-	_scenario_load (0000)
-0017E9D0 00b0:
-	_scenario_location_from_point (0000)
-0017EA80 0020:
-	_scenario_location_from_line (0000)
-0017EAA0 0080:
-	_scenario_ensure_point_within_world (0000)
-0017EB20 0110:
-	_scenario_get_fog_region_index (0000)
-0017EC30 0130:
-	_scenario_location_underwater (0000)
-0017ED60 00f0:
-	_scenario_location_water_depth (0000)
-0017EE50 0520:
-	_scenario_get_sound_environment (0000)
-0017F370 00a0:
-	_interpolate_real_rgb_color (0000)
-0017F410 0330:
-	_scenario_get_atmospheric_fog (0000)
-002A053C 0011:
-	??_C@_0BB@PPPFHENE@scenario?5globals?$AA@ (0000)
-002A0550 0018:
-	??_C@_0BI@KNDLJHDD@?$CBbink_playback_active?$CI?$CJ?$AA@ (0000)
-002A0568 0023:
-	??_C@_0CD@MHNEBKHK@c?3?2halo?2SOURCE?2scenario?2scenario@ (0000)
-002A058C 0010:
-	??_C@_0BA@HJMKGEMF@global_scenario?$AA@ (0000)
-002A059C 0015:
-	??_C@_0BF@JLHIBHPB@global_structure_bsp?$AA@ (0000)
-002A05B4 0015:
-	??_C@_0BF@KKAPCCOB@global_collision_bsp?$AA@ (0000)
-002A05CC 000d:
-	??_C@_0N@BGGBCKLE@global_bsp3d?$AA@ (0000)
-002A05DC 0014:
-	??_C@_0BE@GJAAGEGH@global_game_globals?$AA@ (0000)
-002A05F0 0054:
-	??_C@_0FE@CGGKIBFC@material_type?$DN?$DNNONE?5?$HM?$HM?5?$CImaterial@ (0000)
-002A0648 0042:
-	??_C@_0EC@HOLIKEMB@cluster_index1?$DO?$DN0?5?$CG?$CG?5cluster_ind@ (0000)
-002A068C 0022:
-	??_C@_0CC@NOBONILA@failed?5to?5load?5structure?5bsp?5?8?$CFs@ (0000)
-002A06B0 0016:
-	??_C@_0BG@HHCFBLGP@?$DMno?5scenario?5loaded?$DO?6?$AA@ (0000)
-002A06C8 0007:
-	??_C@_06FJDCLHHM@?5dead?6?$AA@ (0000)
-002A06D0 002b:
-	??_C@_0CL@BODEOCHI@?5at?5?$CI?$CF?42f?0?$CF?42f?0?$CF?42f?$CJ?5?$CIleaf?$CD?$CFd?0cl@ (0000)
-002A06FC 000e:
-	??_C@_0O@NJBGJAF@player?50x?$CF08x?$AA@ (0000)
-002A070C 0015:
-	??_C@_0BF@OHELHNCO@?$CC?$CFs?$CC?5bsp?5?$CC?$CFs?$CC?5?$CI?$CD?$CFd?$CJ?6?$AA@ (0000)
-002A0724 0020:
-	??_C@_0CA@IJIAGEDC@need?5to?5get?5the?5following?5tags?3?$AA@ (0000)
-002A0744 0026:
-	??_C@_0CG@BPOMKFJA@scenario?5doesn?8t?5have?5a?5structur@ (0000)
-002A076C 0010:
-	??_C@_0BA@EONNEPHC@globals?2globals?$AA@ (0000)
-002A077C 000e:
-	??_C@_0O@GBNBMLBO@scenario_load?$AA@ (0000)
-002A078C 0004:
-	__real@44160000 (0000)
-002A0790 0004:
-	__real@c4160000 (0000)
-002A0794 0004:
-	__real@3b449ba6 (0000)
-002A0798 0004:
-	__real@bb449ba6 (0000)
-002A079C 0004:
-	__real@3db851ec (0000)
-002A07A0 0004:
-	__real@bdb851ec (0000)
-002A07A4 0004:
-	__real@bcf5c28f (0000)
-002A07A8 000b:
-	??_C@_0L@LIOBMPBJ@?$HMn?$HMn?$HMn?$HMn?$CFs?$AA@ (0000)
-002A07B4 0015:
-	??_C@_0BF@LNAHLDLC@no?5sound?5environment?$AA@ (0000)
-0030E790 006c:
-	_global_scenario_index (0000)
-	_global_structure_bsp_index (0004)
-004C0520 0375:
-	_bss_004c0520 (0000)
-*/
+/* SCENARIO.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/scenario/scenario.c. */
 
 /* ---------- headers */
 
@@ -227,6 +69,9 @@ extern boolean debug_sound_environment;
 
 long global_scenario_index = NONE;
 short global_structure_bsp_index = NONE;
+#ifdef HALO_PS3
+unsigned long scenario_structure_bsp_generation; /* port: (scenario.h) */
+#endif
 
 static scenario_structure_bsp_connection_proc scenario_structure_bsp_reconnect_proc_table[] =
 {
@@ -265,11 +110,8 @@ static struct memory_status scenario_memory_status =
 	0,
 };
 
-/*
- * csplit attributes both tables to global_structure_bsp_index in the January
- * object.  Use that owner when reading the tables so the relocation destination
- * remains the same as the original object.
- */
+/* csplit attributes both tables to global_structure_bsp_index in the January object: they are read through that
+ * owner, so the relocation destination stays the original's. */
 
 struct structure_bsp *global_structure_bsp;
 struct scenario *global_scenario;
@@ -340,10 +182,8 @@ void scenario_dispose_from_old_map(
 void scenario_frame_update(
 	real delta_time)
 {
-	/* A frame was a tick on the Xbox; the native builds draw several frames
-	per tick (port/linux/game/render_interpolation.c), and the wind steps
-	its random walk once an update: step it once per 30 Hz tick of game
-	time. */
+	/* A frame was a tick on the Xbox; the native builds draw several a tick (render_interpolation.c), so the wind's
+	random walk steps once per 30 Hz tick of game time. */
 	static real leftover_ticks = 0.f;
 	long ticks;
 
@@ -375,6 +215,9 @@ void scenario_unload(
 	global_collision_bsp = NULL;
 	global_bsp3d = NULL;
 	global_game_globals = NULL;
+#ifdef HALO_PS3
+	scenario_structure_bsp_generation++; /* port: (scenario.h) */
+#endif
 
 	return;
 }
@@ -1060,9 +903,8 @@ boolean scenario_switch_structure_bsp(
 	/* port: (the bsp loaded before, loaded again if the new one is refused) */
 	short old_structure_bsp_index = NONE;
 
-	/* port: and one the per-bsp arrays hold (MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO:
-	breakable_surfaces.c's; a map's count. The retail scenarios have at most
-	13 bsps) */
+	/* port: and one the per-bsp arrays hold (MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO: breakable_surfaces.c's; a map's
+	count; the retail scenarios have at most 13 bsps) */
 	if (structure_bsp_index != global_structure_bsp_index &&
 		structure_bsp_index >= 0 &&
 		structure_bsp_index < global_scenario->structure_bsp_references.count &&
@@ -1092,9 +934,8 @@ boolean scenario_switch_structure_bsp(
 			global_structure_bsp_index = NONE;
 		}
 
-		/* port: and a bsp whose counts the game's fixed arrays can't hold
-		(its clusters above all: structure_bsp_port_verify) is refused, as
-		one that didn't load */
+		/* port: and a bsp whose counts the fixed arrays can't hold (its clusters above all: structure_bsp_port_verify)
+		is refused, as one that didn't load */
 		loaded = scenario_structure_bsp_load(reference);
 		if (loaded &&
 			!structure_bsp_port_verify(structure_bsp_definition_get(reference->structure_bsp.index)))
@@ -1103,12 +944,8 @@ boolean scenario_switch_structure_bsp(
 			scenario_structure_bsp_unload(reference);
 			loaded = FALSE;
 		}
-		/* port: a bsp refused (by its checks: cache_files.c) after the old
-		one was let go of leaves the game with none, where the old one's
-		pointers lead into what was read in its place: the old one is loaded
-		again (it loaded before), and with that refused too the game goes back
-		to the main menu with no bsp, rather than play on in a bsp it hasn't
-		checked. (A map's first bsp refused refuses the map: scenario_load) */
+		/* port: a bsp refused (cache_files.c's checks) after the old one was let go loads the old one again; with that
+		refused too, the main menu with no bsp (a map's first bsp refused refuses the map: scenario_load) */
 		if (!loaded)
 		{
 			error(_error_immediate, "failed to load structure bsp #%d", structure_bsp_index);
@@ -1158,6 +995,9 @@ boolean scenario_switch_structure_bsp(
 
 		collision_log_enable(TRUE);
 		main_start_time();
+#ifdef HALO_PS3
+		scenario_structure_bsp_generation++; /* port: (scenario.h) */
+#endif
 	}
 
 	return result;
@@ -1434,44 +1274,14 @@ void scenario_get_atmospheric_fog(
 		sky = NULL;
 		if (tag_reference_index != NONE)
 			sky = sky_definition_get(tag_reference_index);
-		/*
-		 * The January binary keeps this default-sky lookup and the
-		 * scenario_get_sky() lookup in the else branch as two SEPARATE tails,
-		 * even though both end in the same sky_definition_get('sky ') call and
-		 * converge on the shared join below.  XDK 3911 CL (13.00.9254.1) instead
-		 * tail-merges them: it copies the else's definition_index EAX->ECX to
-		 * unify the pushed index register and folds both paths onto a single
-		 * NULL in EAX.  The original keeps site-1's NULL in EAX and the else's
-		 * NULL in ECX, so the two tails stay distinct and are never merged.
-		 *
-		 * We could not reproduce that un-merged codegen with ordinary C.  Roughly
-		 * forty source shapes were tried: NULL placement before/after the call,
-		 * ternary, branch-diamond, goto, explicit if/else, reusing
-		 * tag_reference_index; plus branch-order swap, hoisted NULL, short vs long
-		 * sky_index, second-expansion variants, translation-unit function
-		 * count/position, and register-pressure isolation.  Every barrier-free
-		 * "NULL after the call" form merges; the only barrier-free no-merge form
-		 * (declaring the pointer NULL before the call) pins it into a callee-saved
-		 * register and cascades ~189 bytes of downstream divergence.
-		 *
-		 * Two _ReadWriteBarrier() intrinsics reproduce the January object exactly
-		 * (816/816 bytes, 38/38 relocations, strict COFF compare).  They emit no
-		 * code; they stand in for whatever zero-byte construct the original source
-		 * used (a pragma or a debug-build macro), which the compiled binary can no
-		 * longer show us.  object_shadows.c uses the same intrinsic for the same
-		 * reason.  This first one blocks the tail-merge with the else branch.
-		 */
+		/* January keeps this tail and the else's apart; XDK 3911 CL tail-merges them, which ~40 C shapes could not stop.
+		 * Two _ReadWriteBarrier()s (no code, as in object_shadows.c) match the object exactly: this one stops the merge. */
 		_ReadWriteBarrier();
 	}
 	else
 	{
 		sky = scenario_get_sky(sky_index);
-		/*
-		 * Restores site-1's direct je jump-thread to the join, removing the
-		 * one-byte branch-hop that the first barrier alone leaves behind.  With
-		 * only the site-1 barrier the object matches to a single byte; this second
-		 * barrier closes it to a strict match.  See the note above.
-		 */
+		/* Restores site 1's direct je to the join: with the first barrier alone the object is a byte off (above). */
 		_ReadWriteBarrier();
 	}
 
@@ -1550,10 +1360,7 @@ void scenario_get_atmospheric_fog(
 	else
 		blended_distance = 0.0f;
 	render_fog->atmospheric_maximum_distance = blended_distance;
-	/*
-	 * Exactness exception to the preferred single-return house style: the two
-	 * saturated endpoints below reproduce the January control-flow exits.
-	 */
+	/* Exactness exception to the single-return style: the two saturated endpoints reproduce January's exits. */
 	if (fog_state->indoor_fog_scale < 0.0f)
 	{
 		render_fog->screen_external_intensity = 0.0f;
