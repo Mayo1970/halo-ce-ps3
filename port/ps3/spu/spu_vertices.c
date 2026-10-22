@@ -1,5 +1,5 @@
 /* SPU_VERTICES.C: an SPU thread that runs the Direct3D thread's conversions (d3d8_rsx.c): a draw's vertex elements to
-float4s and its indices less a base, into RSX memory, with d3d8_rsx.c's results bit for bit. */
+float4s, its indices less a base and its pixel shader's copy with constants, into RSX memory, as the PPE's bit for bit. */
 
 #include <spu_intrinsics.h>
 #include <spu_mfcio.h>
@@ -410,6 +410,32 @@ static void indices_task(const spu_vertices_task *task)
 	echo.indices += count;
 }
 
+/* (ps3_gpu.c's copy on the PPE: the microcode, then each constant's value; a source at any address) */
+static void fragment_task(const spu_vertices_task *task)
+{
+	const spu_vertices_fragment *fragment = (const spu_vertices_fragment *)task;
+	uint32_t bytes = fragment->bytes, quads = bytes / 16, quad, index;
+	const unsigned char *data;
+	vec_uint4 *out;
+
+	if (!quads || (bytes & 15) || bytes > SPU_VERTICES_FRAGMENT_BYTES ||
+		fragment->occurrence_count > SPU_VERTICES_OCCURRENCES)
+		return;
+	data = fetch_start(0, fragment->source, bytes);
+	out = (vec_uint4 *)output_take();
+	echo.input_wait_ticks += timed_wait(1 << TAG_INPUT);
+	for (quad = 0; quad < quads; quad++)
+		out[quad] = (vec_uint4)load_pattern(data + quad * 16, byte_order);
+	for (index = 0; index < fragment->occurrence_count; index++)
+	{
+		uint32_t occurrence = fragment->occurrences[index], at = occurrence >> 4, value = occurrence & 15;
+
+		if (at < quads && value < SPU_VERTICES_VALUES)
+			out[at] = spu_rl(*(const vec_uint4 *)fragment->values[value], 16);
+	}
+	output_put(fragment->output, bytes);
+}
+
 /* each task's tail goes out behind its output (task_publish), while the next task runs */
 static uint32_t run_tasks(uint32_t tail, uint32_t head)
 {
@@ -434,6 +460,8 @@ static uint32_t run_tasks(uint32_t tail, uint32_t head)
 				convert_task(&tasks[task]);
 			else if (tasks[task].kind == SPU_VERTICES_INDICES)
 				indices_task(&tasks[task]);
+			else if (tasks[task].kind == SPU_VERTICES_FRAGMENT)
+				fragment_task(&tasks[task]);
 			echo.busy_ticks += start - spu_read_decrementer();
 			echo.stage = 0;
 			task_publish(++tail);

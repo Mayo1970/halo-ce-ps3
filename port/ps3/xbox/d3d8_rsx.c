@@ -2118,6 +2118,10 @@ static void vertices_task_run(const spu_vertices_task *task)
 					(const unsigned char *)(uintptr_t)task->slots[slot].source + index * task->slots[slot].stride, out);
 		}
 	}
+	else if (task->kind == SPU_VERTICES_FRAGMENT)
+	{
+		ps3_gpu_fragment_task_run(task);
+	}
 }
 
 /* a constant for an input the declaration leaves out: one value read by every vertex */
