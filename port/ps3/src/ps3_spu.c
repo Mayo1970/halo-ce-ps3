@@ -1,5 +1,5 @@
 /* The SPU programs (port/ps3/spu, bin2s) on lv2 SPU threads: the DirectSound mixer (spu_mixer.c), a job a chunk;
-the Direct3D thread's conversions (spu_vertices.c) and the game thread's jobs (spu_game.c), each a ring. */
+the Direct3D thread's conversions (spu_vertices.c) and the game thread's jobs (spu_game.c, two SPUs), each a ring. */
 
 #include "ps3_host.h"
 #include "ps3_spu.h"
@@ -559,65 +559,75 @@ static void vertices_stop(void)
 	ps3_log_printf("[spu] vertices down\n");
 }
 
-/* ---------- the game thread's jobs (spu_game.c) */
+/* ---------- the game thread's jobs (spu_game.c): two SPUs with the same program, each a ring: the game's (the
+checkpoint's copies, the particles' rays) and the render's (the shadows, weather, lights, visibility, sprites, contrails) */
 
-static spu_game_bell game_bell;
-static spu_game_echo game_echo;
-static spu_game_setup game_setup;
-static spu_game_job *game_ring;
-static sysSpuImage game_image;
-static sys_spu_group_t game_group;
-static sys_spu_thread_t game_thread;
-static int game_group_running;
-static volatile int game_up;
-static uint32_t game_head;
-/* each ring slot's kind, for its wait's timer */
-static uint8_t game_kinds[SPU_GAME_RING];
-/* the waits by kind; the statistics read them and start them again */
-static uint64_t game_wait_ticks[SPU_GAME_KINDS];
-static uint32_t game_waits[SPU_GAME_KINDS];
-static uint32_t game_last_jobs[SPU_GAME_KINDS], game_last_busy[SPU_GAME_KINDS], game_last_dma[SPU_GAME_KINDS];
-static uint32_t game_last_hits, game_last_misses, game_last_refused;
+#define GAME_SPUS 2
+
+struct game_spu
+{
+	spu_game_bell bell;
+	spu_game_echo echo;
+	spu_game_setup setup;
+	spu_game_job *ring;
+	sysSpuImage image;
+	sys_spu_group_t group;
+	sys_spu_thread_t thread;
+	const char *name;
+	int group_running;
+	volatile int up;
+	uint32_t head;
+	/* each ring slot's kind, for its wait's timer */
+	uint8_t kinds[SPU_GAME_RING];
+	/* the waits by kind; the statistics read them and start them again */
+	uint64_t wait_ticks[SPU_GAME_KINDS];
+	uint32_t waits[SPU_GAME_KINDS];
+	uint32_t last_jobs[SPU_GAME_KINDS], last_busy[SPU_GAME_KINDS], last_dma[SPU_GAME_KINDS];
+	uint32_t last_hits, last_misses, last_refused;
+};
+
+static struct game_spu game_spus[GAME_SPUS] __attribute__((aligned(128)));
 
 static const int game_wait_timers[SPU_GAME_KINDS] =
 {
 	_ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_copy_wait,
 	_ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_shadow_wait, _ps3_timer_spu_game_weather_wait,
-	_ps3_timer_spu_game_particles_wait,
+	_ps3_timer_spu_game_particles_wait, _ps3_timer_spu_game_lights_wait, _ps3_timer_spu_game_visibility_wait,
+	_ps3_timer_spu_game_sprites_wait, _ps3_timer_spu_game_contrails_wait,
 };
 
-static void game_group_stop(int terminate)
+static void game_group_stop(struct game_spu *g, int terminate)
 {
 	u32 cause, status;
 
-	if (__sync_val_compare_and_swap(&game_group_running, 1, 0) != 1)
+	if (__sync_val_compare_and_swap(&g->group_running, 1, 0) != 1)
 		return;
 	if (terminate)
-		sysSpuThreadGroupTerminate(game_group, 0);
-	sysSpuThreadGroupJoin(game_group, &cause, &status);
-	sysSpuThreadGroupDestroy(game_group);
-	sysSpuImageClose(&game_image);
+		sysSpuThreadGroupTerminate(g->group, 0);
+	sysSpuThreadGroupJoin(g->group, &cause, &status);
+	sysSpuThreadGroupDestroy(g->group);
+	sysSpuImageClose(&g->image);
 }
 
 /* the SPU's own echo from its LS, then the SPU stops: the jobs not done are their callers' (their waits give 0) */
-static void game_fail(const char *reason)
+static void game_fail(struct game_spu *g, const char *reason)
 {
 	spu_game_echo copy;
 	u64 *words = (u64 *)&copy;
 	uint32_t index;
 	s32 result = 0;
 
-	game_up = 0;
+	g->up = 0;
 	memset(&copy, 0, sizeof(copy));
 	for (index = 0; index < sizeof(copy) / 8 && result == 0; index++)
-		result = sysSpuThreadReadLocalStorage(game_thread, game_echo.ls_address + index * 8, &words[index], 8);
-	game_group_stop(1);
-	ps3_log_printf("[spu] game: %s (%u of %u jobs done; the SPU's own echo: %u, stage %u, read 0x%08x); SPU off, the "
-		"PPE does the jobs\n", reason, (unsigned)game_echo.tail, (unsigned)game_head, (unsigned)copy.tail,
+		result = sysSpuThreadReadLocalStorage(g->thread, g->echo.ls_address + index * 8, &words[index], 8);
+	game_group_stop(g, 1);
+	ps3_log_printf("[spu] %s: %s (%u of %u jobs done; the SPU's own echo: %u, stage %u, read 0x%08x); SPU off, the "
+		"PPE does the jobs\n", g->name, reason, (unsigned)g->echo.tail, (unsigned)g->head, (unsigned)copy.tail,
 		(unsigned)copy.stage, (unsigned)result);
 }
 
-int ps3_spu_game_start(void)
+static int game_start(struct game_spu *g, const char *name, const char *group_name, const char *thread_name)
 {
 	sysSpuThreadGroupAttribute group_attributes;
 	sysSpuThreadAttribute thread_attributes;
@@ -625,77 +635,73 @@ int ps3_spu_game_start(void)
 	uint64_t start;
 	s32 result;
 
-	if (game_up)
+	if (g->up)
 		return 1;
+	g->name = name;
 	spus_initialize();
-	if (!game_ring)
-		game_ring = memalign(128, SPU_GAME_RING * sizeof(*game_ring));
-	if (!game_ring)
+	if (!g->ring)
+		g->ring = memalign(128, SPU_GAME_RING * sizeof(*g->ring));
+	if (!g->ring)
 	{
-		ps3_log_printf("[spu] game: no memory for the job ring\n");
+		ps3_log_printf("[spu] %s: no memory for the job ring\n", name);
 		return 0;
 	}
-	memset(&game_bell, 0, sizeof(game_bell));
-	memset(&game_echo, 0, sizeof(game_echo));
-	memset(&game_setup, 0, sizeof(game_setup));
-	game_head = 0;
-	game_setup.ring = (uint32_t)(uintptr_t)game_ring;
-	result = sysSpuImageImport(&game_image, spu_game_elf, SPU_IMAGE_PROTECT);
+	memset(&g->bell, 0, sizeof(g->bell));
+	memset(&g->echo, 0, sizeof(g->echo));
+	memset(&g->setup, 0, sizeof(g->setup));
+	g->head = 0;
+	g->setup.ring = (uint32_t)(uintptr_t)g->ring;
+	result = sysSpuImageImport(&g->image, spu_game_elf, SPU_IMAGE_PROTECT);
 	if (result != 0)
 	{
-		ps3_log_printf("[spu] game: sysSpuImageImport = 0x%08x\n", (unsigned)result);
+		ps3_log_printf("[spu] %s: sysSpuImageImport = 0x%08x\n", name, (unsigned)result);
 		return 0;
 	}
 	sysSpuThreadGroupAttributeInitialize(group_attributes);
-	sysSpuThreadGroupAttributeName(group_attributes, "halo_game");
-	result = sysSpuThreadGroupCreate(&game_group, 1, 100, &group_attributes);
+	sysSpuThreadGroupAttributeName(group_attributes, group_name);
+	result = sysSpuThreadGroupCreate(&g->group, 1, 100, &group_attributes);
 	if (result != 0)
 	{
-		ps3_log_printf("[spu] game: sysSpuThreadGroupCreate = 0x%08x\n", (unsigned)result);
-		sysSpuImageClose(&game_image);
+		ps3_log_printf("[spu] %s: sysSpuThreadGroupCreate = 0x%08x\n", name, (unsigned)result);
+		sysSpuImageClose(&g->image);
 		return 0;
 	}
 	sysSpuThreadAttributeInitialize(thread_attributes);
-	sysSpuThreadAttributeName(thread_attributes, "spu_game");
+	sysSpuThreadAttributeName(thread_attributes, thread_name);
 	sysSpuThreadArgumentInitialize(arguments);
-	arguments.arg0 = (u64)(uintptr_t)&game_bell;
-	arguments.arg1 = (u64)(uintptr_t)&game_echo;
-	arguments.arg2 = (u64)(uintptr_t)&game_setup;
-	result = sysSpuThreadInitialize(&game_thread, game_group, 0, &game_image, &thread_attributes, &arguments);
+	arguments.arg0 = (u64)(uintptr_t)&g->bell;
+	arguments.arg1 = (u64)(uintptr_t)&g->echo;
+	arguments.arg2 = (u64)(uintptr_t)&g->setup;
+	result = sysSpuThreadInitialize(&g->thread, g->group, 0, &g->image, &thread_attributes, &arguments);
 	if (result == 0)
-		result = sysSpuThreadGroupStart(game_group);
+		result = sysSpuThreadGroupStart(g->group);
 	if (result != 0)
 	{
-		ps3_log_printf("[spu] game: the SPU thread's start = 0x%08x\n", (unsigned)result);
-		sysSpuThreadGroupDestroy(game_group);
-		sysSpuImageClose(&game_image);
+		ps3_log_printf("[spu] %s: the SPU thread's start = 0x%08x\n", name, (unsigned)result);
+		sysSpuThreadGroupDestroy(g->group);
+		sysSpuImageClose(&g->image);
 		return 0;
 	}
-	game_group_running = 1;
+	g->group_running = 1;
 	start = ps3_timer_now();
-	while (game_echo.state != SPU_GAME_RUNNING &&
+	while (g->echo.state != SPU_GAME_RUNNING &&
 		ps3_timer_now() - start < ticks_from_microseconds(JOB_TIMEOUT_MICROSECONDS))
 		sysUsleep(100);
-	if (game_echo.state != SPU_GAME_RUNNING)
+	if (g->echo.state != SPU_GAME_RUNNING)
 	{
-		ps3_log_printf("[spu] game: the SPU thread did not report in 100 ms\n");
-		game_group_stop(1);
+		ps3_log_printf("[spu] %s: the SPU thread did not report in 100 ms\n", name);
+		game_group_stop(g, 1);
 		return 0;
 	}
-	game_up = 1;
-	ps3_log_printf("[spu] game up: a ring of %u jobs at %08x, the echo at %08x in its LS\n", (unsigned)SPU_GAME_RING,
-		(unsigned)(uintptr_t)game_ring, (unsigned)game_echo.ls_address);
+	g->up = 1;
+	ps3_log_printf("[spu] %s up: a ring of %u jobs at %08x, the echo at %08x in its LS\n", name,
+		(unsigned)SPU_GAME_RING, (unsigned)(uintptr_t)g->ring, (unsigned)g->echo.ls_address);
 	return 1;
 }
 
-int ps3_spu_game_running(void)
+static int game_done(struct game_spu *g, uint32_t ticket)
 {
-	return game_up;
-}
-
-int ps3_spu_game_done(uint32_t ticket)
-{
-	int done = ticket && (int32_t)(game_echo.tail - ticket) >= 0;
+	int done = ticket && (int32_t)(g->echo.tail - ticket) >= 0;
 
 	/* (the job's output after the tail that covers it) */
 	if (done)
@@ -703,22 +709,22 @@ int ps3_spu_game_done(uint32_t ticket)
 	return done;
 }
 
-int ps3_spu_game_wait(uint32_t ticket)
+static int game_wait(struct game_spu *g, uint32_t ticket)
 {
 	uint64_t start;
 	uint32_t spins = 0, kind;
 
-	if (ps3_spu_game_done(ticket))
+	if (game_done(g, ticket))
 		return 1;
-	if (!ticket || !game_up)
+	if (!ticket || !g->up)
 		return 0;
-	kind = game_kinds[(ticket - 1) & (SPU_GAME_RING - 1)];
+	kind = g->kinds[(ticket - 1) & (SPU_GAME_RING - 1)];
 	start = ps3_timer_now();
-	while ((int32_t)(game_echo.tail - ticket) < 0)
+	while ((int32_t)(g->echo.tail - ticket) < 0)
 	{
 		if (ps3_timer_now() - start > ticks_from_microseconds(JOB_TIMEOUT_MICROSECONDS))
 		{
-			game_fail("a job not done in 100 ms");
+			game_fail(g, "a job not done in 100 ms");
 			break;
 		}
 		/* (db16cyc: the other hardware thread takes these dispatch cycles) */
@@ -728,86 +734,138 @@ int ps3_spu_game_wait(uint32_t ticket)
 			sysUsleep(20);
 	}
 	__asm__ volatile("lwsync" ::: "memory");
-	game_waits[kind]++;
-	game_wait_ticks[kind] += ps3_timer_now() - start;
+	g->waits[kind]++;
+	g->wait_ticks[kind] += ps3_timer_now() - start;
 	ps3_timer_add(game_wait_timers[kind], start);
-	return (int32_t)(game_echo.tail - ticket) >= 0;
+	return (int32_t)(g->echo.tail - ticket) >= 0;
 }
 
-uint32_t ps3_spu_game_submit(uint32_t kind, uint32_t size, uint32_t source, uint32_t target)
+static uint32_t game_submit(struct game_spu *g, uint32_t kind, uint32_t size, uint32_t source, uint32_t target)
 {
 	spu_game_job *job;
 
-	if (!game_up || kind >= SPU_GAME_KINDS)
+	if (!g->up || kind >= SPU_GAME_KINDS)
 		return 0;
 	/* a slot of the ring is free once the SPU is past the job in it */
-	if (game_head - game_echo.tail >= SPU_GAME_RING && !ps3_spu_game_wait(game_head - SPU_GAME_RING + 1))
+	if (g->head - g->echo.tail >= SPU_GAME_RING && !game_wait(g, g->head - SPU_GAME_RING + 1))
 		return 0;
-	job = &game_ring[game_head & (SPU_GAME_RING - 1)];
+	job = &g->ring[g->head & (SPU_GAME_RING - 1)];
 	job->kind = kind;
 	job->size = size;
 	job->source = source;
 	job->target = target;
-	game_kinds[game_head & (SPU_GAME_RING - 1)] = (uint8_t)kind;
+	g->kinds[g->head & (SPU_GAME_RING - 1)] = (uint8_t)kind;
 	/* the job and what it reads before the bell: the SPU reads them when the bell's store wakes it */
 	__asm__ volatile("sync" ::: "memory");
-	game_bell.head = ++game_head;
-	return game_head;
+	g->bell.head = ++g->head;
+	return g->head;
 }
 
-void ps3_spu_game_statistics(struct ps3_spu_game_statistics *statistics)
+int ps3_spu_game_start(void)
 {
+	return game_start(&game_spus[0], "game", "halo_game", "spu_game");
+}
+
+int ps3_spu_game_running(void)
+{
+	return game_spus[0].up;
+}
+
+int ps3_spu_game_done(uint32_t ticket)
+{
+	return game_done(&game_spus[0], ticket);
+}
+
+int ps3_spu_game_wait(uint32_t ticket)
+{
+	return game_wait(&game_spus[0], ticket);
+}
+
+uint32_t ps3_spu_game_submit(uint32_t kind, uint32_t size, uint32_t source, uint32_t target)
+{
+	return game_submit(&game_spus[0], kind, size, source, target);
+}
+
+int ps3_spu_render_start(void)
+{
+	return game_start(&game_spus[1], "render", "halo_render", "spu_render");
+}
+
+int ps3_spu_render_running(void)
+{
+	return game_spus[1].up;
+}
+
+int ps3_spu_render_done(uint32_t ticket)
+{
+	return game_done(&game_spus[1], ticket);
+}
+
+int ps3_spu_render_wait(uint32_t ticket)
+{
+	return game_wait(&game_spus[1], ticket);
+}
+
+uint32_t ps3_spu_render_submit(uint32_t kind, uint32_t size, uint32_t source, uint32_t target)
+{
+	return game_submit(&game_spus[1], kind, size, source, target);
+}
+
+void ps3_spu_game_statistics(int render, struct ps3_spu_game_statistics *statistics)
+{
+	struct game_spu *g = &game_spus[render ? 1 : 0];
 	uint32_t kind;
 
 	memset(statistics, 0, sizeof(*statistics));
 	if (!timebase_frequency)
 		return;
-	statistics->up = game_up;
+	statistics->up = g->up;
 	for (kind = 0; kind < SPU_GAME_KINDS; kind++)
 	{
-		uint32_t jobs = game_echo.jobs[kind], busy = game_echo.busy_ticks[kind], dma = game_echo.dma_ticks[kind];
+		uint32_t jobs = g->echo.jobs[kind], busy = g->echo.busy_ticks[kind], dma = g->echo.dma_ticks[kind];
 
-		statistics->jobs[kind] = jobs - game_last_jobs[kind];
-		statistics->busy_microseconds[kind] = microseconds_from_ticks(busy - game_last_busy[kind]);
-		statistics->dma_microseconds[kind] = microseconds_from_ticks(dma - game_last_dma[kind]);
-		statistics->waits[kind] = game_waits[kind];
-		statistics->wait_microseconds[kind] = microseconds_from_ticks(game_wait_ticks[kind]);
-		game_last_jobs[kind] = jobs;
-		game_last_busy[kind] = busy;
-		game_last_dma[kind] = dma;
-		game_waits[kind] = 0;
-		game_wait_ticks[kind] = 0;
+		statistics->jobs[kind] = jobs - g->last_jobs[kind];
+		statistics->busy_microseconds[kind] = microseconds_from_ticks(busy - g->last_busy[kind]);
+		statistics->dma_microseconds[kind] = microseconds_from_ticks(dma - g->last_dma[kind]);
+		statistics->waits[kind] = g->waits[kind];
+		statistics->wait_microseconds[kind] = microseconds_from_ticks(g->wait_ticks[kind]);
+		g->last_jobs[kind] = jobs;
+		g->last_busy[kind] = busy;
+		g->last_dma[kind] = dma;
+		g->waits[kind] = 0;
+		g->wait_ticks[kind] = 0;
 	}
-	statistics->cache_hits = game_echo.cache_hits - game_last_hits;
-	statistics->cache_misses = game_echo.cache_misses - game_last_misses;
-	statistics->refused = game_echo.refused - game_last_refused;
-	game_last_hits = game_echo.cache_hits;
-	game_last_misses = game_echo.cache_misses;
-	game_last_refused = game_echo.refused;
+	statistics->cache_hits = g->echo.cache_hits - g->last_hits;
+	statistics->cache_misses = g->echo.cache_misses - g->last_misses;
+	statistics->refused = g->echo.refused - g->last_refused;
+	g->last_hits = g->echo.cache_hits;
+	g->last_misses = g->echo.cache_misses;
+	g->last_refused = g->echo.refused;
 }
 
-static void game_stop(void)
+static void game_stop(struct game_spu *g)
 {
 	uint64_t start;
 
-	if (!game_group_running)
+	if (!g->group_running)
 		return;
-	game_up = 0;
+	g->up = 0;
 	__asm__ volatile("lwsync" ::: "memory");
-	game_bell.quit = 1;
+	g->bell.quit = 1;
 	start = ps3_timer_now();
-	while (game_echo.state != SPU_GAME_EXITED &&
+	while (g->echo.state != SPU_GAME_EXITED &&
 		ps3_timer_now() - start < ticks_from_microseconds(JOB_TIMEOUT_MICROSECONDS))
 		sysUsleep(1000);
-	if (game_echo.state != SPU_GAME_EXITED)
-		ps3_log_printf("[spu] game: the SPU thread did not end in 100 ms; its group is terminated\n");
-	game_group_stop(game_echo.state != SPU_GAME_EXITED);
-	ps3_log_printf("[spu] game down\n");
+	if (g->echo.state != SPU_GAME_EXITED)
+		ps3_log_printf("[spu] %s: the SPU thread did not end in 100 ms; its group is terminated\n", g->name);
+	game_group_stop(g, g->echo.state != SPU_GAME_EXITED);
+	ps3_log_printf("[spu] %s down\n", g->name);
 }
 
 void ps3_spu_stop(void)
 {
 	mixer_stop();
 	vertices_stop();
-	game_stop();
+	game_stop(&game_spus[0]);
+	game_stop(&game_spus[1]);
 }

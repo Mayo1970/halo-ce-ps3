@@ -280,6 +280,7 @@ int main(int argc, char *argv[])
 	}
 	memory_sampling = 1;
 	ps3_log_printf("[spu] the game thread's jobs run on %s\n", ps3_spu_game_start() ? "an SPU" : "the PPE");
+	ps3_log_printf("[spu] the render's jobs run on %s\n", ps3_spu_render_start() ? "an SPU" : "the PPE");
 	result = halo_xbox_main();
 	ps3_log_printf("[ps3] the game returned %d\n", result);
 

@@ -1,5 +1,5 @@
-/* SPU_GAME.C: the game thread's jobs (spu_game.h): the checkpoint's copies (exact); the shadows' surfaces, the
-weather, the particles' rays (render only: the SPU rounds toward zero), each after the game function it names. */
+/* SPU_GAME.C: the game thread's jobs (spu_game.h): the checkpoint's copies (exact); the particles' rays and the render's
+jobs (render only: the SPU rounds toward zero), each after the game function it names. */
 
 #include <spu_intrinsics.h>
 #include <spu_mfcio.h>
@@ -941,7 +941,7 @@ static uint32_t color_pixel(const float *color)
 }
 
 /* render_frustum_cube_view_fraction */
-static float cube_view_fraction(const spu_game_weather *p, const float *bounds)
+static float cube_view_fraction(const float *projection, const float *bounds)
 {
 	float inverse_z0, inverse_z1, left, bottom, right, top, fraction, a, b;
 
@@ -951,20 +951,20 @@ static float cube_view_fraction(const spu_game_weather *p, const float *bounds)
 		return 1.0f;
 	inverse_z0 = reciprocal(bounds[4]);
 	inverse_z1 = reciprocal(bounds[5]);
-	a = (bounds[4] * p->projection[1] + bounds[0] * p->projection[0]) * -inverse_z0;
-	b = (bounds[5] * p->projection[1] + bounds[0] * p->projection[0]) * -inverse_z1;
+	a = (bounds[4] * projection[1] + bounds[0] * projection[0]) * -inverse_z0;
+	b = (bounds[5] * projection[1] + bounds[0] * projection[0]) * -inverse_z1;
 	left = a < b ? a : b;
 	left = left > -1.0f ? left : -1.0f;
-	a = (bounds[4] * p->projection[3] + bounds[2] * p->projection[2]) * -inverse_z0;
-	b = (bounds[5] * p->projection[3] + bounds[2] * p->projection[2]) * -inverse_z1;
+	a = (bounds[4] * projection[3] + bounds[2] * projection[2]) * -inverse_z0;
+	b = (bounds[5] * projection[3] + bounds[2] * projection[2]) * -inverse_z1;
 	bottom = a < b ? a : b;
 	bottom = bottom > -1.0f ? bottom : -1.0f;
-	a = (bounds[4] * p->projection[1] + bounds[1] * p->projection[0]) * -inverse_z0;
-	b = (bounds[5] * p->projection[1] + bounds[1] * p->projection[0]) * -inverse_z1;
+	a = (bounds[4] * projection[1] + bounds[1] * projection[0]) * -inverse_z0;
+	b = (bounds[5] * projection[1] + bounds[1] * projection[0]) * -inverse_z1;
 	right = a > b ? a : b;
 	right = right < 1.0f ? right : 1.0f;
-	a = (bounds[4] * p->projection[3] + bounds[3] * p->projection[2]) * -inverse_z0;
-	b = (bounds[5] * p->projection[3] + bounds[3] * p->projection[2]) * -inverse_z1;
+	a = (bounds[4] * projection[3] + bounds[3] * projection[2]) * -inverse_z0;
+	b = (bounds[5] * projection[3] + bounds[3] * projection[2]) * -inverse_z1;
 	top = a > b ? a : b;
 	top = top < 1.0f ? top : 1.0f;
 	fraction = (right - left) * (top - bottom) * 0.25f;
@@ -977,7 +977,31 @@ typedef struct
 	uint32_t vertices;
 	int32_t count;
 	int32_t flushed;
+	/* the order of the slot's first sprite (when build_sprite_get_group makes its group), NONE: none */
+	int32_t order;
 } weather_slot;
+
+/* a build_sprites_begin call: the window's values, its sprites' table, its mode and shader's fade, its limit, its
+counts and slots */
+typedef struct
+{
+	const float *world_to_view;
+	const float *projection;
+	float projection_world_to_screen_x;
+	const float *viewer_up;
+	const float *viewer_forward;
+	int32_t *big_sprite_count;
+	float *coverage;
+	const spu_game_weather_sprites *table;
+	int32_t mode;
+	int32_t fade_mode;
+	int32_t fade_alpha;
+	int32_t maximum;
+	int32_t *sprite_count;
+	float *centroid;
+	int32_t orders;
+	weather_slot *slots;
+} sprite_call;
 
 static void weather_flush(weather_slot *slot)
 {
@@ -990,32 +1014,33 @@ static void weather_flush(weather_slot *slot)
 	slot->flushed = slot->count;
 }
 
-/* build_sprite in world space with no flags (the weather's) */
-static void weather_sprite(weather_state *w, spu_game_weather_type *type, weather_slot *slots,
-	const weather_particle *particle, const float *position, const float *direction_world, float fade)
+/* build_sprite in world space (render_sprite.c), the u and v mirrors its only flags */
+static void sprite_build(sprite_call *c, int32_t sequence, int32_t sprite_index, const float *position,
+	const float *direction_world, float rotation, float scale, const float *color, float fade, uint32_t mirrors)
 {
-	spu_game_weather *p = w->p;
-	const spu_game_weather_sprites *table = w->table;
+	const spu_game_weather_sprites *table = c->table;
 	const spu_game_weather_sprite *sprite;
-	const float *m = p->world_to_view;
-	int32_t sequence = particle->sequence_index, sprite_index = (int16_t)(int32_t)particle->sprite_index;
-	float origin[3], direction[3], forward[3], left[3], up[3], x, y, z, scale, sine = 0.0f, cosine = 1.0f, alpha;
+	const float *m = c->world_to_view;
+	float origin[3], direction[3], forward[3], left[3], up[3], x, y, z, sine = 0.0f, cosine = 1.0f, alpha;
 	float bounds[6] = { REAL_MAX, -REAL_MAX, REAL_MAX, -REAL_MAX, REAL_MAX, -REAL_MAX };
 	uint32_t pixel, vertex;
 	weather_slot *slot;
 	float *out;
 
-	if (type->sprite_count >= type->particle_count || sequence < 0 || sequence >= table->sequence_count ||
+	if (*c->sprite_count >= c->maximum || sequence < 0 || sequence >= table->sequence_count ||
 		table->first_sprite[sequence] == NONE || sprite_index < 0 || sprite_index >= table->sprite_count[sequence])
 		return;
 	sprite = &table->sprites[table->first_sprite[sequence] + sprite_index];
-	if (sprite->slot < 0 || sprite->slot >= SPU_GAME_WEATHER_GROUPS || !type->vertices[sprite->slot])
+	if (sprite->slot < 0 || sprite->slot >= SPU_GAME_WEATHER_GROUPS)
 		return;
-	slot = &slots[sprite->slot];
-	if (slot->count >= type->particle_count)
+	slot = &c->slots[sprite->slot];
+	/* (the group is made before its vertices are known) */
+	if (slot->order == NONE)
+		slot->order = c->orders++;
+	if (!slot->vertices || slot->count >= c->maximum)
 		return;
-	if (particle->rotation != 0.0f)
-		sine_cosine(particle->rotation, &sine, &cosine);
+	if (rotation != 0.0f)
+		sine_cosine(rotation, &sine, &cosine);
 	x = position[0];
 	y = position[1];
 	z = position[2];
@@ -1031,20 +1056,20 @@ static void weather_sprite(weather_state *w, spu_game_weather_type *type, weathe
 	direction[0] = direction_world[0] * m[1] + direction_world[1] * m[4] + direction_world[2] * m[7];
 	direction[1] = direction_world[0] * m[2] + direction_world[1] * m[5] + direction_world[2] * m[8];
 	direction[2] = direction_world[0] * m[3] + direction_world[1] * m[6] + direction_world[2] * m[9];
-	if (type->render_mode == SPRITE_PARALLEL)
+	if (c->mode == SPRITE_PARALLEL)
 	{
 		memcpy(forward, direction, sizeof(forward));
 		normalize(forward);
 		cross3(origin, forward, left);
 		normalize(left);
 	}
-	else if (type->render_mode == SPRITE_PERPENDICULAR)
+	else if (c->mode == SPRITE_PERPENDICULAR)
 	{
-		const float *reference = p->viewer_up;
+		const float *reference = c->viewer_up;
 		float dot = dot3(direction, reference), along, vector_cross[3];
 
 		if (dot * dot > dot3(direction, direction) * 0.99f)
-			reference = p->viewer_forward;
+			reference = c->viewer_forward;
 		cross3(direction, reference, forward);
 		normalize(forward);
 		memcpy(up, direction, sizeof(up));
@@ -1065,22 +1090,21 @@ static void weather_sprite(weather_state *w, spu_game_weather_type *type, weathe
 		left[0] = left[2] = 0.0f;
 		left[1] = 1.0f;
 	}
-	scale = 2.0f * particle->radius * type->one_over_sprite_width;
-	if (type->render_mode == SPRITE_NORMAL && scale == 0.0f)
-		scale = -divide(origin[2], p->projection_world_to_screen_x);
+	if (c->mode == SPRITE_NORMAL && scale == 0.0f)
+		scale = -divide(origin[2], c->projection_world_to_screen_x);
 	scale = table->widths[sprite->slot] * scale;
-	if (type->fade_mode && type->render_mode != SPRITE_NORMAL)
+	if (c->fade_mode && c->mode != SPRITE_NORMAL)
 	{
 		float vertex_fade;
 
 		cross3(forward, left, up);
 		vertex_fade = absolute(divide(dot3(up, origin), square_root(dot3(origin, origin))));
-		if (type->fade_mode == 2)
+		if (c->fade_mode == 2)
 			vertex_fade = 1.0f - vertex_fade;
 		fade *= vertex_fade;
 	}
-	pixel = color_pixel(particle->color);
-	alpha = type->fade_alpha ? fade * 255.0f : (float)(pixel >> 24) * fade;
+	pixel = color_pixel(color);
+	alpha = c->fade_alpha ? fade * 255.0f : (float)(pixel >> 24) * fade;
 	pixel = (pixel & 0x00FFFFFF) | (((uint32_t)(int32_t)alpha & 0xFF) << 24);
 	out = (float *)(slot->staging + (slot->count - slot->flushed) * 96);
 	for (vertex = 0; vertex < 4; vertex++, out += 6)
@@ -1092,6 +1116,10 @@ static void weather_sprite(weather_state *w, spu_game_weather_type *type, weathe
 		float sprite_x = offset_x * cosine - offset_y * sine, sprite_y = offset_y * cosine + offset_x * sine;
 		uint32_t axis;
 
+		if (mirrors & SPU_GAME_SPRITE_U_MIRROR)
+			sprite_x = -sprite_x;
+		if (mirrors & SPU_GAME_SPRITE_V_MIRROR)
+			sprite_y = -sprite_y;
 		for (axis = 0; axis < 3; axis++)
 		{
 			float point = (forward[axis] * sprite_x + left[axis] * sprite_y) * scale + origin[axis];
@@ -1106,19 +1134,19 @@ static void weather_sprite(weather_state *w, spu_game_weather_type *type, weathe
 		out[4] = v;
 		((uint32_t *)out)[5] = pixel;
 	}
-	type->centroid[0] += origin[0];
-	type->centroid[1] += origin[1];
-	type->centroid[2] += origin[2];
+	c->centroid[0] += origin[0];
+	c->centroid[1] += origin[1];
+	c->centroid[2] += origin[2];
 	slot->count++;
-	type->sprite_count++;
+	(*c->sprite_count)++;
 	{
-		float coverage = cube_view_fraction(p, bounds);
+		float coverage = cube_view_fraction(c->projection, bounds);
 
-		p->coverage += coverage;
-		if (coverage > 0.5f && p->big_sprite_count++ > 10)
+		*c->coverage += coverage;
+		if (coverage > 0.5f && (*c->big_sprite_count)++ > 10)
 		{
 			slot->count--;
-			type->sprite_count--;
+			(*c->sprite_count)--;
 		}
 	}
 	if (slot->count - slot->flushed == WEATHER_STAGING_SPRITES)
@@ -1128,9 +1156,10 @@ static void weather_sprite(weather_state *w, spu_game_weather_type *type, weathe
 /* weather_particle_system_render's sprites: each particle in the first box it is visible in, out of the polyhedra */
 static void weather_render(weather_state *w, spu_game_weather_type *type)
 {
-	const spu_game_weather *p = w->p;
+	spu_game_weather *p = w->p;
 	static const float global_up[3] = { 0.0f, 0.0f, 1.0f };
 	weather_slot slots[SPU_GAME_WEATHER_GROUPS];
+	sprite_call call;
 	int32_t particle_index = type->first_particle_index, steps = 0, index, plane_total = 0;
 	float far_clip = type->distance_fade[3] < type->box_width ? type->distance_fade[3] : type->box_width;
 
@@ -1163,7 +1192,24 @@ static void weather_render(weather_state *w, spu_game_weather_type *type)
 		slots[index].vertices = type->vertices[index];
 		slots[index].count = 0;
 		slots[index].flushed = 0;
+		slots[index].order = NONE;
 	}
+	call.world_to_view = p->world_to_view;
+	call.projection = p->projection;
+	call.projection_world_to_screen_x = p->projection_world_to_screen_x;
+	call.viewer_up = p->viewer_up;
+	call.viewer_forward = p->viewer_forward;
+	call.big_sprite_count = &p->big_sprite_count;
+	call.coverage = &p->coverage;
+	call.table = w->table;
+	call.mode = type->render_mode;
+	call.fade_mode = type->fade_mode;
+	call.fade_alpha = type->fade_alpha;
+	call.maximum = type->particle_count;
+	call.sprite_count = &type->sprite_count;
+	call.centroid = type->centroid;
+	call.orders = 0;
+	call.slots = slots;
 	while (particle_index != NONE && steps++ < p->particle_maximum)
 	{
 		weather_particle *particle = weather_get(w, particle_index);
@@ -1218,7 +1264,9 @@ static void weather_render(weather_state *w, spu_game_weather_type *type)
 			fade_out = 1.0f - PIN(fade_out, 0.0f, 1.0f);
 			if (type->render_mode != SPRITE_NORMAL && dot3(direction, direction) == 0.0f)
 				direction = global_up;
-			weather_sprite(w, type, slots, particle, position, direction, fade_in * fade_out);
+			sprite_build(&call, particle->sequence_index, (int16_t)(int32_t)particle->sprite_index, position, direction,
+				particle->rotation, 2.0f * particle->radius * type->one_over_sprite_width, particle->color,
+				fade_in * fade_out, 0);
 		}
 	}
 	for (index = 0; index < SPU_GAME_WEATHER_GROUPS; index++)
@@ -1855,6 +1903,785 @@ static void particles_job(uint32_t params, uint32_t size)
 	answer_put(p->answer, SPU_GAME_DONE, (uint32_t)p->particle_count);
 }
 
+/* ---------- LIGHTS: each light's structure_visibility_build_surfaces (the SHADOW job's traversals), then
+structure_render_build_dynamic_triangles' sort (the flags found, in order) and triangles (structure_render.c) */
+
+/* the job's LS around the shadow state's: its parameters, a light, the triangles' staging */
+#define LIGHTS_PARAMS 2048
+#define LIGHTS_ENTRY 2304
+#define LIGHTS_TRIANGLES 57600
+
+/* the surfaces flagged, ascending, into out, the flags cleared (16-aligned, whole quadwords); their count */
+static uint32_t flags_ascending(uint32_t *flags, uint32_t words, int32_t *out)
+{
+	vec_uint4 *quads = (vec_uint4 *)flags;
+	uint32_t quad, found = 0;
+
+	for (quad = 0; quad < (words + 3) / 4; quad++)
+	{
+		uint32_t lane;
+
+		if (!spu_extract(spu_orx(quads[quad]), 0))
+			continue;
+		for (lane = 0; lane < 4; lane++)
+		{
+			uint32_t bits = flags[quad * 4 + lane];
+
+			while (bits)
+			{
+				uint32_t bit = 31 - spu_extract(spu_cntlz(spu_promote(bits & -bits, 0)), 0);
+
+				out[found++] = (int32_t)((quad * 4 + lane) * 32 + bit);
+				bits &= bits - 1;
+			}
+		}
+		quads[quad] = spu_splats(0u);
+	}
+	return found;
+}
+
+static void lights_job(uint32_t params, uint32_t size)
+{
+	shadow_state *s = (shadow_state *)scratch;
+	spu_game_lights *p = (spu_game_lights *)(scratch + LIGHTS_PARAMS);
+	spu_game_light *light = (spu_game_light *)(scratch + LIGHTS_ENTRY);
+	int16_t *triangles = (int16_t *)(scratch + LIGHTS_TRIANGLES);
+	uint32_t words, bytes, cursor = 0;
+	int32_t index;
+
+	if (size != sizeof(spu_game_lights) || (params & 15))
+	{
+		echo.refused++;
+		return;
+	}
+	dma_get(p, params, sizeof(*p), TAG_PARAMS);
+	dma_wait(1 << TAG_PARAMS);
+	if (p->structure.surface_count < 0 || p->structure.surface_count > MAXIMUM_SURFACES || p->light_count < 0 ||
+		p->light_count > SPU_GAME_LIGHTS_MAXIMUM || ((p->lights | p->indices | p->triangles) & 15) || p->arena_count < 0)
+	{
+		echo.refused++;
+		answer_put(p->answer, SPU_GAME_REFUSED, 0);
+		return;
+	}
+	memset(s, 0, sizeof(*s));
+	s->p.structure = p->structure;
+	s->p.maximum_count = SPU_GAME_LIGHT_SURFACES;
+	cache_check(p->structure.generation);
+	words = ((uint32_t)p->structure.surface_count + 31) / 32;
+	bytes = (words * 4 + 15) & ~15u;
+	/* (the shadow job's places: the flags found, the window's, the indices found, a list's chunk) */
+	s->flags = (uint32_t *)(scratch + 4096);
+	s->out = (int32_t *)(scratch + 37120);
+	s->chunk = scratch + 53504;
+	memset(s->flags, 0, bytes);
+	s->environment = fetch(scratch + 20480, p->environment_flags, words * 4);
+	for (index = 0; index < p->light_count; index++)
+	{
+		uint32_t found, rounded, n;
+
+		/* the last light's outputs and answer out before their buffers are used again */
+		dma_wait(1 << TAG_OUTPUT);
+		dma_get(light, p->lights + index * sizeof(*light), sizeof(*light), TAG_PARAMS);
+		dma_wait(1 << TAG_PARAMS);
+		light->status = SPU_GAME_REFUSED;
+		light->count = 0;
+		light->first = 0;
+		if (light->cluster_count <= SPU_GAME_LIGHT_CLUSTERS)
+		{
+			memcpy(s->p.center, light->center, sizeof(s->p.center));
+			s->p.radius = light->radius;
+			memcpy(s->p.bounds, light->bounds, sizeof(s->p.bounds));
+			s->p.cluster_count = light->cluster_count;
+			if (light->cluster_count > 0)
+			{
+				memcpy(s->p.clusters, fetch(s->chunk, light->clusters, (uint32_t)light->cluster_count * 2),
+					(uint32_t)light->cluster_count * 2);
+			}
+			s->found = 0;
+			s->refused = 0;
+			if (s->p.cluster_count >= 0)
+				shadow_clusters(s);
+			else
+				shadow_nodes(s);
+			found = flags_ascending(s->flags, words, s->out);
+			/* (each light's arena place at a multiple of 8 surfaces: 16-aligned indices and triangles) */
+			rounded = (found + 7) & ~7u;
+			if (!s->refused && cursor + rounded <= (uint32_t)p->arena_count)
+			{
+				for (n = 0; n < found; n++)
+				{
+					const int16_t *surface = (const int16_t *)cache_ptr(p->structure.surfaces + s->out[n] * 6, 6);
+
+					triangles[n * 3] = surface[0];
+					triangles[n * 3 + 1] = surface[1];
+					triangles[n * 3 + 2] = surface[2];
+				}
+				if (rounded)
+				{
+					put_exact(s->out, p->indices + cursor * 4, rounded * 4, TAG_OUTPUT);
+					put_exact(triangles, p->triangles + cursor * 6, rounded * 6, TAG_OUTPUT);
+				}
+				light->status = SPU_GAME_DONE;
+				light->count = (int32_t)found;
+				light->first = (int32_t)cursor;
+				cursor += rounded;
+			}
+		}
+		mfc_put(light, p->lights + index * sizeof(*light), sizeof(*light), TAG_OUTPUT, 0, 0);
+	}
+	answer_put(p->answer, SPU_GAME_DONE, (uint32_t)p->light_count);
+}
+
+/* ---------- VISIBILITY: structure_visibility_traverse_subclusters (structure_visibility.c, render_frustum_cube_visible of
+render_cameras.c), then structure_render_dynamic_triangles_from_bitvector's surfaces and triangles (structure_render.c) */
+
+#define VISIBILITY_FLAGS 12544
+#define VISIBILITY_CHUNK 29184
+#define VISIBILITY_INDICES 33536
+#define VISIBILITY_TRIANGLES 37888
+#define VISIBILITY_SURFACES 44288
+#define VISIBILITY_BATCH 1024
+/* the surfaces (6 bytes each) one fetch of 16 KB holds */
+#define VISIBILITY_WINDOW 2730
+
+/* render_frustum_cube_visible without the frustum against the cube: 0 when a side plane has the box's 8 corners out */
+static int cluster_cube_visible(const spu_game_visibility_cluster *cluster, const float *b)
+{
+	const float *f = cluster->world_bounds;
+	vec_float4 xs = { b[0], b[1], b[0], b[1] }, ys = { b[2], b[2], b[3], b[3] };
+	vec_float4 z0 = spu_splats(b[4]), z1 = spu_splats(b[5]), zero = spu_splats(0.0f);
+	int32_t plane_index;
+
+	if (f[1] < b[0] || f[3] < b[2] || f[5] < b[4] || f[0] > b[1] || f[2] > b[3] || f[4] > b[5])
+		return 0;
+	for (plane_index = 0; plane_index < 4; plane_index++)
+	{
+		const float *n = cluster->planes[plane_index];
+		vec_float4 xy = spu_add(spu_mul(xs, spu_splats(n[0])), spu_mul(ys, spu_splats(n[1])));
+		vec_uint4 m0 = spu_cmpgt(spu_sub(spu_add(xy, spu_mul(z0, spu_splats(n[2]))), spu_splats(n[3])), zero);
+		vec_uint4 m1 = spu_cmpgt(spu_sub(spu_add(xy, spu_mul(z1, spu_splats(n[2]))), spu_splats(n[3])), zero);
+
+		if (spu_extract(spu_gather(spu_and(m0, m1)), 0) == 0xF)
+			return 0;
+	}
+	return 1;
+}
+
+/* the batch's surfaces and triangles out, at done in the outputs */
+static void visibility_flush(const spu_game_visibility *p, const int32_t *indices, const int16_t *triangles, uint32_t done,
+	uint32_t n)
+{
+	put_exact(indices, p->indices + done * 4, n * 4, TAG_OUTPUT);
+	put_exact(triangles, p->triangles + done * 6, n * 6, TAG_OUTPUT);
+	dma_wait(1 << TAG_OUTPUT);
+}
+
+static void visibility_job(uint32_t params, uint32_t size)
+{
+	spu_game_visibility *p = (spu_game_visibility *)scratch;
+	const spu_game_structure *structure = &p->structure;
+	uint32_t *flags, words, pad_words, count = 0, maximum, quad, done = 0, n = 0, window_first = 0, window_count = 0;
+	const vec_uint4 *quads = (const vec_uint4 *)(scratch + VISIBILITY_FLAGS);
+	const unsigned char *window = NULL;
+	int32_t *indices;
+	int16_t *triangles;
+	int32_t cluster_index;
+
+	if (size != sizeof(spu_game_visibility) || (params & 15))
+	{
+		echo.refused++;
+		return;
+	}
+	dma_get(p, params, sizeof(*p), TAG_PARAMS);
+	dma_wait(1 << TAG_PARAMS);
+	if (structure->surface_count < 0 || structure->surface_count > MAXIMUM_SURFACES || p->cluster_count < 0 ||
+		p->cluster_count > SPU_GAME_VISIBILITY_CLUSTERS || p->maximum_count < 0 || ((p->flags | p->indices) & 3) ||
+		(p->triangles & 1))
+	{
+		echo.refused++;
+		answer_put(p->answer, SPU_GAME_REFUSED, 0);
+		return;
+	}
+	cache_check(structure->generation);
+	maximum = (uint32_t)p->maximum_count;
+	words = ((uint32_t)structure->surface_count + 31) / 32;
+	/* (the flags at their address's place in a quadword, as put_exact puts them; the words before it zero) */
+	pad_words = (p->flags & 15) / 4;
+	flags = (uint32_t *)(scratch + VISIBILITY_FLAGS) + pad_words;
+	memset(scratch + VISIBILITY_FLAGS, 0, ((pad_words + words) * 4 + 15) & ~15u);
+	for (cluster_index = 0; cluster_index < p->cluster_count && count < maximum; cluster_index++)
+	{
+		const spu_game_visibility_cluster *cluster = &p->clusters[cluster_index];
+		uint32_t block[2], subcluster_index;
+
+		if (cluster->cluster_index < 0 || cluster->cluster_index >= structure->cluster_count)
+			continue;
+		cache_read(block, structure->clusters + cluster->cluster_index * structure->cluster_size +
+			structure->cluster_subclusters_offset, 8);
+		/* (the game counts them in a short) */
+		if (block[0] > 32767)
+		{
+			echo.refused++;
+			answer_put(p->answer, SPU_GAME_REFUSED, 0);
+			return;
+		}
+		for (subcluster_index = 0; subcluster_index < block[0] && count < maximum; subcluster_index++)
+		{
+			uint32_t subcluster = block[1] + subcluster_index * structure->subcluster_size, list[2], listed;
+			float bounds[6];
+
+			cache_read(bounds, subcluster, 24);
+			if (!cluster_cube_visible(cluster, bounds))
+				continue;
+			cache_read(list, subcluster + structure->subcluster_surfaces_offset, 8);
+			for (listed = 0; listed < list[0] && count < maximum;)
+			{
+				uint32_t batch = list[0] - listed < 1024 ? list[0] - listed : 1024, index;
+				const int32_t *surfaces = fetch(scratch + VISIBILITY_CHUNK, list[1] + listed * 4, batch * 4);
+
+				for (index = 0; index < batch; index++)
+				{
+					uint32_t surface = (uint32_t)surfaces[index];
+
+					if (surface >= (uint32_t)structure->surface_count || bit_test(flags, surface))
+						continue;
+					if (count >= maximum)
+						break;
+					flags[surface >> 5] |= 1u << (surface & 31);
+					count++;
+				}
+				listed += batch;
+			}
+		}
+	}
+	put_exact(flags, p->flags, words * 4, TAG_OUTPUT);
+	indices = (int32_t *)(scratch + VISIBILITY_INDICES + (p->indices & 15));
+	triangles = (int16_t *)(scratch + VISIBILITY_TRIANGLES + (p->triangles & 15));
+	for (quad = 0; quad < (pad_words + words + 3) / 4; quad++)
+	{
+		uint32_t lane;
+
+		if (!spu_extract(spu_orx(quads[quad]), 0))
+			continue;
+		for (lane = 0; lane < 4; lane++)
+		{
+			uint32_t word = quad * 4 + lane - pad_words, bits = ((const uint32_t *)quads)[quad * 4 + lane];
+
+			while (bits)
+			{
+				uint32_t surface = word * 32 + 31 - spu_extract(spu_cntlz(spu_promote(bits & -bits, 0)), 0);
+				const int16_t *vertex_indices;
+
+				/* the surfaces block through 16 KB fetches, ascending as the surfaces come */
+				if (surface < window_first || surface >= window_first + window_count)
+				{
+					window_first = surface;
+					window_count = (uint32_t)structure->surface_count - surface < VISIBILITY_WINDOW ?
+						(uint32_t)structure->surface_count - surface : VISIBILITY_WINDOW;
+					window = fetch(scratch + VISIBILITY_SURFACES, structure->surfaces + surface * 6, window_count * 6);
+				}
+				vertex_indices = (const int16_t *)(window + (surface - window_first) * 6);
+				indices[n] = (int32_t)surface;
+				triangles[n * 3] = vertex_indices[0];
+				triangles[n * 3 + 1] = vertex_indices[1];
+				triangles[n * 3 + 2] = vertex_indices[2];
+				if (++n == VISIBILITY_BATCH)
+				{
+					visibility_flush(p, indices, triangles, done, n);
+					done += n;
+					n = 0;
+				}
+				bits &= bits - 1;
+			}
+		}
+	}
+	if (n)
+		visibility_flush(p, indices, triangles, done, n);
+	answer_put(p->answer, SPU_GAME_DONE, count);
+}
+
+/* ---------- SPRITES: render_particles' sprites (render_particles.c, render_frustum_sphere_diameter_in_pixels of
+render_cameras.c), each group's build_sprite calls (sprite_build) */
+
+#define SPRITES_GROUP 256
+#define SPRITES_TABLE 512
+#define SPRITES_PARTICLES 9216
+#define SPRITES_BATCH 64
+#define SPRITES_STAGING 13568
+
+/* render_particles' particle: its size cut, scale and fades, then its sprite */
+static void sprite_particle(sprite_call *call, const spu_game_sprites *p, const spu_game_sprite_group *group,
+	spu_game_sprite_particle *particle)
+{
+	const float *m = p->world_to_view, *position = particle->position;
+	float depth = m[9] * position[2] + m[6] * position[1] + m[3] * position[0] + m[12];
+	float clamped = absolute(depth), diameter;
+
+	clamped = clamped > 0.1f ? clamped : 0.1f;
+	diameter = divide(p->projection_world_to_screen[1], clamped) * particle->radius * 2.0f;
+	particle->flags &= ~SPU_GAME_SPRITE_BUILT;
+	if (diameter > group->lod_cutoff)
+	{
+		float fade = 1.0f, scale = (particle->radius + particle->radius) * group->one_over_width;
+		float remaining_life = particle->lifespan - particle->age;
+
+		particle->flags |= SPU_GAME_SPRITE_BUILT;
+		if (diameter < group->minimum_pixels)
+			scale = divide(group->minimum_pixels, diameter) * scale;
+		if (group->fade_in_time > 0.0f && particle->age < group->fade_in_time)
+			fade = divide(particle->age, group->fade_in_time);
+		if (group->fade_out_time > 0.0f && remaining_life < group->fade_out_time)
+			fade *= divide(remaining_life, group->fade_out_time);
+		sprite_build(call, particle->sequence_index, particle->sprite_index, position, particle->direction,
+			particle->rotation, scale, particle->color, fade,
+			particle->flags & (SPU_GAME_SPRITE_U_MIRROR | SPU_GAME_SPRITE_V_MIRROR));
+	}
+}
+
+/* each group's answer over it (sprite_count NONE: the PPE builds it), the window's big sprites and coverage in the
+parameters */
+static void sprites_job(uint32_t params, uint32_t size)
+{
+	spu_game_sprites *p = (spu_game_sprites *)scratch;
+	spu_game_sprite_group *group = (spu_game_sprite_group *)(scratch + SPRITES_GROUP);
+	spu_game_sprite_particle *batch = (spu_game_sprite_particle *)(scratch + SPRITES_PARTICLES);
+	const spu_game_weather_sprites *table = NULL;
+	weather_slot slots[SPU_GAME_SPRITE_SLOTS];
+	uint32_t table_ea = 0;
+	int32_t group_index;
+
+	if (size != sizeof(spu_game_sprites) || (params & 15))
+	{
+		echo.refused++;
+		return;
+	}
+	dma_get(p, params, sizeof(*p), TAG_PARAMS);
+	dma_wait(1 << TAG_PARAMS);
+	if (p->group_count < 0 || p->particle_count < 0 || ((p->groups | p->particles) & 15))
+	{
+		echo.refused++;
+		answer_put(p->answer, SPU_GAME_REFUSED, 0);
+		return;
+	}
+	for (group_index = 0; group_index < p->group_count; group_index++)
+	{
+		uint32_t group_ea = p->groups + group_index * sizeof(*group);
+		sprite_call call;
+		int32_t done, slot;
+
+		dma_wait(1 << TAG_OUTPUT);
+		dma_get(group, group_ea, sizeof(*group), TAG_PARAMS);
+		dma_wait(1 << TAG_PARAMS);
+		group->sprite_count = 0;
+		group->centroid[0] = group->centroid[1] = group->centroid[2] = 0.0f;
+		for (slot = 0; slot < SPU_GAME_SPRITE_SLOTS; slot++)
+		{
+			group->slot_sprites[slot] = 0;
+			group->slot_order[slot] = NONE;
+		}
+		if (group->first_particle < 0 || group->particle_count < 0 ||
+			group->first_particle > p->particle_count - group->particle_count ||
+			group->sprites_size > sizeof(spu_game_weather_sprites) || (group->sprites & 15) || !group->sprites)
+		{
+			group->sprite_count = NONE;
+			mfc_put(group, group_ea, sizeof(*group), TAG_OUTPUT, 0, 0);
+			continue;
+		}
+		if (group->sprites != table_ea)
+		{
+			table = fetch(scratch + SPRITES_TABLE, group->sprites, group->sprites_size);
+			table_ea = group->sprites;
+		}
+		for (slot = 0; slot < SPU_GAME_SPRITE_SLOTS; slot++)
+		{
+			slots[slot].staging = scratch + SPRITES_STAGING + slot * 2048 + (group->vertices[slot] & 15);
+			slots[slot].vertices = group->vertices[slot];
+			slots[slot].count = 0;
+			slots[slot].flushed = 0;
+			slots[slot].order = NONE;
+		}
+		call.world_to_view = p->world_to_view;
+		call.projection = p->projection;
+		call.projection_world_to_screen_x = p->projection_world_to_screen[0];
+		call.viewer_up = p->viewer_up;
+		call.viewer_forward = p->viewer_forward;
+		call.big_sprite_count = &p->big_sprite_count;
+		call.coverage = &p->coverage;
+		call.table = table;
+		call.mode = group->mode;
+		call.fade_mode = group->fade_mode;
+		call.fade_alpha = group->fade_alpha;
+		call.maximum = group->particle_count;
+		call.sprite_count = &group->sprite_count;
+		call.centroid = group->centroid;
+		call.orders = 0;
+		call.slots = slots;
+		for (done = 0; done < group->particle_count; done += SPRITES_BATCH)
+		{
+			int32_t n = group->particle_count - done < SPRITES_BATCH ? group->particle_count - done : SPRITES_BATCH, index;
+			uint32_t ea = p->particles + (uint32_t)(group->first_particle + done) * sizeof(*batch);
+
+			dma_wait(1 << TAG_OUTPUT);
+			dma_get(batch, ea, n * sizeof(*batch), TAG_BULK);
+			dma_wait(1 << TAG_BULK);
+			for (index = 0; index < n; index++)
+				sprite_particle(&call, p, group, &batch[index]);
+			mfc_put(batch, ea, n * sizeof(*batch), TAG_OUTPUT, 0, 0);
+		}
+		for (slot = 0; slot < SPU_GAME_SPRITE_SLOTS; slot++)
+		{
+			weather_flush(&slots[slot]);
+			group->slot_sprites[slot] = slots[slot].count;
+			group->slot_order[slot] = slots[slot].order;
+		}
+		mfc_put(group, group_ea, sizeof(*group), TAG_OUTPUT, 0, 0);
+	}
+	dma_wait(1 << TAG_OUTPUT);
+	mfc_put(p, params, sizeof(*p), TAG_OUTPUT, 0, 0);
+	answer_put(p->answer, SPU_GAME_DONE, (uint32_t)p->group_count);
+}
+
+/* ---------- CONTRAILS: render_contrail's strips (render_contrails.c), with contrail_fade, transition_function_evaluate
+(periodic_functions.c) and real_argb_color_to_pixel32's rounding */
+
+#define CONTRAILS_TABLE 256
+#define CONTRAILS_ENTRY 1536
+#define CONTRAILS_POINTS 2048
+#define CONTRAILS_VERTICES 34816
+#define CONTRAILS_TRIANGLES 83984
+
+/* rint: to nearest, a tie to even (|x| under 2^23) */
+static int32_t round_even(float x)
+{
+	int32_t n = (int32_t)x;
+	float rest = x - (float)n;
+
+	if (rest > 0.5f || (rest == 0.5f && (n & 1)))
+		n++;
+	else if (rest < -0.5f || (rest == -0.5f && (n & 1)))
+		n--;
+	return n;
+}
+
+/* (long)rint((double)c * 255.0f), exactly: c * 255 is the mantissa times 255 (32 bits) at c's exponent */
+static int32_t channel_rint(float c)
+{
+	union
+	{
+		float f;
+		uint32_t u;
+	} bits;
+	uint32_t exponent, product, n;
+
+	bits.f = c;
+	exponent = (bits.u >> 23) & 0xFF;
+	if (!exponent)
+		return 0;
+	product = ((bits.u & 0x7FFFFF) | 0x800000) * 255u;
+	if (exponent >= 150)
+	{
+		n = exponent - 150 < 8 ? product << (exponent - 150) : 0;
+	}
+	else if (exponent < 118)
+	{
+		n = 0;
+	}
+	else if (exponent == 118)
+	{
+		/* (under 1: over a half rounds up, a half to the even 0) */
+		n = product > 0x80000000u;
+	}
+	else
+	{
+		uint32_t shift = 150 - exponent, rest = product & ((1u << shift) - 1), half = 1u << (shift - 1);
+
+		n = product >> shift;
+		if (rest > half || (rest == half && (n & 1)))
+			n++;
+	}
+	return (bits.u & 0x80000000u) ? -(int32_t)n : (int32_t)n;
+}
+
+/* real_argb_color_to_pixel32 of an argb colour */
+static uint32_t contrail_pixel(const float *color)
+{
+	return (uint32_t)channel_rint(color[3]) | ((uint32_t)channel_rint(color[2]) << 8) |
+		((uint32_t)channel_rint(color[1]) << 16) | ((uint32_t)channel_rint(color[0]) << 24);
+}
+
+/* transition_function_evaluate on its table of size bytes */
+static float transition_evaluate(const unsigned char *table, int32_t size, float value)
+{
+	float scaled, fraction;
+	int32_t index;
+
+	value = PIN(value, 0.0f, 1.0f);
+	scaled = value * (float)(size - 1);
+	fraction = scaled - truncate_real(scaled);
+	index = round_even(scaled - 0.5f);
+	if ((int16_t)index == size - 1)
+		return (float)table[size - 1] * (1.0f / 255.0f);
+	if (index < 0 || index >= size - 1)
+		return value;
+	return (float)table[index] * (1.0f / 255.0f) * (1.0f - fraction) +
+		(float)table[index + 1] * (1.0f / 255.0f) * fraction;
+}
+
+/* normalize2d: the magnitude, 0 (the vector kept) under the epsilon */
+static float normalize_2d(float *v)
+{
+	float magnitude = square_root(v[0] * v[0] + v[1] * v[1]);
+
+	if (absolute(magnitude) < REAL_EPSILON)
+		return 0.0f;
+	{
+		float scale = reciprocal(magnitude);
+
+		v[0] *= scale;
+		v[1] *= scale;
+	}
+	return magnitude;
+}
+
+/* a state's width, lower and upper argb colours, flags (at width_offset); the width and colour scaled by density */
+static void contrail_state(const spu_game_contrail *c, int32_t state_index, float density, float *width, float *color)
+{
+	float state[10];
+	uint32_t flags, k;
+	float color_scale = 1.0f;
+
+	cache_read(state, c->states + (uint32_t)state_index * (uint32_t)c->state_size + (uint32_t)c->width_offset, 40);
+	flags = ((const uint32_t *)state)[9];
+	if (flags & c->color_mask)
+		color_scale = density;
+	*width = state[0];
+	if (flags & c->width_mask)
+		*width *= density;
+	for (k = 0; k < 4; k++)
+		color[k] = (state[5 + k] - state[1 + k]) * color_scale + state[1 + k];
+}
+
+static void contrail_strip(const spu_game_contrails *p, const spu_game_contrail *c,
+	const spu_game_contrail_point *points, const unsigned char *table, float *vertices, int16_t *triangles)
+{
+	static const float global_up[3] = { 0.0f, 0.0f, 1.0f };
+	int32_t index, count = c->point_count;
+	float texture_u = c->texture_u;
+	uint32_t *last;
+
+	for (index = 0; index < count; index++)
+	{
+		const spu_game_contrail_point *point = &points[index], *previous = index ? &points[index - 1] : NULL;
+		const float *position = point->position;
+		float color[4], width, half_width, orientation[3] = { 0.0f, 0.0f, 0.0f }, fade = 1.0f;
+		float *v0 = vertices + index * 12, *v1 = v0 + 6;
+		uint32_t k, pixel;
+
+		contrail_state(c, point->state_index, point->density, &width, color);
+		half_width = width;
+		if (point->flags & SPU_GAME_CONTRAIL_TRANSITIONING)
+		{
+			float next_width, next_color[4], transition = point->time;
+
+			contrail_state(c, point->state_index + 1, point->density, &next_width, next_color);
+			half_width = (next_width - width) * transition + width;
+			for (k = 0; k < 4; k++)
+				color[k] = (next_color[k] - color[k]) * transition + color[k];
+		}
+		if (c->tinted)
+		{
+			color[1] *= c->tint[0];
+			color[2] *= c->tint[1];
+			color[3] *= c->tint[2];
+		}
+		half_width *= 0.5f;
+		v0[3] = texture_u;
+		v0[4] = c->texture_v_far;
+		v1[3] = texture_u;
+		v1[4] = c->texture_offset_v;
+		if (c->render_type == 0)
+		{
+			v0[0] = position[0];
+			v0[1] = position[1];
+			v0[2] = position[2] - half_width;
+			v1[0] = position[0];
+			v1[1] = position[1];
+			v1[2] = position[2] + half_width;
+			if (c->fade_mode)
+			{
+				if (previous)
+				{
+					orientation[0] = previous->position[1] - position[1];
+					orientation[1] = position[0] - previous->position[0];
+				}
+				else
+				{
+					orientation[0] = position[1] - points[1].position[1];
+					orientation[1] = points[1].position[0] - position[0];
+				}
+				orientation[2] = 0.0f;
+				normalize(orientation);
+			}
+		}
+		else if (c->render_type == 1 || c->render_type == 2)
+		{
+			float perpendicular[2];
+
+			if (previous)
+			{
+				perpendicular[0] = previous->position[1] - position[1];
+				perpendicular[1] = position[0] - previous->position[0];
+			}
+			else
+			{
+				perpendicular[0] = position[1] - points[1].position[1];
+				perpendicular[1] = points[1].position[0] - position[0];
+			}
+			normalize_2d(perpendicular);
+			v0[0] = position[0] - perpendicular[0] * half_width;
+			v0[1] = position[1] - perpendicular[1] * half_width;
+			v0[2] = position[2];
+			v1[0] = position[0] + perpendicular[0] * half_width;
+			v1[1] = position[1] + perpendicular[1] * half_width;
+			v1[2] = position[2];
+			if (c->fade_mode)
+				memcpy(orientation, global_up, sizeof(orientation));
+		}
+		else
+		{
+			const float *from = previous ? previous->position : position;
+			const float *to = previous ? position : points[1].position;
+			float eye[3], tangent[3], normal[3];
+
+			for (k = 0; k < 3; k++)
+			{
+				eye[k] = p->camera[k] - from[k];
+				tangent[k] = to[k] - from[k];
+			}
+			normal[0] = tangent[2] * eye[1] - tangent[1] * eye[2];
+			normal[1] = tangent[0] * eye[2] - tangent[2] * eye[0];
+			normal[2] = tangent[1] * eye[0] - tangent[0] * eye[1];
+			normalize(normal);
+			for (k = 0; k < 3; k++)
+			{
+				v0[k] = position[k] - normal[k] * half_width;
+				v1[k] = position[k] + normal[k] * half_width;
+			}
+			if (c->fade_mode)
+			{
+				orientation[0] = normal[2] * tangent[1] - normal[1] * tangent[2];
+				orientation[1] = normal[0] * tangent[2] - normal[2] * tangent[0];
+				orientation[2] = normal[1] * tangent[0] - normal[0] * tangent[1];
+				normalize(orientation);
+			}
+		}
+		if (c->fade_mode)
+		{
+			float to_camera[3];
+
+			for (k = 0; k < 3; k++)
+				to_camera[k] = p->camera[k] - position[k];
+			fade = absolute(divide(dot3(orientation, to_camera), square_root(dot3(to_camera, to_camera))));
+			if (c->flags & SPU_GAME_CONTRAIL_FADES_SLOWLY)
+				fade = transition_evaluate(table, p->transition_size, fade);
+			if (c->fade_mode == 2)
+				fade = 1.0f - fade;
+		}
+		color[0] *= fade;
+		color[0] = PIN(color[0], 0.0f, 1.0f);
+		pixel = contrail_pixel(color);
+		((uint32_t *)v0)[5] = pixel;
+		((uint32_t *)v1)[5] = pixel;
+		texture_u += c->texture_u_step;
+	}
+	if (!(c->flags & SPU_GAME_CONTRAIL_FIRST_UNFADED))
+	{
+		((uint32_t *)vertices)[5] &= 0x00FFFFFF;
+		((uint32_t *)vertices)[11] &= 0x00FFFFFF;
+	}
+	last = (uint32_t *)(vertices + (count - 1) * 12);
+	if (!(c->flags & SPU_GAME_CONTRAIL_LAST_UNFADED))
+	{
+		last[5] &= 0x00FFFFFF;
+		last[11] &= 0x00FFFFFF;
+	}
+	for (index = 0; index < count - 1; index++)
+	{
+		int16_t *triangle = triangles + index * 6;
+
+		triangle[0] = (int16_t)(2 * index);
+		triangle[1] = (int16_t)(2 * index + 1);
+		triangle[2] = (int16_t)(2 * index + 2);
+		triangle[3] = (int16_t)(2 * index + 2);
+		triangle[4] = (int16_t)(2 * index + 1);
+		triangle[5] = (int16_t)(2 * index + 3);
+	}
+}
+
+/* each contrail's answer over it */
+static void contrails_job(uint32_t params, uint32_t size)
+{
+	spu_game_contrails *p = (spu_game_contrails *)scratch;
+	spu_game_contrail *c = (spu_game_contrail *)(scratch + CONTRAILS_ENTRY);
+	spu_game_contrail_point *points = (spu_game_contrail_point *)(scratch + CONTRAILS_POINTS);
+	const unsigned char *table = NULL;
+	int32_t index;
+
+	if (size != sizeof(spu_game_contrails) || (params & 15))
+	{
+		echo.refused++;
+		return;
+	}
+	dma_get(p, params, sizeof(*p), TAG_PARAMS);
+	dma_wait(1 << TAG_PARAMS);
+	if (p->contrail_count < 0 || (p->contrails & 15) || p->transition_size < 2 || p->transition_size > 1024)
+	{
+		echo.refused++;
+		answer_put(p->answer, SPU_GAME_REFUSED, 0);
+		return;
+	}
+	cache_check(p->generation);
+	if (p->transition_table)
+		table = fetch(scratch + CONTRAILS_TABLE, p->transition_table, (uint32_t)p->transition_size);
+	for (index = 0; index < p->contrail_count; index++)
+	{
+		uint32_t entry_ea = p->contrails + index * sizeof(*c);
+
+		dma_wait(1 << TAG_OUTPUT);
+		dma_get(c, entry_ea, sizeof(*c), TAG_PARAMS);
+		dma_wait(1 << TAG_PARAMS);
+		c->status = SPU_GAME_REFUSED;
+		if (c->point_count >= 2 && c->point_count <= SPU_GAME_CONTRAIL_POINTS && !(c->points & 15) &&
+			(c->render_type == 0 || c->render_type == 1 || c->render_type == 2 || c->render_type == 4) &&
+			(!(c->flags & SPU_GAME_CONTRAIL_FADES_SLOWLY) || !c->fade_mode || table) && c->state_size > 0 &&
+			c->width_offset >= 0 && c->width_offset + 40 <= c->state_size && !(c->vertices & 3) && !(c->triangles & 1))
+		{
+			float *vertices = (float *)(scratch + CONTRAILS_VERTICES + (c->vertices & 15));
+			int16_t *triangles = (int16_t *)(scratch + CONTRAILS_TRIANGLES + (c->triangles & 15));
+			int32_t k;
+
+			dma_get(points, c->points, (uint32_t)c->point_count * sizeof(*points), TAG_BULK);
+			dma_wait(1 << TAG_BULK);
+			for (k = 0; k < c->point_count; k++)
+			{
+				int32_t last = points[k].state_index + ((points[k].flags & SPU_GAME_CONTRAIL_TRANSITIONING) ? 1 : 0);
+
+				if (points[k].state_index < 0 || last >= c->state_count)
+					break;
+			}
+			if (k == c->point_count)
+			{
+				contrail_strip(p, c, points, table, vertices, triangles);
+				put_exact(vertices, c->vertices, (uint32_t)c->point_count * 48, TAG_OUTPUT);
+				put_exact(triangles, c->triangles, (uint32_t)(c->point_count - 1) * 12, TAG_OUTPUT);
+				c->status = SPU_GAME_DONE;
+			}
+		}
+		mfc_put(c, entry_ea, sizeof(*c), TAG_OUTPUT, 0, 0);
+	}
+	answer_put(p->answer, SPU_GAME_DONE, (uint32_t)p->contrail_count);
+}
+
 /* ---------- the jobs */
 
 static void run_job(const spu_game_job *job)
@@ -1885,6 +2712,18 @@ static void run_job(const spu_game_job *job)
 		break;
 	case SPU_GAME_PARTICLES:
 		particles_job(job->source, job->size);
+		break;
+	case SPU_GAME_LIGHTS:
+		lights_job(job->source, job->size);
+		break;
+	case SPU_GAME_VISIBILITY:
+		visibility_job(job->source, job->size);
+		break;
+	case SPU_GAME_SPRITES:
+		sprites_job(job->source, job->size);
+		break;
+	case SPU_GAME_CONTRAILS:
+		contrails_job(job->source, job->size);
 		break;
 	default:
 		echo.refused++;

@@ -1,5 +1,5 @@
-/* SPU_GAME.H: the game thread's jobs on an SPU (spu_game.c): the checkpoint's copies, the objects' shadows' surfaces,
-the weather, the effects' particles' rays. The SPU, the host layer (ps3_spu.c) and the game's units share it. */
+/* SPU_GAME.H: the game thread's jobs on two SPUs (spu_game.c): the checkpoint's copies and the particles' rays; the
+render's shadows, weather, lights, visibility, sprites, contrails. The SPU, ps3_spu.c and the game's units share it. */
 
 #ifndef __HALO_PS3_SPU_GAME_H
 #define __HALO_PS3_SPU_GAME_H
@@ -19,7 +19,11 @@ the weather, the effects' particles' rays. The SPU, the host layer (ps3_spu.c) a
 #define SPU_GAME_SHADOW 4
 #define SPU_GAME_WEATHER 5
 #define SPU_GAME_PARTICLES 6
-#define SPU_GAME_KINDS 7
+#define SPU_GAME_LIGHTS 7
+#define SPU_GAME_VISIBILITY 8
+#define SPU_GAME_SPRITES 9
+#define SPU_GAME_CONTRAILS 10
+#define SPU_GAME_KINDS 11
 
 /* a job's answer: done, or refused (the PPE does that job) */
 #define SPU_GAME_DONE 1
@@ -106,6 +110,9 @@ typedef struct
 	int32_t subcluster_surfaces_offset;
 	int32_t surface_count;
 	float world_bounds[6];
+	/* structure_bsp->surfaces: 3 int16 vertex indices (6 bytes) each */
+	uint32_t surfaces;
+	uint32_t pad[3];
 } spu_game_structure;
 
 /* ---------- SHADOW: structure_visibility_build_surfaces for an object's shadow */
@@ -317,10 +324,214 @@ typedef struct
 	uint32_t pad[3];
 } spu_game_particles;
 
+/* ---------- LIGHTS: a window pass's dynamic lights (structure_render_diffuse_light, _specular_light): each light's
+structure_visibility_build_surfaces, then structure_render_build_dynamic_triangles' sort and triangles */
+
+#define SPU_GAME_LIGHTS_MAXIMUM 128
+#define SPU_GAME_LIGHT_SURFACES 4096
+#define SPU_GAME_LIGHT_CLUSTERS 512
+
+/* a light's search, its answer over it */
+typedef struct
+{
+	float center[3];
+	float radius;
+	float bounds[6];
+	/* NONE: the nodes from the root; else these clusters' subclusters (int16 each) */
+	int32_t cluster_count;
+	uint32_t clusters;
+	/* answer: SPU_GAME_DONE with count surfaces at first in the arena, or SPU_GAME_REFUSED */
+	int32_t status;
+	int32_t count;
+	int32_t first;
+	uint32_t pad;
+} spu_game_light;
+
+typedef struct
+{
+	spu_game_structure structure;
+	/* render.environment_surface_flags */
+	uint32_t environment_flags;
+	uint32_t lights;
+	int32_t light_count;
+	/* the arena, arena_count surfaces: their indices ascending (int32 each), their triangles (3 int16 each) */
+	uint32_t indices;
+	uint32_t triangles;
+	int32_t arena_count;
+	uint32_t answer;
+	uint32_t pad;
+} spu_game_lights;
+
+/* ---------- VISIBILITY: structure_visibility_traverse_subclusters for the window's rendered clusters, then the
+surfaces it marked, ascending, and their triangles (structure_render_preprocess) */
+
+#define SPU_GAME_VISIBILITY_CLUSTERS 128
+
+typedef struct
+{
+	int32_t cluster_index;
+	/* render_frustum_cube_visible's: the frustum's world bounds, its four side planes */
+	float world_bounds[6];
+	float planes[4][4];
+	uint32_t pad;
+} spu_game_visibility_cluster;
+
+typedef struct
+{
+	spu_game_structure structure;
+	/* out: render.environment_surface_flags and _indices, the surfaces' triangles (3 int16 each) */
+	uint32_t flags;
+	uint32_t indices;
+	uint32_t triangles;
+	int32_t maximum_count;
+	uint32_t answer;
+	int32_t cluster_count;
+	uint32_t pad[2];
+	spu_game_visibility_cluster clusters[SPU_GAME_VISIBILITY_CLUSTERS];
+} spu_game_visibility;
+
+/* ---------- SPRITES: render_particles' sprites (build_sprite of render_sprite.c) for its groups the PPE gathered */
+
+#define SPU_GAME_SPRITE_SLOTS SPU_GAME_WEATHER_GROUPS
+#define SPU_GAME_SPRITE_U_MIRROR 1u
+#define SPU_GAME_SPRITE_V_MIRROR 2u
+/* out: the particle passed its size cut (it is rendered) */
+#define SPU_GAME_SPRITE_BUILT 0x80000000u
+
+typedef struct
+{
+	/* world space, the node's matrix applied */
+	float position[3];
+	float radius;
+	float direction[3];
+	float rotation;
+	float color[4];
+	float age;
+	float lifespan;
+	int16_t sequence_index;
+	int16_t sprite_index;
+	uint32_t flags;
+} spu_game_sprite_particle;
+
+typedef struct
+{
+	/* the particle definition's: its size cut, scale and fades; its orientation; its shader's fade mode, alpha from
+	the fade alone */
+	float lod_cutoff;
+	float minimum_pixels;
+	float one_over_width;
+	float fade_in_time;
+	float fade_out_time;
+	int16_t mode;
+	int16_t fade_mode;
+	int32_t fade_alpha;
+	/* its bitmap group's spu_game_weather_sprites */
+	uint32_t sprites;
+	uint32_t sprites_size;
+	/* each slot's locked vertices (0: none) */
+	uint32_t vertices[SPU_GAME_SPRITE_SLOTS];
+	int32_t first_particle;
+	int32_t particle_count;
+	/* answer: each slot's sprites, the order of the slot's first use (NONE: none), the sprites, their origins' sum */
+	int32_t slot_sprites[SPU_GAME_SPRITE_SLOTS];
+	int32_t slot_order[SPU_GAME_SPRITE_SLOTS];
+	int32_t sprite_count;
+	float centroid[3];
+	uint32_t pad;
+} spu_game_sprite_group;
+
+typedef struct
+{
+	/* the window, as the weather's */
+	float world_to_view[16];
+	float projection[4];
+	float projection_world_to_screen[2];
+	/* build_sprite_globals' big sprites so far (answer: after the job), the coverage the job adds (answer) */
+	int32_t big_sprite_count;
+	float coverage;
+	float viewer_up[3];
+	float viewer_forward[3];
+	uint32_t groups;
+	int32_t group_count;
+	uint32_t particles;
+	int32_t particle_count;
+	uint32_t answer;
+	uint32_t pad;
+} spu_game_sprites;
+
+/* ---------- CONTRAILS: render_contrail's strips (render_contrails.c) for the contrails the PPE gathered */
+
+#define SPU_GAME_CONTRAIL_POINTS 1024
+/* spu_game_contrail.flags */
+#define SPU_GAME_CONTRAIL_FADES_SLOWLY 1u
+#define SPU_GAME_CONTRAIL_FIRST_UNFADED 2u
+#define SPU_GAME_CONTRAIL_LAST_UNFADED 4u
+#define SPU_GAME_CONTRAIL_TRANSITIONING 2u
+
+typedef struct
+{
+	float position[3];
+	float density;
+	float time;
+	int32_t state_index;
+	/* the point's flags (SPU_GAME_CONTRAIL_TRANSITIONING) */
+	uint32_t flags;
+	uint32_t pad;
+} spu_game_contrail_point;
+
+typedef struct
+{
+	/* its points (spu_game_contrail_point each), its locked vertices (2 a point) and triangles (2 a segment) */
+	uint32_t points;
+	int32_t point_count;
+	uint32_t vertices;
+	uint32_t triangles;
+	/* the definition's states (state_size bytes each); in a state, its width, colours and flags at width_offset; the
+	flags' bits for the colour and the width scaled by the density */
+	uint32_t states;
+	int32_t state_count;
+	int32_t state_size;
+	int32_t width_offset;
+	uint32_t color_mask;
+	uint32_t width_mask;
+	int16_t render_type;
+	int16_t fade_mode;
+	uint32_t flags;
+	/* the attachment's change colour */
+	int32_t tinted;
+	float tint[3];
+	float texture_u;
+	float texture_u_step;
+	float texture_offset_v;
+	float texture_v_far;
+	/* answer: SPU_GAME_DONE or SPU_GAME_REFUSED */
+	int32_t status;
+	uint32_t pad[3];
+} spu_game_contrail;
+
+typedef struct
+{
+	uint32_t contrails;
+	int32_t contrail_count;
+	/* transition_function_evaluate's table for _transition_function 2 (its size in bytes) */
+	uint32_t transition_table;
+	int32_t transition_size;
+	float camera[3];
+	uint32_t answer;
+	/* scenario_structure_bsp_generation: the tag data the SPU kept is the map's */
+	uint32_t generation;
+	uint32_t pad[3];
+} spu_game_contrails;
+
 /* the SPU fetches and puts them whole */
 typedef char spu_game_layout_check[(sizeof(spu_game_structure) % 16 == 0 && sizeof(spu_game_shadow) % 16 == 0 &&
 	sizeof(spu_game_weather_sprites) % 16 == 0 && sizeof(spu_game_weather_type) % 16 == 0 &&
 	sizeof(spu_game_weather) % 16 == 0 && sizeof(spu_game_weather) <= 16384 && sizeof(spu_game_particle) == 64 &&
-	sizeof(spu_game_cluster_water) == 32 && sizeof(spu_game_particles) % 16 == 0) ? 1 : -1];
+	sizeof(spu_game_cluster_water) == 32 && sizeof(spu_game_particles) % 16 == 0 && sizeof(spu_game_light) == 64 &&
+	sizeof(spu_game_lights) % 16 == 0 && sizeof(spu_game_visibility_cluster) == 96 &&
+	sizeof(spu_game_visibility) % 16 == 0 && sizeof(spu_game_visibility) <= 16384 &&
+	sizeof(spu_game_sprite_particle) == 64 && sizeof(spu_game_sprite_group) == 160 &&
+	sizeof(spu_game_sprites) % 16 == 0 && sizeof(spu_game_contrail_point) == 32 && sizeof(spu_game_contrail) == 96 &&
+	sizeof(spu_game_contrails) % 16 == 0) ? 1 : -1];
 
 #endif
