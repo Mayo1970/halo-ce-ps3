@@ -7,6 +7,7 @@ Xbox layer has the game's 32-bit long. Offsets are RSX local memory offsets. */
 #include <stdint.h>
 
 #include "ps3_rsx_program.h"
+#include "spu_vertices.h"
 
 /* ---------- start-up and frames */
 
@@ -134,9 +135,11 @@ void ps3_gpu_set_state(const struct ps3_gpu_state *state);
 /* uploads the program unless it is the one loaded */
 void ps3_gpu_set_vertex_program(const struct rsx_vertex_program *program);
 void ps3_gpu_set_vertex_constants(uint32_t first, uint32_t count, const float *values);
-/* a copy of the program with these uniform values in the scratch, unless the last draw had the same;
-0 on success, -1 when the scratch is full */
+/* a copy of the program with these uniform values in the scratch (by the conversions' SPU when it runs), unless the
+last draw had the same; 0 on success, -1 when the scratch is full */
 int ps3_gpu_set_fragment_program(const struct rsx_fragment_program *program, const float uniforms[][4]);
+/* a FRAGMENT task the SPU left, done here (d3d8_rsx.c's fallback) */
+void ps3_gpu_fragment_task_run(const spu_vertices_task *task);
 
 /* ---------- textures */
 

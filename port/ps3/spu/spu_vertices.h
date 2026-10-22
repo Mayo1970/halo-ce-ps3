@@ -1,5 +1,5 @@
-/* SPU_VERTICES.H: the Direct3D thread's vertex and index conversions on an SPU (spu_vertices.c), one task a draw in a
-ring. The SPU, the host layer (ps3_spu.c) and d3d8_rsx.c share it, so fixed-width types only. */
+/* SPU_VERTICES.H: the Direct3D thread's vertex and index conversions and pixel shader copies on an SPU (spu_vertices.c),
+in a ring of tasks. The SPU, the host layer (ps3_spu.c), ps3_gpu.c and d3d8_rsx.c share it: fixed-width types only. */
 
 #ifndef __HALO_PS3_SPU_VERTICES_H
 #define __HALO_PS3_SPU_VERTICES_H
@@ -17,6 +17,12 @@ ring. The SPU, the host layer (ps3_spu.c) and d3d8_rsx.c share it, so fixed-widt
 /* spu_vertices_task.kind */
 #define SPU_VERTICES_CONVERT 1
 #define SPU_VERTICES_INDICES 2
+#define SPU_VERTICES_FRAGMENT 3
+
+/* a FRAGMENT task's constants (their places), their values, and the most bytes of its microcode (one DMA) */
+#define SPU_VERTICES_OCCURRENCES 32
+#define SPU_VERTICES_VALUES 11
+#define SPU_VERTICES_FRAGMENT_BYTES (16384 - 32)
 
 /* the Xbox's vertex element types (the XDK's D3DVSDT_*), which the SPU converts as d3d8_rsx.c does */
 #define SPU_VERTICES_FLOAT1 0x12
@@ -60,6 +66,19 @@ typedef struct
 	spu_vertices_slot slots[SPU_VERTICES_SLOTS];
 } spu_vertices_task;
 
+/* FRAGMENT, in a task's place (ps3_gpu.c): a pixel shader's microcode, bytes from source, into output, each constant's
+4 words its value's with their 16-bit halves swapped. An occurrence: its word / 4 << 4 | its value's index */
+typedef struct
+{
+	uint16_t kind;
+	uint16_t occurrence_count;
+	uint32_t bytes;
+	uint32_t output;
+	uint32_t source;
+	uint16_t occurrences[SPU_VERTICES_OCCURRENCES];
+	uint32_t values[SPU_VERTICES_VALUES][4];
+} spu_vertices_fragment;
+
 /* read once at the start */
 typedef struct
 {
@@ -96,5 +115,6 @@ typedef struct
 } __attribute__((aligned(128))) spu_vertices_echo;
 
 typedef char spu_vertices_layout_check[sizeof(spu_vertices_task) == 256 ? 1 : -1];
+typedef char spu_vertices_fragment_check[sizeof(spu_vertices_fragment) == sizeof(spu_vertices_task) ? 1 : -1];
 
 #endif

@@ -59,13 +59,14 @@ typedef char verify_xbox_game_state_globals_prefix_size[
 the game about 1.4 s on the PS3's disk; a revert takes the copy, the bytes the file holds */
 struct game_state_checkpoint
 {
-	/* the used parts (game_state_port_used_sizes): the CPU part's, then the GPU part's; the rest is zeroes. The image
-	is on a CHECKPOINT_LINE in the block allocated */
+	/* the used parts (game_state_port_used_sizes): the CPU part's, then the GPU part's at gpu_offset; the rest is zeroes.
+	The image is on a CHECKPOINT_LINE in the block allocated */
 	byte *block;
 	byte *image;
 	long image_size;
 	long cpu_size;
 	long gpu_size;
+	long gpu_offset;
 	boolean image_valid;
 	boolean write_failed;
 	HANDLE writer;
@@ -89,12 +90,14 @@ static long game_state_checkpoint_spu_save(
 	byte *buffer,
 	long cpu_size,
 	long gpu_size,
-	long gap_size);
+	long gap_size,
+	long gpu_offset);
 static boolean game_state_checkpoint_spu_revert(
 	byte *buffer,
 	long cpu_size,
 	long gpu_size,
-	long gap_size);
+	long gap_size,
+	long gpu_offset);
 #endif
 
 /* ---------- globals */
@@ -298,14 +301,24 @@ boolean game_state_read_from_file(
 		long cpu_size = game_state_checkpoint.cpu_size;
 		long gpu_size = game_state_checkpoint.gpu_size;
 		long gap_size = xbox_game_state_globals.buffer_size - cpu_size - gpu_size;
+		long gpu_offset = game_state_checkpoint.gpu_offset;
+		boolean spu_copied;
+		LARGE_INTEGER start, copied;
+		char line[128];
 
-		if (!game_state_checkpoint_spu_revert(buffer, cpu_size, gpu_size, gap_size))
+		QueryPerformanceCounter(&start);
+		spu_copied = game_state_checkpoint_spu_revert(buffer, cpu_size, gpu_size, gap_size, gpu_offset);
+		if (!spu_copied)
 		{
 			ps3_vmx_copy(buffer, game_state_checkpoint.image, cpu_size);
 			ps3_vmx_zero(buffer + cpu_size, gap_size);
-			ps3_vmx_copy(buffer + xbox_game_state_globals.buffer_size - gpu_size, game_state_checkpoint.image + cpu_size,
+			ps3_vmx_copy(buffer + xbox_game_state_globals.buffer_size - gpu_size, game_state_checkpoint.image + gpu_offset,
 				gpu_size);
 		}
+		QueryPerformanceCounter(&copied);
+		sprintf(line, "[halo] checkpoint: its copy put back by %s in %.1f ms\n", spu_copied ? "an SPU" : "the PPE",
+			(copied.u.LowPart - start.u.LowPart) / 1000.0);
+		OutputDebugStringA(line);
 		result = game_state_image_accept(buffer, xbox_game_state_globals.buffer_size);
 		if (!result)
 		{
@@ -748,7 +761,7 @@ static DWORD WINAPI game_state_checkpoint_writer(
 		SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER ||
 		!game_state_checkpoint_write_range(game_state_checkpoint.image, cpu_size) ||
 		!game_state_checkpoint_write_range(NULL, xbox_game_state_globals.buffer_size - cpu_size - gpu_size) ||
-		!game_state_checkpoint_write_range(game_state_checkpoint.image + cpu_size, gpu_size);
+		!game_state_checkpoint_write_range(game_state_checkpoint.image + game_state_checkpoint.gpu_offset, gpu_size);
 	game_state_checkpoint.write_error = game_state_checkpoint.write_failed ? GetLastError() : 0;
 	sprintf(line, "[halo] checkpoint: %ld KB written by the writer in %lu ms%s\n",
 		xbox_game_state_globals.buffer_size >> 10, (unsigned long)(GetTickCount() - start),
@@ -785,57 +798,133 @@ static void game_state_checkpoint_wait(
 check is the SPU's own */
 static spu_game_answer game_state_checkpoint_answer;
 
+/* port: the copy's GPU part after the CPU part's 16-byte lines, at its source's alignment: the SPU's DMA takes two
+addresses alike in their low 4 bits */
+static long game_state_checkpoint_gpu_offset(
+	long cpu_size,
+	long gpu_size)
+{
+	return ((cpu_size + 15) & ~15) + (-gpu_size & 15);
+}
+
+/* port: the 16-byte lines of the state's parts are the SPU's, the bytes at their edges (under 16 each) the PPE's: the
+CPU part's last, the middle's first and last, the GPU part's first (allocations are 4-byte multiples) */
+struct game_state_checkpoint_edges
+{
+	long cpu_body;
+	long gap_head;
+	long gap_body;
+	long gap_tail;
+	long gpu_head;
+};
+
+static void game_state_checkpoint_edges_make(
+	long cpu_size,
+	long gpu_size,
+	long gap_size,
+	struct game_state_checkpoint_edges *edges)
+{
+	edges->cpu_body = cpu_size & ~15;
+	edges->gap_head = -cpu_size & 15;
+	edges->gap_tail = -gpu_size & 15;
+	edges->gap_body = gap_size - edges->gap_head - edges->gap_tail;
+	if (edges->gap_body < 0)
+	{
+		edges->gap_head = gap_size;
+		edges->gap_tail = 0;
+		edges->gap_body = 0;
+	}
+	edges->gpu_head = gpu_size & 15;
+}
+
 /* port: 1 when the SPU copied the used parts and found the middle zeroes, 0 when not zeroes, NONE when the SPU did not
 (the PPE does it all) */
 static long game_state_checkpoint_spu_save(
 	byte *buffer,
 	long cpu_size,
 	long gpu_size,
-	long gap_size)
+	long gap_size,
+	long gpu_offset)
 {
 	byte *image = game_state_checkpoint.image;
+	byte *gap = buffer + cpu_size;
+	byte *gpu = buffer + xbox_game_state_globals.buffer_size - gpu_size;
+	struct game_state_checkpoint_edges edges;
 	uint32_t ticket;
+	long index;
 
 	if (!ps3_spu_game_running() ||
-		((PS3_SPU_EA(buffer) | PS3_SPU_EA(image) | (uint32_t)cpu_size | (uint32_t)gpu_size | (uint32_t)gap_size) & 15))
+		((PS3_SPU_EA(buffer) | PS3_SPU_EA(image) | (uint32_t)xbox_game_state_globals.buffer_size) & 15))
 	{
 		return NONE;
 	}
+	game_state_checkpoint_edges_make(cpu_size, gpu_size, gap_size, &edges);
 	game_state_checkpoint_answer.status = 0;
-	ps3_spu_game_submit(SPU_GAME_ZEROES, (uint32_t)gap_size, PS3_SPU_EA(buffer + cpu_size),
-		PS3_SPU_EA(&game_state_checkpoint_answer));
-	ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)cpu_size, PS3_SPU_EA(buffer), PS3_SPU_EA(image));
-	ticket = ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)gpu_size,
-		PS3_SPU_EA(buffer + xbox_game_state_globals.buffer_size - gpu_size), PS3_SPU_EA(image + cpu_size));
+	ps3_spu_game_submit(SPU_GAME_ZEROES, (uint32_t)edges.gap_body,
+		PS3_SPU_EA(edges.gap_body ? gap + edges.gap_head : buffer), PS3_SPU_EA(&game_state_checkpoint_answer));
+	ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)edges.cpu_body, PS3_SPU_EA(buffer), PS3_SPU_EA(image));
+	ticket = ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)(gpu_size - edges.gpu_head), PS3_SPU_EA(gpu + edges.gpu_head),
+		PS3_SPU_EA(image + gpu_offset + edges.gpu_head));
 	if (!ps3_spu_game_wait(ticket) || game_state_checkpoint_answer.status != SPU_GAME_DONE)
 	{
 		return NONE;
 	}
+	memcpy(image + edges.cpu_body, buffer + edges.cpu_body, cpu_size - edges.cpu_body);
+	memcpy(image + gpu_offset, gpu, edges.gpu_head);
+	if (!game_state_checkpoint_answer.value)
+	{
+		return 0;
+	}
+	for (index = 0; index < edges.gap_head; index++)
+	{
+		if (gap[index])
+			return 0;
+	}
+	for (index = gap_size - edges.gap_tail; index < gap_size; index++)
+	{
+		if (gap[index])
+			return 0;
+	}
 
-	return game_state_checkpoint_answer.value ? 1 : 0;
+	return 1;
 }
 
-/* port: the checkpoint's copy put over the state by the SPU's DMA, the middle zeroed; FALSE when the SPU did not */
+/* port: the checkpoint's copy put over the state by the SPU's DMA, the middle zeroed, the edges here; FALSE when the
+SPU did not */
 static boolean game_state_checkpoint_spu_revert(
 	byte *buffer,
 	long cpu_size,
 	long gpu_size,
-	long gap_size)
+	long gap_size,
+	long gpu_offset)
 {
 	byte *image = game_state_checkpoint.image;
+	byte *gap = buffer + cpu_size;
+	byte *gpu = buffer + xbox_game_state_globals.buffer_size - gpu_size;
+	struct game_state_checkpoint_edges edges;
 	uint32_t ticket;
 
 	if (!ps3_spu_game_running() ||
-		((PS3_SPU_EA(buffer) | PS3_SPU_EA(image) | (uint32_t)cpu_size | (uint32_t)gpu_size | (uint32_t)gap_size) & 15))
+		((PS3_SPU_EA(buffer) | PS3_SPU_EA(image) | (uint32_t)xbox_game_state_globals.buffer_size) & 15))
 	{
 		return FALSE;
 	}
-	ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)cpu_size, PS3_SPU_EA(image), PS3_SPU_EA(buffer));
-	ps3_spu_game_submit(SPU_GAME_ZERO, (uint32_t)gap_size, 0, PS3_SPU_EA(buffer + cpu_size));
-	ticket = ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)gpu_size, PS3_SPU_EA(image + cpu_size),
-		PS3_SPU_EA(buffer + xbox_game_state_globals.buffer_size - gpu_size));
+	game_state_checkpoint_edges_make(cpu_size, gpu_size, gap_size, &edges);
+	ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)edges.cpu_body, PS3_SPU_EA(image), PS3_SPU_EA(buffer));
+	ps3_spu_game_submit(SPU_GAME_ZERO, (uint32_t)edges.gap_body, 0,
+		PS3_SPU_EA(edges.gap_body ? gap + edges.gap_head : buffer));
+	ticket = ps3_spu_game_submit(SPU_GAME_COPY, (uint32_t)(gpu_size - edges.gpu_head),
+		PS3_SPU_EA(image + gpu_offset + edges.gpu_head), PS3_SPU_EA(gpu + edges.gpu_head));
+	if (!ps3_spu_game_wait(ticket))
+	{
+		return FALSE;
+	}
+	memcpy(buffer + edges.cpu_body, image + edges.cpu_body, cpu_size - edges.cpu_body);
+	memset(gap, 0, edges.gap_head);
+	memset(gap + gap_size - edges.gap_tail, 0, edges.gap_tail);
+	memcpy(gpu, image + gpu_offset, edges.gpu_head);
 
-	return ps3_spu_game_wait(ticket);
+	return TRUE;
 }
 
 /* port: the state's used parts copied (once the last write is done), then written by a thread of its own, or here if
@@ -847,6 +936,7 @@ static boolean game_state_checkpoint_save(
 	long cpu_size;
 	long gpu_size;
 	long gap_size;
+	long gpu_offset;
 	long spu_copied;
 	LARGE_INTEGER start, checked, copied;
 	char line[256];
@@ -857,12 +947,13 @@ static boolean game_state_checkpoint_save(
 	gap_size = xbox_game_state_globals.buffer_size - cpu_size - gpu_size;
 	if (cpu_size < 0 || gpu_size < 0 || gap_size < 0)
 		return FALSE;
-	if (!game_state_checkpoint.block || game_state_checkpoint.image_size != cpu_size + gpu_size)
+	gpu_offset = game_state_checkpoint_gpu_offset(cpu_size, gpu_size);
+	if (!game_state_checkpoint.block || game_state_checkpoint.image_size != gpu_offset + gpu_size)
 	{
 		/* (the game's free halts on NULL: debug_memory.c) */
 		if (game_state_checkpoint.block)
 			free(game_state_checkpoint.block);
-		game_state_checkpoint.image_size = cpu_size + gpu_size;
+		game_state_checkpoint.image_size = gpu_offset + gpu_size;
 		game_state_checkpoint.block = malloc(game_state_checkpoint.image_size + CHECKPOINT_LINE);
 		game_state_checkpoint.image = game_state_checkpoint.block ? (byte *)(((uintptr_t)game_state_checkpoint.block +
 			CHECKPOINT_LINE - 1) & ~(uintptr_t)(CHECKPOINT_LINE - 1)) : NULL;
@@ -871,7 +962,7 @@ static boolean game_state_checkpoint_save(
 		return FALSE;
 
 	QueryPerformanceCounter(&start);
-	spu_copied = game_state_checkpoint_spu_save(buffer, cpu_size, gpu_size, gap_size);
+	spu_copied = game_state_checkpoint_spu_save(buffer, cpu_size, gpu_size, gap_size, gpu_offset);
 	if (!spu_copied)
 		return FALSE;
 	if (spu_copied == NONE)
@@ -880,7 +971,7 @@ static boolean game_state_checkpoint_save(
 			return FALSE;
 		QueryPerformanceCounter(&checked);
 		ps3_vmx_copy(game_state_checkpoint.image, buffer, cpu_size);
-		ps3_vmx_copy(game_state_checkpoint.image + cpu_size, buffer + xbox_game_state_globals.buffer_size - gpu_size,
+		ps3_vmx_copy(game_state_checkpoint.image + gpu_offset, buffer + xbox_game_state_globals.buffer_size - gpu_size,
 			gpu_size);
 	}
 	QueryPerformanceCounter(&copied);
@@ -889,6 +980,7 @@ static boolean game_state_checkpoint_save(
 		checked = copied;
 	game_state_checkpoint.cpu_size = cpu_size;
 	game_state_checkpoint.gpu_size = gpu_size;
+	game_state_checkpoint.gpu_offset = gpu_offset;
 	game_state_checkpoint.image_valid = TRUE;
 	/* (microseconds: QueryPerformanceFrequency) */
 	sprintf(line, "[halo] checkpoint: %ld KB of the state's %ld KB copied by %s in %.1f ms (its unused %ld KB checked to "

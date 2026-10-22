@@ -33,6 +33,10 @@ upstream halo-ce-universal copy of source/saved games/game_state.c. */
 #include "cluster_partitions.h"
 /* port: object_bounds_cache.c's */
 void object_bounds_cache_invalidate(void);
+#ifdef HALO_PS3
+/* port: particles.c's */
+void particles_spu_forget(void);
+#endif
 
 void platform_log(const char *format, ...);
 
@@ -100,6 +104,10 @@ static game_state_before_load_proc before_load_procs[] =
 	cluster_partitions_port_forget,
 	/* port: (the objects are put back: object_bounds_cache.c) */
 	object_bounds_cache_invalidate,
+#ifdef HALO_PS3
+	/* port: the particles' rays from the SPU are of the state before */
+	particles_spu_forget,
+#endif
 };
 
 static game_state_after_load_proc after_load_procs[] =

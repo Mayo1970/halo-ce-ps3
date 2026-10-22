@@ -192,6 +192,9 @@ void particles_initialize_for_new_map(
 void particles_dispose_from_old_map(
 	void)
 {
+#ifdef HALO_PS3
+	particles_spu_forget(); /* port: (particles.c) */
+#endif
 	data_make_invalid(particle_data);
 
 	return;
@@ -239,6 +242,9 @@ void particles_stop_on_first_person_weapon(
 void particles_disconnect_from_structure_bsp(
 	void)
 {
+#ifdef HALO_PS3
+	particles_spu_forget(); /* port: (particles.c) */
+#endif
 	return;
 }
 
@@ -570,7 +576,7 @@ static boolean particle_update_frame_time(
 }
 
 /* port: particle_update_physics's end: the rest, the direction, the rotation; and of a free particle its contacts
-first (particle_update_physics_contact): apart for its rays on an SPU (particles_update_end) */
+first (particle_update_physics_contact): apart for its rays on an SPU (particles_spu_take) */
 static boolean particle_update_physics_rest(
 	long particle_index,
 	real dt,
@@ -977,22 +983,55 @@ void particle_new(
 
 #ifdef HALO_PS3
 /* port: the free particles' rays on an SPU (port/ps3/spu/spu_game.c): gathered by particles_update after their forces,
-made while the rest of game_frame runs, taken by particles_update_end at its end (their contacts then) */
+a job each 64 (made while it gathers the next), taken by the next frame's particles_update first (their contacts then) */
+enum
+{
+	PARTICLES_SPU_BATCH = 64,
+	PARTICLES_SPU_JOBS = SPU_GAME_PARTICLES_MAXIMUM / PARTICLES_SPU_BATCH
+};
+
 static struct
 {
-	spu_game_particles job;
-	spu_game_answer answer;
+	spu_game_particles jobs[PARTICLES_SPU_JOBS];
+	spu_game_answer answers[PARTICLES_SPU_JOBS];
 	spu_game_particle particles[SPU_GAME_PARTICLES_MAXIMUM];
 	long particle_indices[SPU_GAME_PARTICLES_MAXIMUM];
 	unsigned long results[SPU_GAME_PARTICLES_MAXIMUM];
 	unsigned long collision_flags[SPU_GAME_PARTICLES_MAXIMUM];
+	/* the bsp's part of each job (collision_spu_particles) */
+	spu_game_particles parameters;
 	long count;
+	long submitted;
+	long job_count;
+	/* the last job's: the jobs end in order */
 	uint32_t ticket;
 	real dt;
 	boolean gathering;
 } __attribute__((aligned(128))) particles_spu;
 
 extern boolean debug_point_physics; /* port: point_physics.c */
+
+/* port: the particles gathered since the last job, as a job of their own */
+static void particles_spu_submit(
+	void)
+{
+	long count = particles_spu.count - particles_spu.submitted;
+	spu_game_particles *job = &particles_spu.jobs[particles_spu.job_count];
+	spu_game_answer *answer = &particles_spu.answers[particles_spu.job_count];
+
+	if (count <= 0 || particles_spu.job_count >= PARTICLES_SPU_JOBS)
+	{
+		return;
+	}
+	*job = particles_spu.parameters;
+	job->particles = PS3_SPU_EA(&particles_spu.particles[particles_spu.submitted]);
+	job->particle_count = count;
+	job->answer = PS3_SPU_EA(answer);
+	answer->status = 0;
+	particles_spu.ticket = ps3_spu_game_submit(SPU_GAME_PARTICLES, sizeof(*job), PS3_SPU_EA(job), 0);
+	particles_spu.submitted = particles_spu.count;
+	particles_spu.job_count++;
+}
 
 /* port: a free particle's update after its frame time: its forces now, its rays and contacts later; FALSE when it is
 not one the SPU takes */
@@ -1043,22 +1082,28 @@ static boolean particles_spu_gather(
 	particles_spu.results[particles_spu.count] = result;
 	particles_spu.collision_flags[particles_spu.count] = collision_flags;
 	particles_spu.count++;
+	if (particles_spu.count - particles_spu.submitted == PARTICLES_SPU_BATCH)
+	{
+		particles_spu_submit();
+	}
 
 	return TRUE;
 }
 
-void particles_update_end(
+/* port: the rays of the particles the last frame gathered, made by the SPU since (no wait), and their contacts: they
+move a frame late */
+static void particles_spu_take(
 	void)
 {
-	boolean done;
 	long index;
 
-	particles_spu.gathering = FALSE;
 	if (!particles_spu.count)
 	{
 		return;
 	}
-	done = ps3_spu_game_wait(particles_spu.ticket) && particles_spu.answer.status == SPU_GAME_DONE;
+	/* (a job the SPU did not end, or one it refused, is done here; its answer says which) */
+	ps3_spu_game_wait(particles_spu.ticket);
+	__sync_synchronize();
 	for (index = 0; index < particles_spu.count; index++)
 	{
 		long particle_index = particles_spu.particle_indices[index];
@@ -1072,7 +1117,7 @@ void particles_update_end(
 		{
 			continue;
 		}
-		if (done)
+		if (particles_spu.answers[index / PARTICLES_SPU_BATCH].status == SPU_GAME_DONE)
 		{
 			particle->position.x = entry->position[0];
 			particle->position.y = entry->position[1];
@@ -1101,6 +1146,18 @@ void particles_update_end(
 	}
 	particles_spu.count = 0;
 }
+
+/* port: the rays not yet taken dropped once the SPU is done with them (their particles stay a frame), before the bsp,
+the map or the game state changes under them */
+void particles_spu_forget(
+	void)
+{
+	if (particles_spu.count)
+	{
+		ps3_spu_game_wait(particles_spu.ticket);
+	}
+	particles_spu.count = 0;
+}
 #endif
 
 void particles_update(
@@ -1110,10 +1167,14 @@ void particles_update(
 
 	profile_enter(particles_update_section);
 #ifdef HALO_PS3
+	particles_spu_take();
 	particles_spu.count = 0;
+	particles_spu.submitted = 0;
+	particles_spu.job_count = 0;
+	particles_spu.ticket = 0;
 	particles_spu.dt = dt;
 	particles_spu.gathering = ps3_spu_game_running() && !debug_point_physics &&
-		collision_spu_particles(&particles_spu.job);
+		collision_spu_particles(&particles_spu.parameters);
 #endif
 
 	{
@@ -1175,15 +1236,8 @@ void particles_update(
 	}
 
 #ifdef HALO_PS3
-	if (particles_spu.count)
-	{
-		particles_spu.job.particles = PS3_SPU_EA(particles_spu.particles);
-		particles_spu.job.particle_count = particles_spu.count;
-		particles_spu.job.answer = PS3_SPU_EA(&particles_spu.answer);
-		particles_spu.answer.status = 0;
-		particles_spu.ticket = ps3_spu_game_submit(SPU_GAME_PARTICLES, sizeof(particles_spu.job),
-			PS3_SPU_EA(&particles_spu.job), 0);
-	}
+	particles_spu_submit(); /* port: (the last particles gathered) */
+	particles_spu.gathering = FALSE;
 #endif
 
 	profile_exit(particles_update_section);

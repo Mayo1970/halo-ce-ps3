@@ -295,6 +295,7 @@ static struct
 	uint32_t vertex_uploads;
 	uint32_t vertex_switches;
 	uint32_t fragment_copies;
+	uint32_t fragment_spu_copies;
 	uint32_t texture_loads;
 } statistics;
 
@@ -867,6 +868,47 @@ static void fragment_program_load(uint32_t offset, uint32_t control, uint32_t re
 	checkpoint(_checkpoint_fragment);
 }
 
+/* the copy of the program with fragment.values as a task of the conversions' SPU (spu_vertices.c), done before the RSX
+reads it (the flushes wait); 0 when it is the PPE's: the SPU off, or more values or bytes than a task holds */
+static int fragment_copy_spu(const struct rsx_fragment_program *program, void *memory, uint32_t bytes)
+{
+	spu_vertices_fragment *task;
+	uint8_t slots[_rsx_uniform_count];
+	uint32_t index, used = 0, value_count = 0;
+
+	if (bytes > SPU_VERTICES_FRAGMENT_BYTES || program->uniform_count > SPU_VERTICES_OCCURRENCES ||
+		((uintptr_t)program->microcode >> 32) || ((uintptr_t)memory >> 32))
+		return 0;
+	for (index = 0; index < program->uniform_count; index++)
+	{
+		if (program->uniforms[index].uniform >= _rsx_uniform_count || (program->uniforms[index].word & 3))
+			return 0;
+		used |= 1u << program->uniforms[index].uniform;
+	}
+	if (__builtin_popcount(used) > SPU_VERTICES_VALUES || !(task = (spu_vertices_fragment *)ps3_spu_vertices_task()))
+		return 0;
+	task->kind = SPU_VERTICES_FRAGMENT;
+	task->occurrence_count = (uint16_t)program->uniform_count;
+	task->bytes = bytes;
+	task->output = (uint32_t)(uintptr_t)memory;
+	task->source = (uint32_t)(uintptr_t)program->microcode;
+	memset(slots, 0xff, sizeof(slots));
+	for (index = 0; index < program->uniform_count; index++)
+	{
+		uint32_t uniform = program->uniforms[index].uniform;
+
+		if (slots[uniform] == 0xff)
+		{
+			slots[uniform] = (uint8_t)value_count;
+			memcpy(task->values[value_count++], fragment.values[index], sizeof(task->values[0]));
+		}
+		task->occurrences[index] = (uint16_t)((program->uniforms[index].word / 4u) << 4 | slots[uniform]);
+	}
+	ps3_spu_vertices_commit();
+	statistics.fragment_spu_copies++;
+	return 1;
+}
+
 int ps3_gpu_set_fragment_program(const struct rsx_fragment_program *program, const float uniforms[][4])
 {
 	uint32_t index, offset, bytes = program->word_count * 4;
@@ -887,20 +929,39 @@ int ps3_gpu_set_fragment_program(const struct rsx_fragment_program *program, con
 	memory = ps3_gpu_scratch(bytes, 64, &offset);
 	if (!memory)
 		return -1;
-	memcpy(fragment_staging, program->microcode, bytes);
 	for (index = 0; index < program->uniform_count; index++)
+		memcpy(fragment.values[index], uniforms[program->uniforms[index].uniform], sizeof(fragment.values[0]));
+	if (!fragment_copy_spu(program, memory, bytes))
 	{
-		const float *value = uniforms[program->uniforms[index].uniform];
-
-		rsx_fragment_program_set_uniform(fragment_staging, program->uniforms[index].word, value);
-		memcpy(fragment.values[index], value, sizeof(fragment.values[0]));
+		memcpy(fragment_staging, program->microcode, bytes);
+		for (index = 0; index < program->uniform_count; index++)
+			rsx_fragment_program_set_uniform(fragment_staging, program->uniforms[index].word, fragment.values[index]);
+		/* one sequential pass into write-combined memory */
+		memcpy(memory, fragment_staging, bytes);
 	}
-	/* one sequential pass into write-combined memory */
-	memcpy(memory, fragment_staging, bytes);
 	fragment_program_load(offset, program->control, program->register_count, program->texcoord_mask, 0);
 	fragment.program = program;
 	statistics.fragment_copies++;
 	return 0;
+}
+
+void ps3_gpu_fragment_task_run(const spu_vertices_task *task)
+{
+	const spu_vertices_fragment *fragment_task = (const spu_vertices_fragment *)task;
+	uint32_t index;
+
+	if (fragment_task->bytes > sizeof(fragment_staging) || fragment_task->occurrence_count > SPU_VERTICES_OCCURRENCES)
+		return;
+	memcpy(fragment_staging, (const void *)(uintptr_t)fragment_task->source, fragment_task->bytes);
+	for (index = 0; index < fragment_task->occurrence_count; index++)
+	{
+		uint32_t occurrence = fragment_task->occurrences[index];
+
+		if ((occurrence & 15) < SPU_VERTICES_VALUES && (occurrence >> 4) * 16 < fragment_task->bytes)
+			rsx_fragment_program_set_uniform(fragment_staging, (occurrence >> 4) * 4,
+				(const float *)fragment_task->values[occurrence & 15]);
+	}
+	memcpy((void *)(uintptr_t)fragment_task->output, fragment_staging, fragment_task->bytes);
 }
 
 /* ---------- textures */
@@ -1389,11 +1450,12 @@ void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t h
 	checkpoint(_checkpoint_flip);
 	if (frame_index % STATISTICS_FRAMES == 0)
 	{
-		ps3_log_printf("[gpu] frame %u: %u draws, %u vertex programs uploaded and %u switched, %u fragment programs, "
-			"%u textures a frame; scratch peak %u KB of %u, %u dropped\n", (unsigned)frame_index,
+		ps3_log_printf("[gpu] frame %u: %u draws, %u vertex programs uploaded and %u switched, %u fragment programs (%u "
+			"copied by the SPU), %u textures a frame; scratch peak %u KB of %u, %u dropped\n", (unsigned)frame_index,
 			(unsigned)(statistics.draws / STATISTICS_FRAMES), (unsigned)(statistics.vertex_uploads / STATISTICS_FRAMES),
 			(unsigned)(statistics.vertex_switches / STATISTICS_FRAMES),
-			(unsigned)(statistics.fragment_copies / STATISTICS_FRAMES), (unsigned)(statistics.texture_loads / STATISTICS_FRAMES),
+			(unsigned)(statistics.fragment_copies / STATISTICS_FRAMES),
+			(unsigned)(statistics.fragment_spu_copies / STATISTICS_FRAMES), (unsigned)(statistics.texture_loads / STATISTICS_FRAMES),
 			(unsigned)(scratch.peak / 1024), (unsigned)(SCRATCH_HALF_SIZE / 1024), (unsigned)scratch.drops);
 		memset(&statistics, 0, sizeof(statistics));
 	}
