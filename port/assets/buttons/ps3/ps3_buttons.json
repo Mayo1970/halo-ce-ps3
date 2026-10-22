@@ -1,0 +1,96 @@
+{
+ "assets": [
+  {
+   "name": "a_butn__0",
+   "tag": "ui\\shell\\bitmaps\\a_butn",
+   "bitmap": 0,
+   "width": 32,
+   "height": 32,
+   "crc": 1140253829,
+   "scale": 4,
+   "png": [
+    "colour_a_butn__0.png",
+    "black_a_butn__0.png"
+   ]
+  },
+  {
+   "name": "b_butn__0",
+   "tag": "ui\\shell\\bitmaps\\b_butn",
+   "bitmap": 0,
+   "width": 32,
+   "height": 32,
+   "crc": 2900806204,
+   "scale": 4,
+   "png": [
+    "colour_b_butn__0.png",
+    "black_b_butn__0.png"
+   ]
+  },
+  {
+   "name": "x_butn__0",
+   "tag": "ui\\shell\\bitmaps\\x_butn",
+   "bitmap": 0,
+   "width": 32,
+   "height": 32,
+   "crc": 2247463469,
+   "scale": 4,
+   "png": [
+    "colour_x_butn__0.png",
+    "black_x_butn__0.png"
+   ]
+  },
+  {
+   "name": "y_butn__0",
+   "tag": "ui\\shell\\bitmaps\\y_butn",
+   "bitmap": 0,
+   "width": 32,
+   "height": 32,
+   "crc": 783963872,
+   "scale": 4,
+   "png": [
+    "colour_y_butn__0.png",
+    "black_y_butn__0.png"
+   ]
+  },
+  {
+   "name": "a_butn_sm__0",
+   "tag": "ui\\shell\\bitmaps\\a_butn_sm",
+   "bitmap": 0,
+   "width": 32,
+   "height": 32,
+   "crc": 2356213272,
+   "scale": 4,
+   "png": [
+    "colour_a_butn_sm__0.png",
+    "black_a_butn_sm__0.png"
+   ]
+  },
+  {
+   "name": "b_butn_sm__0",
+   "tag": "ui\\shell\\bitmaps\\b_butn_sm",
+   "bitmap": 0,
+   "width": 32,
+   "height": 32,
+   "crc": 3999851658,
+   "scale": 4,
+   "png": [
+    "colour_b_butn_sm__0.png",
+    "black_b_butn_sm__0.png"
+   ]
+  },
+  {
+   "name": "hud_msg_icons_sm__0",
+   "tag": "ui\\hud\\bitmaps\\hud_msg_icons_sm",
+   "bitmap": 0,
+   "width": 128,
+   "height": 128,
+   "crc": 2908635490,
+   "scale": 4,
+   "sprites": 15,
+   "png": [
+    "hud_msg_icons_sm__0.png",
+    "hud_msg_icons_sm__0.png"
+   ]
+  }
+ ]
+}
