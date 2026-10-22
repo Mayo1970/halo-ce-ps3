@@ -137,6 +137,10 @@ typedef struct
 	float planes[SPU_GAME_SHADOW_PLANES][4];
 	/* cluster_count NONE: the nodes from the root; else these clusters' subclusters */
 	int16_t clusters[SPU_GAME_SHADOW_CLUSTERS];
+	/* 0: the indices in the walk's order; else ascending, their triangles here (3 int16 each), as
+	structure_render_build_dynamic_triangles makes them */
+	uint32_t triangles;
+	uint32_t pad[3];
 } spu_game_shadow;
 
 /* ---------- WEATHER: a window's weather particles: their update, their visibility, their sprites */

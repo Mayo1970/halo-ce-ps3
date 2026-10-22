@@ -3246,6 +3246,39 @@ void WINAPI D3DDevice_End(void)
 	front_call_end(_ps3_timer_front_draws);
 }
 
+/* an immediate-mode draw of vertices already made: 4 floats for each register of layout, in the registers' order;
+the record and the registers after it are Begin's, the SetVertexData calls' and End's */
+void d3d8_draw_immediate(D3DPRIMITIVETYPE primitive_type_value, DWORD layout, const float *vertices, DWORD count)
+{
+	struct record_immediate *immediate;
+	unsigned long reg, slot = 0, floats;
+	DWORD number;
+
+	front_call_begin();
+	if (count && layout)
+	{
+		immediate_layout_set(layout);
+		floats = front.immediate_floats;
+		for (reg = 0; reg < VERTEX_ATTRIBUTE_COUNT; reg++)
+		{
+			if (layout & (1u << reg))
+				memcpy(front.attributes[reg], vertices + (count - 1) * floats + 4 * slot++, sizeof(front.attributes[0]));
+		}
+		number = draw_prologue();
+		immediate = record_begin(_record_immediate, sizeof(*immediate) + count * floats * sizeof(float), 0, 0);
+		if (immediate)
+		{
+			immediate->primitive = primitive_type_value;
+			immediate->count = count;
+			immediate->written = layout;
+			immediate->draw = number;
+			memcpy(immediate + 1, vertices, count * floats * sizeof(float));
+			record_commit();
+		}
+	}
+	front_call_end(_ps3_timer_front_draws);
+}
+
 static void set_attribute(INT reg, float a, float b, float c, float d)
 {
 	BOOL emit = FALSE;

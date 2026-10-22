@@ -61,7 +61,12 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   17:18 in `build/ps3_g9/` (the tree of `8bee7864` and this change only).
   Run on hardware (b40; Matt: "Run's done."; no fault reported): a clean
   exit, no `SPU off`; render 7.8 ms a frame on median (the 15:18 run 9.0);
-  the SPU waits 0. See the Log. No listener runs on UDP 18194.
+  the SPU waits 0. See the Log. (Matt committed it as `4a313dde`.) Then
+  (Matt, on the BSP switch's stutter: "let's go with option 1", the decals
+  and the shadows' sort): file reads in lv2 calls of 128 KB; the decals'
+  batch in one call; the shadows' sort and triangles on the render SPU.
+  PC check passed. Built, not tested on the PS3. PKG of 18:00 in
+  `build/ps3_g9/` (the tree of `4a313dde` and this change only).
 - 2026-10-22: G8, the SPU offload (Matt chose all four candidates: 1 the
   checkpoint's copy, 2 the weather, 3 the effects' particles, 4 the
   shadows' surfaces): a third SPU thread group, the game thread's jobs
@@ -625,7 +630,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20; on hardware 2026-10-22 the kept boxes crashed the game thread twice (step 627, the transparent sort; cause not found): taken out (Matt: option 2), then a clean run (the weather in the snow 1.27 to 0.86 ms a frame); the stream buffers' blocks (no heap fragments: 22.3 MB free at the end, before 19.3), the sphere query on the kept blocks (13.3 to 10.3 us a call; the same answer: PC check), `render_model_parts` and the shadows timed inside: run on hardware 2026-10-22 (SUCCESS); the SPU candidates written down (the Log); the game thread's jobs on a third SPU (the checkpoint's copies, the shadows' surfaces, the weather, the particles' rays; PC check on the 23 maps): built 2026-10-22, run on hardware 2026-10-22 (the checkpoint 12.9-15.1 to 3.1 ms; the shadows' surfaces 103 to 4.7 us a shadow; the weather 1.2 to 0.05 ms a frame; the particles 3.8 to 2.9 us each); the pixel shaders' copies on the conversions' SPU and the particles' rays taken a frame late: built 2026-10-22 |
-| G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0) |
+| G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0); file reads in 128 KB calls (the BSP switch's stutter), the decals' batch in one call, the shadows' sort and triangles on the render SPU: built 2026-10-22 |
 
 ## G9 analysis (2026-10-22)
 
@@ -4202,3 +4207,37 @@ then `./build.sh pkg LOG_IP=<address>`.
     543 us; shadows 48 us each. The game thread's waits for all of them
     0.000 ms a frame but the shadows' 0.027.
   - Main memory: 21.1 MB free at t=150 s, 19.1 at the end (the lowest).
+- 2026-10-22: The BSP switch's stutter (Matt: "Sometimes when loading a new
+  chunk of the level would stutter the game."): b40's switch at t=125 s
+  held the game thread about 0.8 s: the 5.4 MB BSP read from
+  `z:\cache001.map` in 564 ms (9.5 MB/s; the same at the level's start),
+  its swap 58 ms, the rest of the switch about 0.2 s (not timed: the tag
+  cache's 0xCD fill, the Direct3D thread's drain, the tag checks, the
+  game's switch). Other reads of the run: the 2.1 MB BSP 36 MB/s, the tag
+  data 20 MB/s, the save game in 128 KB calls 48 MB/s. The Xbox's game
+  waits for the read too (`scenario_structure_bsp_load`). Then (Matt:
+  "let's go with option 1."; with the decals and the shadows' sort):
+  - `xbox_files.c`: a read's lv2 calls 128 KB at most (each read: the
+    BSPs, the tag data, the caches' reads); the log's line gives each read
+    of 1 MB or more with its time, as before.
+  - The decals (`rasterizer_xbox_decals.c`, `d3d8_rsx.c`): a batch's
+    vertices made in one loop (registers 0, 4, 9: as
+    `SetVertexData4f(0)`, `SetVertexData2f(4)`, `SetVertexData4ub(9)` give
+    them) and drawn by `d3d8_draw_immediate`: the same record and the same
+    registers after it as `Begin`, the calls and `End` (a batch past 4,096
+    vertices in more draws, in order; a decal past it by the calls).
+  - The shadows (`spu_game.c`, `structure_render.c`): the SHADOW job with
+    a triangles' address sorts the surfaces found (its flags in order) and
+    gathers their triangles; `structure_render_shadow` copies them into
+    dynamic triangles. The one-in-64 check sorts the PPE's search and
+    compares the triangles too. The lights' searches keep the walk's
+    order.
+  - PC check (as before, and the shadows' sorted surfaces and triangles
+    against the old image's walk, sorted and gathered): 16.9 M checks, 0
+    apart; 19 faults, each found (the two new: a triangle from the next
+    surface, the walk's order kept). The decals and the reads: not in the
+    check (read in the code: the same record, the same bytes).
+  - Comments over 2 lines shortened (`rasterizer_xbox_decals.c`: 3, the
+    symbol table pointing to upstream's copy). Warnings (`-Wall`): none in
+    the new code. `check`: 0 `r2off`, `.got` 0x8710. PKG of 18:00 in
+    `build/ps3_g9/`. Not tested on hardware.

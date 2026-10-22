@@ -1,124 +1,5 @@
-/*
-RASTERIZER_XBOX_DECALS.C
-
-symbols in this file:
-0014A5F0 01b0:
-	_D3DDevice_SetRenderState (0000)
-0014A7A0 0050:
-	_D3DDevice_SetTextureStageState (0000)
-0014A7F0 0120:
-	_rasterizer_decal_vertices_purge_proc (0000)
-0014A910 0090:
-	_rasterizer_decal_vertices_locked_proc (0000)
-0014A9A0 0040:
-	__rasterizer_decals_update_function_pointers (0000)
-0014A9E0 0220:
-	_IDirect3DDevice8_SetRenderState@12 (0000)
-0014AC00 0010:
-	__rasterizer_decals_initialize_for_new_map (0000)
-0014AC10 0040:
-	__rasterizer_decals_dispose_from_old_map (0000)
-0014AC50 0040:
-	__rasterizer_decals_flush (0000)
-0014AC90 0010:
-	_rasterizer_decal_vertices_begin_update (0000)
-0014ACA0 0010:
-	_rasterizer_decal_vertices_end_update (0000)
-0014ACB0 0070:
-	__rasterizer_decal_vertices_new (0000)
-0014AD20 0060:
-	_IDirect3DDevice8_SetTextureStageState@16 (0000)
-0014AD80 0030:
-	_IDirect3DDevice8_DrawPrimitive@16 (0000)
-0014ADB0 0070:
-	__rasterizer_decal_vertices_delete (0000)
-0014AE20 0010:
-	_IDirect3DDevice8_SetStreamSource@16 (0000)
-0014AE30 0070:
-	__rasterizer_decals_end (0000)
-0014AEA0 0020:
-	_IDirect3DDevice8_SetVertexData4ub@24 (0000)
-0014AEC0 0010:
-	_D3DVertexBuffer_Unlock@4 (0000)
-0014AED0 0010:
-	_IDirect3DVertexBuffer8_Release@4 (0000)
-0014AEE0 0010:
-	_IDirect3DVertexBuffer8_Register@8 (0000)
-0014AEF0 0020:
-	_IDirect3DVertexBuffer8_Lock@20 (0000)
-0014AF10 0010:
-	_IDirect3DVertexBuffer8_Unlock@4 (0000)
-0014AF20 0110:
-	__rasterizer_decals_initialize (0000)
-0014B030 00b0:
-	__rasterizer_decals_dispose (0000)
-0014B0E0 00d0:
-	__rasterizer_decal_vertices_lock (0000)
-0014B1B0 0010:
-	__rasterizer_decal_vertices_unlock (0000)
-0014B1C0 02d0:
-	__rasterizer_decals_begin (0000)
-0014B490 0350:
-	__rasterizer_decals_draw (0000)
-0028DD18 0058:
-	_D3DPRIMITIVETOVERTEXCOUNT (0000)
-0028DD70 0012:
-	??_C@_0BC@JENGFNKJ@decal_index?$CB?$DNNONE?$AA@ (0000)
-0028DD88 005d:
-	??_C@_0FN@KMDPMKOA@?$CD?$CD?$CD?5ERROR?5decals?3?5deleting?5perma@ (0000)
-0028DDE8 005a:
-	??_C@_0FK@BJHCLOEJ@?$CD?$CD?$CD?5ERROR?5decals?3?5deleting?5locke@ (0000)
-0028DE44 000f:
-	??_C@_0P@MKLHCCBN@decal_index?$CB?$DN0?$AA@ (0000)
-0028DE54 000c:
-	??_C@_0M@LJKLFPHM@decal_index?$AA@ (0000)
-0028DE60 0029:
-	??_C@_0CJ@FLPDNPAK@lruv_has_locked_proc?$CIlocal_verte@ (0000)
-0028DE8C 0038:
-	??_C@_0DI@DFPBIFJA@c?3?2halo?2SOURCE?2rasterizer?2xbox?2r@ (0000)
-0028DEC4 0013:
-	??_C@_0BD@GMDLIMJM@local_vertex_cache?$AA@ (0000)
-0028DED8 002a:
-	??_C@_0CK@DKKOCKIP@cache_size?$CFsizeof?$CIstruct?5decal_v@ (0000)
-0028DF04 0027:
-	??_C@_0CH@FLDEKCGM@cache_size?$DOsizeof?$CIstruct?5decal_v@ (0000)
-0028DF2C 0012:
-	??_C@_0BC@NONEJICN@cache_index?$CB?$DNNONE?$AA@ (0000)
-0028DF40 0013:
-	??_C@_0BD@NBMEPDOH@decal?5vertex?5cache?$AA@ (0000)
-0028DF54 001e:
-	??_C@_0BO@OHOOIFNI@local_d3d_vertex_buffer?9?$DOData?$AA@ (0000)
-0028DF74 000f:
-	??_C@_0P@PKAEFIHO@decal?5vertices?$AA@ (0000)
-0028DF84 0018:
-	??_C@_0BI@PCGDDGMG@local_d3d_vertex_buffer?$AA@ (0000)
-0028DF9C 0032:
-	??_C@_0DC@BMDAFKAI@vertex_data_offset?$CFsizeof?$CIstruct@ (0000)
-0028DFD0 0022:
-	??_C@_0CC@GHCFEIDO@intensity?$DM?$DNPIXEL32_COMPONENT_MAS@ (0000)
-0028DFF4 0031:
-	??_C@_0DB@GLODBMEM@?$CD?$CD?$CD?5ERROR?5unsupported?5framebuffe@ (0000)
-0030CEF4 0004:
-	_last_decal_index_queried_by_lruv_cache (0000)
-0045E8E8 0002:
-	_local_layer (0000)
-0045E8EC 0004:
-	_rasterizer_decal_cached_bitmap_group_index (0000)
-0045E8F0 0002:
-	_rasterizer_decal_cached_bitmap_index (0000)
-0045E8F4 0002:
-	_local_framebuffer_blend_function (0000)
-0045E8F8 0004:
-	_local_d3d_vertex_buffer (0000)
-0045E8FC 0004:
-	_local_vertex_cache (0000)
-0045E900 0001:
-	_locked_decal_reported (0000)
-0045E901 0001:
-	_permanent_decal_reported (0000)
-0045E902 0001:
-	_local_filthy_decal_fog_hack_enabled (0000)
-*/
+/* RASTERIZER_XBOX_DECALS.C. Its Xbox symbols and their addresses are listed in the
+upstream halo-ce-universal copy of source/rasterizer/xbox/rasterizer_xbox_decals.c. */
 
 /* ---------- headers */
 
@@ -131,10 +12,8 @@ symbols in this file:
 #include "memory/lruv_cache.h"
 #include "rasterizer/rasterizer.h"
 #include "rasterizer/rasterizer_console_vars.h"
-/* The XDK's stock D3DINLINE (static __forceinline) definitions supply both the
- * inline expansions used below and the out-of-line wrapper bodies January
- * retains in this object. Do not redefine D3DINLINE, take a wrapper's address
- * or hand-write a wrapper body: any of those changes the emitted ABI. */
+/* The XDK's stock D3DINLINE definitions give the inline expansions and January's out-of-line wrappers: redefining
+ * D3DINLINE, taking a wrapper's address or writing a wrapper body changes the emitted ABI. */
 #include <xtl.h>
 #include "rasterizer/xbox/rasterizer_xbox.h"
 #include "rasterizer/xbox/rasterizer_xbox_pixel_shader.h"
@@ -291,13 +170,8 @@ extern struct pixel_shader_definition pixel_shader;
 
 static long last_decal_index_queried_by_lruv_cache = NONE;
 
-/* port: the decals drawn one after another with the same blend function and
-bitmap are one draw, a list of their quads with each decal's color in its
-vertices, instead of a draw each. A long fight leaves hundreds of decals in
-view, and a draw is a call into the browser on the web and work for the
-driver everywhere; on the Xbox each was a few words of push buffer. The
-vertices are the decal's own (position, then its texture coordinates as the
-declaration's normalized shorts), given as immediate data. */
+/* port: the decals one after another with the same blend function and bitmap are one draw of their quads, each decal's
+colour in its vertices (immediate data), not a draw each: a long fight leaves hundreds of decals in view */
 #define DECAL_BATCH_MAXIMUM_DECALS 256
 static struct
 {
@@ -309,13 +183,8 @@ static short decal_batch_count = 0;
 
 static void rasterizer_decals_draw_batch(void);
 
-/* port: the order the decals of a cluster are drawn in. Where it makes no
-difference (a run of decals whose blend functions commute: they do not
-write depth, and multiplying, adding, the least or the most of the
-framebuffer and them comes to the same in any order, but for rounding in
-the last bit), they go by their
-blend function and bitmap, so that more of them share a batch
-(decal_batch): a definition's decals pick among its bitmaps at random. */
+/* port: a cluster's decals' order: in a run whose blend functions commute (no depth writes; the same but for the last
+bit in any order) by blend function and bitmap, so that more share a batch (decal_batch) */
 static long decal_draw_order[MAXIMUM_DECALS_PER_MAP];
 static unsigned long decal_draw_keys[MAXIMUM_DECALS_PER_MAP];
 static long decal_sort_scratch[MAXIMUM_DECALS_PER_MAP];
@@ -897,6 +766,66 @@ void _rasterizer_decals_draw(
 	return;
 }
 
+#ifdef HALO_PS3
+enum
+{
+	DECAL_BATCH_VERTICES = 4096,
+	DECAL_VERTEX_FLOATS = 12,
+};
+
+/* port: an immediate-mode draw of vertices made (port/ps3/xbox/d3d8_rsx.c) */
+void d3d8_draw_immediate(D3DPRIMITIVETYPE primitive_type_value, DWORD layout, const float *vertices, DWORD count);
+
+/* port: the batch's quads as SetVertexData4ub(9), SetVertexData2f(4) and SetVertexData4f(0) give them, each vertex's
+registers in their order, in draws of up to DECAL_BATCH_VERTICES; FALSE when a decal has more (the calls draw them) */
+static boolean rasterizer_decals_draw_batch_vertices(
+	void)
+{
+	static float vertices[DECAL_BATCH_VERTICES * DECAL_VERTEX_FLOATS];
+	long vertex_count = 0;
+	short batch_index;
+
+	for (batch_index = 0; batch_index < decal_batch_count; batch_index++)
+	{
+		if (decal_batch[batch_index].vertex_count > DECAL_BATCH_VERTICES)
+			return FALSE;
+	}
+	for (batch_index = 0; batch_index < decal_batch_count; batch_index++)
+	{
+		byte const *color = decal_batch[batch_index].color;
+		float red = color[0] / 255.0f, green = color[1] / 255.0f, blue = color[2] / 255.0f, alpha = color[3] / 255.0f;
+		short vertex_index;
+
+		if (vertex_count + decal_batch[batch_index].vertex_count > DECAL_BATCH_VERTICES)
+		{
+			d3d8_draw_immediate(D3DPT_QUADLIST, (1u << 0) | (1u << 4) | (1u << 9), vertices, (DWORD)vertex_count);
+			vertex_count = 0;
+		}
+		for (vertex_index = 0; vertex_index < decal_batch[batch_index].vertex_count; vertex_index++)
+		{
+			struct decal_vertex const *vertex = &decal_batch[batch_index].vertices[vertex_index];
+			float *out = &vertices[vertex_count++ * DECAL_VERTEX_FLOATS];
+
+			out[0] = vertex->position.x;
+			out[1] = vertex->position.y;
+			out[2] = vertex->position.z;
+			out[3] = 1.0f;
+			out[4] = (real)(short)(vertex->texcoord & 0xFFFF) / 32767.0f;
+			out[5] = (real)(short)(vertex->texcoord >> 16) / 32767.0f;
+			out[6] = 0.0f;
+			out[7] = 1.0f;
+			out[8] = red;
+			out[9] = green;
+			out[10] = blue;
+			out[11] = alpha;
+		}
+	}
+	d3d8_draw_immediate(D3DPT_QUADLIST, (1u << 0) | (1u << 4) | (1u << 9), vertices, (DWORD)vertex_count);
+
+	return TRUE;
+}
+#endif
+
 /* port: draws the decals batched (decal_batch) */
 static void rasterizer_decals_draw_batch(
 	void)
@@ -905,6 +834,14 @@ static void rasterizer_decals_draw_batch(
 
 	if (!decal_batch_count)
 		return;
+#ifdef HALO_PS3
+	/* port: the vertices made here and drawn with one call, as the calls below record them (registers 0, 4, 9) */
+	if (rasterizer_decals_draw_batch_vertices())
+	{
+		decal_batch_count = 0;
+		return;
+	}
+#endif
 	IDirect3DDevice8_Begin(global_d3d_device, D3DPT_QUADLIST);
 	for (batch_index = 0; batch_index < decal_batch_count; batch_index++)
 	{

@@ -403,6 +403,8 @@ static void answer_put(uint32_t ea, uint32_t status, uint32_t value)
 #define TRAVERSAL_DEPTH 1024
 #define SHADOW_STACK 192
 #define MAXIMUM_SURFACES 0x20000
+/* the triangles' staging after a list's chunk (24 KB and an address's offset) */
+#define SHADOW_TRIANGLES 57600
 
 typedef struct
 {
@@ -646,6 +648,26 @@ static void shadow_clusters(shadow_state *s)
 	}
 }
 
+static uint32_t flags_ascending(uint32_t *flags, uint32_t words, int32_t *out);
+
+/* the found surfaces ascending in place of the walk's order, their triangles put (put_exact) behind them */
+static void shadow_triangles(shadow_state *s, uint32_t words)
+{
+	int16_t *triangles = (int16_t *)(scratch + SHADOW_TRIANGLES + (s->p.triangles & 15));
+	uint32_t n, found = flags_ascending(s->flags, words, s->out);
+
+	for (n = 0; n < found; n++)
+	{
+		const int16_t *surface = (const int16_t *)cache_ptr(s->p.structure.surfaces + s->out[n] * 6, 6);
+
+		triangles[n * 3] = surface[0];
+		triangles[n * 3 + 1] = surface[1];
+		triangles[n * 3 + 2] = surface[2];
+	}
+	if (found)
+		put_exact(triangles, s->p.triangles, found * 6, TAG_OUTPUT);
+}
+
 static void shadow_job(uint32_t params, uint32_t size)
 {
 	shadow_state *s = (shadow_state *)scratch;
@@ -664,7 +686,7 @@ static void shadow_job(uint32_t params, uint32_t size)
 	bytes = (words * 4 + 15) & ~15u;
 	if (s->p.structure.surface_count < 0 || s->p.structure.surface_count > MAXIMUM_SURFACES ||
 		s->p.maximum_count > 4096 || s->p.plane_count > SPU_GAME_SHADOW_PLANES ||
-		s->p.cluster_count > SPU_GAME_SHADOW_CLUSTERS)
+		s->p.cluster_count > SPU_GAME_SHADOW_CLUSTERS || (s->p.triangles & 1))
 	{
 		echo.refused++;
 		answer_put(s->p.answer, SPU_GAME_REFUSED, 0);
@@ -687,6 +709,8 @@ static void shadow_job(uint32_t params, uint32_t size)
 		answer_put(s->p.answer, SPU_GAME_REFUSED, 0);
 		return;
 	}
+	if (s->p.triangles)
+		shadow_triangles(s, words);
 	if (s->found)
 		mfc_put(s->out, s->p.surfaces, (s->found * 4 + 15) & ~15u, TAG_OUTPUT, 0, 0);
 	answer_put(s->p.answer, SPU_GAME_DONE, s->found);

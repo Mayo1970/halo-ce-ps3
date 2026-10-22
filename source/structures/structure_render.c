@@ -1350,13 +1350,14 @@ void structure_render_diffuse_light(
 #ifdef HALO_PS3
 #include "ps3_spu_game.h" /* port: port/ps3/src/ps3_spu.c */
 
-/* port: a shadow's surfaces searched by an SPU (port/ps3/spu/spu_game.c) while its model draws: the job, its answer,
-the indices it finds, its sphere; one shadow at a time. One in 64 is searched by the PPE too, as a check */
+/* port: a shadow's surfaces searched, sorted and their triangles made by an SPU (spu_game.c) while its model draws,
+one shadow at a time; one in 64 searched by the PPE too, as a check */
 static struct
 {
 	spu_game_shadow job;
 	spu_game_answer answer;
 	long surface_indices[MAXIMUM_LOCALLY_RENDERED_SURFACES];
+	short triangles[MAXIMUM_LOCALLY_RENDERED_SURFACES * NUMBER_OF_VERTICES_PER_TRIANGLE];
 	uint32_t ticket;
 	unsigned long shadows;
 	real_point3d center;
@@ -1389,6 +1390,7 @@ void structure_render_shadow_prepare(
 		return;
 	}
 	structure_shadow_spu.job.answer = PS3_SPU_EA(&structure_shadow_spu.answer);
+	structure_shadow_spu.job.triangles = PS3_SPU_EA(structure_shadow_spu.triangles);
 	structure_shadow_spu.answer.status = 0;
 	structure_shadow_spu.center = *bounding_sphere_center;
 	structure_shadow_spu.radius = bounding_sphere_radius;
@@ -1399,9 +1401,10 @@ void structure_render_shadow_prepare(
 		0);
 }
 
-/* port: the SPU's surfaces for this sphere, NONE if it has none (the PPE searches) */
+/* port: the SPU's surfaces for this sphere and their triangles, NONE if it has none (the PPE searches) */
 static long structure_render_shadow_take(
 	long **surface_indices,
+	short const **triangles,
 	real_point3d const *bounding_sphere_center,
 	real bounding_sphere_radius,
 	real_rectangle3d const *bounding_box,
@@ -1436,6 +1439,8 @@ static long structure_render_shadow_take(
 			0,
 			NULL);
 
+		/* (sorted, and their triangles, as structure_render_build_dynamic_triangles makes them) */
+		structure_render_sort_surface_indices(check_indices, check_count);
 		ps3_timer_add(_ps3_timer_spu_shadow_check, check_start);
 		ps3_timer_counts[_ps3_timer_spu_shadow_check]++;
 		if (check_count != surface_count ||
@@ -1443,8 +1448,29 @@ static long structure_render_shadow_take(
 		{
 			ps3_timer_counts[_ps3_timer_spu_shadow_apart]++;
 		}
+		else
+		{
+			struct structure_bsp *structure_bsp = global_structure_bsp_get();
+			long index;
+
+			for (index = 0; index < surface_count; index++)
+			{
+				struct structure_surface *surface = TAG_BLOCK_GET_ELEMENT(
+					&structure_bsp->surfaces,
+					check_indices[index],
+					struct structure_surface);
+
+				if (memcmp(surface->vertex_indices, &structure_shadow_spu.triangles[index * NUMBER_OF_VERTICES_PER_TRIANGLE],
+					NUMBER_OF_VERTICES_PER_TRIANGLE * sizeof(short)))
+				{
+					ps3_timer_counts[_ps3_timer_spu_shadow_apart]++;
+					break;
+				}
+			}
+		}
 	}
 	*surface_indices = structure_shadow_spu.surface_indices;
+	*triangles = structure_shadow_spu.triangles;
 
 	return surface_count;
 }
@@ -1464,6 +1490,7 @@ void structure_render_shadow(
 	long dynamic_triangles_index;
 #ifdef HALO_PS3
 	uint64_t ps3_span, ps3_d3d; /* port: (the timer build) */
+	short const *spu_triangles = NULL; /* port: (the SPU's, structure_render_shadow_take) */
 #endif
 
 	profile_enter(render_structure_shadows_section);
@@ -1472,6 +1499,7 @@ void structure_render_shadow(
 #ifdef HALO_PS3
 	surface_count = structure_render_shadow_take(
 		&surface_indices,
+		&spu_triangles,
 		bounding_sphere_center,
 		bounding_sphere_radius,
 		bounding_box,
@@ -1493,6 +1521,12 @@ void structure_render_shadow(
 	PS3_STRUCTURE_ADD(_ps3_timer_shadow_surfaces, ps3_span, ps3_d3d);
 	PS3_STRUCTURE_COUNT(_ps3_timer_shadow_surfaces, surface_count);
 
+#ifdef HALO_PS3
+	/* port: the SPU's sorted surfaces' triangles */
+	if (spu_triangles)
+		dynamic_triangles_index = structure_render_copy_dynamic_triangles(spu_triangles, surface_count);
+	else
+#endif
 	dynamic_triangles_index = structure_render_build_dynamic_triangles(
 		surface_indices,
 		surface_count,
