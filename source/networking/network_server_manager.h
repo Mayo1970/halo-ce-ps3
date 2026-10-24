@@ -44,6 +44,10 @@ boolean network_game_server_reset_to_pregame(
 void network_game_server_pause_countdown(
 	struct network_game_server *server,
 	boolean pause_countdown);
+/* port: drop the joins a finished game left waiting, so the next one
+starts with none (network_test.c's host) */
+void network_game_server_port_clear_queued_players(
+	struct network_game_server *server);
 void network_game_generate_join_game_token(
 	byte *join_token);
 void network_game_server_kick_machine(
@@ -81,6 +85,10 @@ void network_game_server_port_set_cooperative_friendly_fire(
 PLAYER COLLISIONS), kept for the levels after */
 void network_game_server_port_set_cooperative_player_collisions(
 	boolean player_collisions);
+/* port: whether co-op's players hurt their AI allies (Server Setup's ALLY
+FRIENDLY FIRE), kept for the levels after */
+void network_game_server_port_set_cooperative_ally_friendly_fire(
+	boolean ally_friendly_fire);
 boolean network_game_server_ban_player(
 	char const *text);
 /* port: the host's kick command: as the ban command, but nothing kept (no

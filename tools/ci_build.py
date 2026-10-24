@@ -117,10 +117,8 @@ def main() -> int:
         for pdb in [ROOT / "build/windows/halo.pdb", *sorted((ROOT / "build/windows/third_party").glob("SDL3-*/lib/x86/SDL3.pdb"))]:
             shutil.copy2(pdb, symbols)
             print(f"{pdb.relative_to(ROOT)} -> {symbols.relative_to(ROOT)}", flush=True)
-    # the disc image readers (port/linux/src/xiso.c, and the Android app's
-    # XisoExtractor.java) follow extract-xiso, whose license asks binaries
-    # to carry its notice
-    shutil.copy2(ROOT / "port/third_party/extract-xiso/LICENSE.TXT", dist / "extract-xiso-LICENSE.txt")
+    # OpenCE's own licence, the AGPL, which asks each copy to carry its text
+    shutil.copy2(ROOT / "LICENSE", dist / "LICENSE.txt")
     if args.platform != "web":
         # internet play's DTLS with browsers, and the Linux self-updater's TLS
         # (port/third_party/mbedtls), whose Apache license asks the same
@@ -137,8 +135,9 @@ def main() -> int:
     # voice chat's codec (port/third_party/opus), in every build, whose BSD
     # license asks binaries to carry its notice
     shutil.copy2(ROOT / "port/third_party/opus/COPYING", dist / "opus-COPYING.txt")
-    # voice chat's speaker icons (port/assets/icons/lucide, drawn into the
-    # menus' bitmaps), whose ISC license asks copies to carry its notice
+    # voice chat's speaker icons and the Mods menu's warning icons
+    # (port/assets/icons/lucide, drawn into the menus' bitmaps), whose ISC
+    # license asks copies to carry its notice
     shutil.copy2(ROOT / "port/assets/icons/lucide/LICENSE", dist / "lucide-LICENSE.txt")
     # internet play's MQTT brokers, a file beside the game (network.brokers_file;
     # Android's APK has its own copy)

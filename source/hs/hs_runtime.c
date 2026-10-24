@@ -8,7 +8,7 @@ upstream halo-ce-universal copy of source/hs/hs_runtime.c. */
 #include "ai/ai_script.h"
 #include "hs/hs.h"
 #include "hs/hs_library_internal.h"
-#include "hs/hs_library_internal_runtime.h"
+/* Empty reconstructed header removed; no declarations to include. */
 #include "hs/object_lists.h"
 #include "hs/hs_scenario_definitions.h"
 #include "math/real_math.h"
@@ -23,6 +23,7 @@ upstream halo-ce-universal copy of source/hs/hs_runtime.c. */
 #include "saved games/game_state.h"
 #include "text/draw_string.h"
 #include "cseries/errors.h"
+#include "interface/terminal.h"
 #include "main/console.h"
 #include "game/game.h"
 
@@ -1991,9 +1992,10 @@ void hs_evaluate_inspect(
 		if (hs_type_valid(expression->type) && hs_type_inspectors[expression->type])
 		{
 			hs_type_inspectors[expression->type](expression->type, *value, string);
-			/* port: printed through "%s"; January passed the text as the format (0x4bc840 +0xdd..+0xe6), so a '%' in an
-			inspected string read arguments never passed */
-			console_printf(FALSE, "%s", string);
+			/* port: printed through "%s"; January passed the text as the format (0x4bc840 +0xdd..+0xe6), so a
+			'%' read arguments never passed. A scenario script's inspect is chatter, as print is (hs_print) */
+			if (terminal_shows(terminal_command_running ? _terminal_message_serious : _terminal_message_chatter))
+				console_printf(FALSE, "%s", string);
 		}
 
 		hs_return(thread_index, 0);
@@ -2156,8 +2158,10 @@ void hs_evaluate_begin_random(
 			*argument_count += 1;
 		}
 
+		/* port: one long holds LONG_BITS choices, so a list of that
+		many fits the mask this function already allocates */
 		match_assert("c:\\halo\\source\\hs\\hs_library_internal_runtime.h", 0x50,
-			*argument_count<LONG_BITS);
+			*argument_count<=LONG_BITS);
 
 		csmemset(evaluated, 0, BIT_VECTOR_SIZE_IN_BYTES(*argument_count));
 	}

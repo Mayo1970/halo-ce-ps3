@@ -70,6 +70,8 @@ enum
 	player */
 	MAXIMUM_OBJECT_LISTS_PER_MAP = HALO_PORT_MAXIMUM_OBJECT_LISTS_PER_MAP,
 	MAXIMUM_LISTED_OBJECTS_PER_MAP = HALO_PORT_MAXIMUM_LISTED_OBJECTS_PER_MAP,
+	/* port: list provenance; does not change the header's size. */
+	_object_list_players_bit = 0,
 };
 
 /* ---------- macros */
@@ -105,6 +107,8 @@ void object_lists_initialize_for_new_map(
 {
 	data_make_valid(object_list_header_data);
 	data_make_valid(object_list_data);
+	/* port: the new map's list warns again when full (cluster_partitions.c) */
+	reference_list_port_report(object_list_data);
 
 	return;
 }
@@ -112,6 +116,8 @@ void object_lists_initialize_for_new_map(
 void object_lists_dispose_from_old_map(
 	void)
 {
+	/* port: how many times the map's list was full past the first */
+	reference_list_port_report(object_list_data);
 	data_make_invalid(object_list_header_data);
 	data_make_invalid(object_list_data);
 
@@ -127,10 +133,24 @@ long object_list_new(
 	{
 		struct object_list_header_datum* list = object_list_header_get(list_index);
 		list->count = 0;
+		list->flags = 0; /* port: a recycled slot has no previous provenance */
 		list->first_reference_index = NONE;
 	}
 
 	return list_index;
+}
+
+/* port: only hs_players marks its completed result. */
+void object_list_mark_players(long list_index)
+{
+	if (list_index != NONE)
+		SET_FLAG(object_list_header_get(list_index)->flags, _object_list_players_bit, TRUE);
+}
+
+boolean object_list_is_players(long list_index)
+{
+	return list_index != NONE &&
+		TEST_FLAG(object_list_header_get(list_index)->flags, _object_list_players_bit);
 }
 
 void object_list_delete(
@@ -160,6 +180,8 @@ void object_list_add(
 		return;
 
 	list = object_list_header_get(object_list_index);
+	/* port: a changed list no longer has hs_players' provenance. */
+	list->flags = 0;
 	reference_list_add(object_list_data, &list->first_reference_index, object_index);
 	list->count++;
 

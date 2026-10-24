@@ -21,6 +21,9 @@ const unsigned char *p2p_identifier(void);
 /* the address the game reaches the machine with this identifier at, if it
 is an internet play peer (reached yet or not) */
 int p2p_peer_address(const unsigned char *identifier, unsigned long *address);
+/* the ping to the machine with this identifier, in milliseconds, if the
+tunnel reaches it; -1 if not, or not timed yet */
+int p2p_peer_ping(const unsigned char *identifier);
 
 /* a destination the game sends or connects to (stream: a TCP socket; socket: the game's UDP socket connected to it,
 else -1): 1 if a peer's, rewritten to its stand-in; -1 if a peer's not reachable now (nothing may go there); 0 if not */
@@ -59,6 +62,10 @@ void p2p_set_hosting_allowed(int allowed);
 /* the invite link of the game this machine hosts (empty, 0: none, or LAN
 only) */
 int p2p_invite_link(char *link, int size);
+/* an invite (a link or a code, or any text holding one) as the log shows
+it: its first digits only, since players post their logs and an invite lets
+anyone join; the dedicated server's log, its operator's, has it whole */
+const char *p2p_invite_log_text(const char *invite, char *text, int size);
 
 /* ---- invite codes: P2P_CODE_DIGITS digits that stand for an invite on the brokers, for consoles that cannot paste */
 
@@ -87,13 +94,16 @@ void p2p_set_game_player_counts(int count, int maximum);
 /* whether the game hosted for the internet (not LAN) is in everyone's server browser: Create Game's PUBLIC (a private
 one is reached by its invite alone). Going private makes a new invite, if the old one was listed */
 void p2p_set_hosting_public(int public);
+/* whether the game this machine hosts is listed in everyone's server browser (PUBLIC, and network.public_lobby):
+the text chat is off in one */
+int p2p_hosting_listed(void);
 /* the password of the game hosted for the internet (NULL or empty: none): only those who know it join from the server
 browser (its link still joins). Setting it makes a new invite, if the old one was listed; it takes milliseconds */
 void p2p_set_hosting_password(const char *password);
 /* the hosted game's details as listed (printable ASCII is kept; NULL leaves one as it was): the game's server calls it
 as they change (the same again costs little) */
-void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int open,
-	int in_progress, int has_teams);
+void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int kind,
+	int open, int in_progress, int has_teams);
 /* the server browser: while on, the public games are gathered (asked for
 when turned on, and by p2p_lobby_refresh) */
 void p2p_lobby_browse(int on);
@@ -123,6 +133,9 @@ struct p2p_listing
 	char map[P2P_LISTING_MAP_SIZE + 1];
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
 	unsigned char player_count, maximum_player_count, engine_type;
+	/* the game's kind: an OpenCE gametype's mode, and Hardcore
+	(port/linux/game/game_modes.h's game_modes_kind) */
+	unsigned char kind;
 	unsigned char open, in_progress, has_teams;
 	/* joining it failed this run (p2p_lobby_mark_failed) */
 	unsigned char failed;
@@ -134,9 +147,20 @@ struct p2p_listing
 	unsigned char signing_key[P2P_LISTING_SIGNING_KEY_SIZE];
 	unsigned char sealed_token[P2P_LISTING_SEALED_TOKEN_SIZE];
 };
+/* joins a public game the server browser found (p2p_join_invite with its
+invite), remembering its host: nonzero if it held an invite */
+int p2p_join_listing(const struct p2p_listing *listing);
+/* whether this machine is in the public game it joined from the server
+browser: the tunnel still reaches its host, and no other invite was joined
+since. Such a game has no text chat, whatever its host says
+(port/linux/game/network_chat.c) */
+int p2p_joined_listed_host(void);
 /* a copy of the public games found, in the order shown (the most players
 first; then those not failed, the open ones, by name); returns their count */
 int p2p_lobby_games(struct p2p_listing *games, int maximum_count);
+/* how many hosts list a game of a newer network version, which is not
+shown (an old build sees none of the games) */
+int p2p_lobby_newer_games(void);
 /* a game the browser could not join: kept, marked failed, for this run */
 void p2p_lobby_mark_failed(const unsigned char *identifier);
 /* a locked game's invite (into its invite), if the password is its own:
@@ -192,6 +216,9 @@ int p2p_reach_player(const unsigned char *key_hash);
 /* whether the tunnel reaches the machine with this identifier, and the
 virtual address (network byte order) the game reaches it at */
 int p2p_peer_reached(const unsigned char *identifier, unsigned long *address);
+/* this network's NAT gives each destination its own port and no router
+forwards the tunnel's: only games behind more lenient NATs can be reached */
+int p2p_nat_strict(void);
 
 /* BLAKE2b with a 32-byte digest (Monocypher's): a map's pieces
 (map_share.c) */

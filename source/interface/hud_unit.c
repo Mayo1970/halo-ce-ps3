@@ -23,6 +23,7 @@ upstream halo-ce-universal copy of source/interface/hud_unit.c. */
 #include "tag_files/tag_groups.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#include "network_chat.h" /* port: port/linux/game/network_chat.c */
 
 /* ---------- constants */
 
@@ -333,6 +334,24 @@ void hud_unit_port_set_script_flags(
 	unit_hud_globals->script_flags = flags;
 }
 
+/* port: whether the shield's fall from the last value the HUD saw is a hit.
+The host drains an overshield by about 0.00074 a tick and moves the HUD's
+last value with it (hud_tick_shield), so on the host the two stay equal. A
+network client's shield falls with the host's updates instead, after the
+HUD has taken its last value for the tick, so each frame it was a tick
+behind: the meter flashed and the shield damage sound played for the whole
+overshield, where the Xbox plays nothing. A small step from past full (0.02
+or less, about 25 ticks of drain) is that drain; a larger one is a hit,
+which still flashes the meter and plays the sound. */
+static boolean hud_shield_drop_is_hit(
+	real last_shield_vitality,
+	real shield_vitality)
+{
+	if (!(last_shield_vitality > shield_vitality))
+		return FALSE;
+	return !(last_shield_vitality > 1.0f && last_shield_vitality - shield_vitality <= 0.02f);
+}
+
 void hud_play_unit_sounds(
 	struct player_datum const *player,
 	boolean show_hud)
@@ -382,11 +401,13 @@ void hud_play_unit_sounds(
 							sound_flags = TEST_FLAG(
 								unit->object.damage_flags,
 								_object_shield_charging_bit);
+							/* port: not an overshield's drain (hud_shield_drop_is_hit) */
 							SET_FLAG(
 								sound_flags,
 								_unit_hud_shield_damage,
-								hud_state->last_shield_vitality >
-									unit->object.shield_vitality);
+								hud_shield_drop_is_hit(
+									hud_state->last_shield_vitality,
+									unit->object.shield_vitality));
 							SET_FLAG(
 								sound_flags,
 								_unit_hud_shield_low,
@@ -467,11 +488,9 @@ static void hud_update_unit_local_player(
 
 			if (hud_state->last_shield_vitality > unit->object.shield_vitality)
 			{
-				real shield_drop = hud_state->last_shield_vitality - unit->object.shield_vitality;
-
-				/* port: the host's overshield drain (0.00074 a tick, hud_tick_shield) reached a client as hits (flash,
-				damage sound): a step down from past full of at most 25 ticks' drain is closed here; a larger one is a hit */
-				if (hud_state->last_shield_vitality > 1.0f && shield_drop <= 0.02f)
+				/* port: an overshield's drain is not a hit (hud_shield_drop_is_hit); the step is closed here so a late
+				packet cannot leave the meter behind and keep the flash going, and a fading flash goes on fading */
+				if (!hud_shield_drop_is_hit(hud_state->last_shield_vitality, unit->object.shield_vitality))
 				{
 					hud_state->last_shield_vitality = unit->object.shield_vitality;
 					if (hud_state->fade_time > 0.0f)
@@ -1084,6 +1103,8 @@ void hud_render_unit_interface(
 					struct hud_absolute_placement_definition absolute_placement;
 					short draw_flags = 0;
 					point2d corner;
+					/* port: its picture's left (NONE: none drawn) */
+					short motion_sensor_left = NONE;
 
 					absolute_placement.corner = _hud_anchor_bottom_left;
 					SET_FLAG(
@@ -1109,12 +1130,16 @@ void hud_render_unit_interface(
 
 					if (hud_definition->motion_sensor.background.interface_bitmap.index != NONE)
 					{
+						/* port: none, unless it is drawn (its bitmap can be missing) */
+						hud_draw_last_left = NONE;
 						hud_draw_static_element(
 							local_player_index,
 							&absolute_placement,
 							&hud_definition->motion_sensor.background,
 							draw_flags,
 							NONE);
+						/* port: where it is (the text chat goes above it) */
+						motion_sensor_left = hud_draw_last_left;
 					}
 					if (hud_definition->motion_sensor.foreground.interface_bitmap.index != NONE)
 					{
@@ -1140,6 +1165,13 @@ void hud_render_unit_interface(
 						local_player_count() > 1,
 						&corner);
 					PS3_UNIT_HUD_PART(_ps3_timer_hud_sensor);
+					/* port: the text chat goes above it: its circle's top, as far above the blips' centre as the
+					picture's left edge is left of it (the picture is taller than the circle) */
+					if (motion_sensor_left != NONE)
+					{
+						network_chat_note_motion_sensor(local_player_index, motion_sensor_left,
+							(short)(corner.y - (corner.x - motion_sensor_left)));
+					}
 				}
 
 				{

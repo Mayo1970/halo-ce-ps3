@@ -45,6 +45,11 @@ boolean network_game_client_set_team(
 boolean network_game_client_advertised_game_in_progress(
 	struct network_game_client *client,
 	struct network_advertised_game const *game);
+/* port: the advertised game's kind (port/linux/game/game_modes.h's
+game_modes_kind) */
+byte network_game_client_advertised_game_kind(
+	struct network_game_client *client,
+	struct network_advertised_game const *game);
 boolean network_game_client_advertised_game_compatible(
 	struct network_game_client *client,
 	struct network_advertised_game const *game,
@@ -156,6 +161,10 @@ extern boolean allow_out_of_sync;
 /* the host's game time when it told this client to start a game in progress,
 16 bits of it (network_client_message_handler.c sets it) */
 extern long network_game_client_late_join_time;
+/* port: the host's start: the game loaded now, or once the map is there if it
+is being downloaded (map sharing) */
+boolean network_game_client_begin_game(
+	struct network_game_client *client);
 extern boolean network_game_client_dont_use_directly_in_use;
 extern struct network_game_client network_game_client_dont_use_directly;
 

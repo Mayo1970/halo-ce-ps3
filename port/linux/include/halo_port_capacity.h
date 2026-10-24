@@ -58,7 +58,7 @@ Android's window is 128 MB, as the web build's, and its cache the Xbox's. */
 The sound cache holds the sounds being played in 4 KB pages, 4 MB of them on
 the Xbox. Halo Custom Edition maps' sounds, converted when they load
 (port/linux/game/custom_edition_sounds.c), and those of sound tags loaded
-over a map's (loose_sounds.c), are longer than the Xbox maps' and fill it (a
+over a map's by mods (mod_sounds.c), are longer than the Xbox maps' and fill it (a
 campaign map's dialogue and music did, "SOUND CACHE BLOWN" in debug.txt).
 The desktop builds' cache is 16 MB; Android's and the web build's windows keep
 the Xbox's. */
@@ -67,6 +67,26 @@ the Xbox's. */
 #define HALO_PORT_SOUND_CACHE_SIZE 0x400000 /* (0x400000) */
 #else
 #define HALO_PORT_SOUND_CACHE_SIZE 0x1000000 /* (0x400000) */
+#endif
+
+/* ---------- particles and lights a frame draws
+
+What one view draws in a frame, past which the rest is not drawn: the runs
+of particles that share a definition, and the dynamic lights (an assault
+rifle's flashlight, each plasma bolt's light) found in the clusters it sees.
+A busy multiplayer fight spends the Xbox's 512 and 128, and plasma bolts,
+charge glows and flashlights stop drawing. The desktop builds draw four
+times as many. Only what is drawn changes: these are rebuilt every frame,
+outside the game state, and nothing of them reaches the network, so
+machines with other limits still play the same game. Android's, the web
+build's and the PS3's keep the Xbox's. (The transparent geometry groups: below.) */
+
+#if defined(HALO_ARM64_GUEST) || defined(HALO_WEB) || defined(HALO_PS3)
+#define HALO_PORT_MAXIMUM_RENDERED_PARTICLE_GROUPS 512 /* (512) */
+#define HALO_PORT_MAXIMUM_RENDERED_LIGHTS 128 /* (128) */
+#else
+#define HALO_PORT_MAXIMUM_RENDERED_PARTICLE_GROUPS 2048 /* (512) */
+#define HALO_PORT_MAXIMUM_RENDERED_LIGHTS 512 /* (128) */
 #endif
 
 /* ---------- AI

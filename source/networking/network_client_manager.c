@@ -30,6 +30,7 @@ upstream halo-ce-universal copy of source/networking/network_client_manager.c. *
 #include "networking/network_server_manager.h"
 #include "text/unicode.h"
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
 
 /* ---------- constants */
 
@@ -418,6 +419,13 @@ static boolean network_game_client_idle_postgame(
 whether the first game update is to bring the host's time (at every start) */
 long network_game_client_late_join_time;
 static boolean network_game_client_late_join_clock_pending;
+/* port: the host said to start while this machine was still downloading the
+map (map sharing): started once the map is there, network_game_client_idle_pregame,
+if the game is still the one put off (its map, and the games played before
+it: the host may end it, or go on to another, meanwhile) */
+static boolean network_game_client_start_pending;
+static char network_game_client_start_pending_map[0x80];
+static long network_game_client_start_pending_games;
 
 /* whether the automated tests' join has told the player why a host cannot
 be joined (network_game_client_join_first_available_game) */
@@ -434,12 +442,14 @@ static unsigned long network_game_client_link_down_time;
 static unsigned long network_game_client_link_checked_time;
 static boolean network_game_client_link_down;
 
-/* each advertised game's host's network version and netcode, by its place
-in the client's available_games (HALO_PORT_NETWORK_VERSION) */
+/* each advertised game's host's network version and netcode, and the game's
+kind (game_modes_kind), by its place in the client's available_games
+(HALO_PORT_NETWORK_VERSION) */
 static struct
 {
 	word version;
 	byte flags;
+	byte kind;
 } network_game_client_advertised_versions[MAXIMUM_NETWORK_ADVERTISED_GAMES];
 
 struct network_game_client network_game_client_dont_use_directly;
@@ -648,6 +658,8 @@ boolean network_game_client_switch_to_pregame(
 		client->state = _network_game_client_state_pregame;
 		network_game_client_late_join_time = 0;
 		network_game_client_late_join_clock_pending = FALSE;
+		/* port: a start put off is not this game's */
+		network_game_client_start_pending = FALSE;
 		network_event("switching to pregame");
 		network_game_reset_to_pregame_ui();
 		network_connection_keep_alive(client->connection);
@@ -1271,6 +1283,26 @@ boolean network_game_client_handle_game_update(
 	return TRUE;
 }
 
+/* port: not while the map is still being downloaded (map sharing): loaded
+then, it is not there (the damaged disc error, for good). The game starts
+once it is there (network_game_client_idle_pregame). A host of this version
+starts no machine before its download is done; one of before may. */
+boolean network_game_client_begin_game(
+	struct network_game_client *client)
+{
+	if (client && map_share_downloading(client->game.map.name))
+	{
+		network_game_client_start_pending = TRUE;
+		csstrncpy(network_game_client_start_pending_map, client->game.map.name,
+			sizeof(network_game_client_start_pending_map) - 1);
+		network_game_client_start_pending_map[sizeof(network_game_client_start_pending_map) - 1] = 0;
+		network_game_client_start_pending_games = client->game.number_of_games_played;
+		network_event("the host started the game while its map is being downloaded: joining it once the map is there");
+		return TRUE;
+	}
+	return network_game_client_game_has_started(client);
+}
+
 boolean network_game_client_game_has_started(
 	struct network_game_client *client)
 {
@@ -1848,6 +1880,8 @@ void network_game_client_reset(
 	client->seconds_to_game_start = NONE;
 	network_game_client_late_join_time = 0;
 	network_game_client_late_join_clock_pending = FALSE;
+	/* port: no start put off */
+	network_game_client_start_pending = FALSE;
 	network_game_client_incompatibility_told = FALSE;
 	csmemset(network_game_client_add_player_requested, 0, sizeof(network_game_client_add_player_requested));
 
@@ -2116,6 +2150,8 @@ static boolean add_advertised_game(
 				(advertisement->__unknown5A[HALO_PORT_ADVERTISED_VERSION_OFFSET + 1] << 8));
 			network_game_client_advertised_versions[game_index].flags =
 				advertisement->__unknown5A[HALO_PORT_ADVERTISED_FLAGS_OFFSET];
+			network_game_client_advertised_versions[game_index].kind =
+				advertisement->__unknown5A[HALO_PORT_ADVERTISED_KIND_OFFSET];
 		}
 
 		if (advertisement->game_name[0] != L'\0')
@@ -2522,6 +2558,26 @@ static boolean network_game_client_idle_pregame(
 			{
 				network_event("network_game_client_process_incoming_messages() failed in network_game_client_idle_pregame()");
 			}
+			/* port: a start put off while the map was downloaded (map
+			sharing), once the download is over: the game loaded if the map
+			is there (a failed download leaves the game: map_share.c) */
+			else if (network_game_client_start_pending && client->state == _network_game_client_state_pregame &&
+				!map_share_downloading(client->game.map.name))
+			{
+				network_game_client_start_pending = FALSE;
+				if (csstrcmp(client->game.map.name, network_game_client_start_pending_map) ||
+					client->game.number_of_games_played != network_game_client_start_pending_games)
+				{
+					network_event("the game put off is over: waiting for the host's next start");
+				}
+				else if (!custom_edition_level_name(client->game.map.name) ||
+					custom_edition_cache_playable(client->game.map.name))
+				{
+					network_event("the map is downloaded: joining the game the host started");
+					if (!network_game_client_game_has_started(client))
+						network_event("network_game_client_game_has_started() failed");
+				}
+			}
 		}
 		else
 		{
@@ -2752,6 +2808,18 @@ boolean network_game_client_advertised_game_in_progress(
 
 	return game_index >= 0 && game_index < MAXIMUM_NETWORK_ADVERTISED_GAMES &&
 		(network_game_client_advertised_versions[game_index].flags & HALO_PORT_ADVERTISED_IN_PROGRESS_FLAG) != 0;
+}
+
+/* port: the advertised game's kind (an OpenCE gametype's mode, and Hardcore:
+port/linux/game/game_modes.h), for the server browser's name of it */
+byte network_game_client_advertised_game_kind(
+	struct network_game_client *client,
+	struct network_advertised_game const *game)
+{
+	long game_index = client ? game - client->available_games : NONE;
+
+	return game_index >= 0 && game_index < MAXIMUM_NETWORK_ADVERTISED_GAMES ?
+		network_game_client_advertised_versions[game_index].kind : 0;
 }
 
 boolean network_game_client_join_first_available_game(

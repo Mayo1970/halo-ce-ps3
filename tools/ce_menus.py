@@ -69,15 +69,23 @@ LEFT_OUT = {
     "ui\\shell\\main_menu\\multiplayer_type_select\\checking_updates_screen_create",
     "ui\\shell\\main_menu\\multiplayer_type_select\\checking_updates_screen_join",
 }
-# children moved: (parent, child) to (x, y); the main menu's Quit up into
-# Credits' place; Multiplayer's Edit Gametypes and its line down a row, for
-# Co-op (port_settings.WIDGET_PATCHES)
+# children moved: (parent, child) to (x, y); the main menu's Quit a row below
+# Mods, which takes Credits' place; Multiplayer's Edit Gametypes and divider
+# below Co-op, keeping its 32-unit highlight inside the description panel's
+# bottom curve (port_settings.WIDGET_PATCHES)
 CHILD_OFFSETS = {
-    ("ui\\shell\\main_menu\\main_menu_select_list", "ui\\shell\\main_menu\\main_menu_item_quit_game"): (192, 391),
+    # Player Options' rows 27 apart, not 30, so that the host's AIM ASSIST and
+    # SHIELD EFFECTS fit below them and above the help, which some fill with
+    # three lines (port_settings.WIDGET_PATCHES)
+    **{("ui\\shell\\main_menu\\settings_select\\multiplayer_setup\\player_options_edit\\player_options_menu",
+        f"ui\\shell\\main_menu\\settings_select\\multiplayer_setup\\player_options_edit\\op_{row}"): (54, 73 + 27 * index)
+       for index, row in enumerate(port_settings.PLAYER_OPTIONS_ROWS)},
+    ("ui\\shell\\main_menu\\main_menu_select_list", "ui\\shell\\main_menu\\main_menu_item_quit_game"):
+        port_settings.QUIT_ITEM_PLACE,
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_list",
-     "ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_gametypes_item"): (0, 375),
+     "ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_gametypes_item"): (0, 358),
     ("ui\\shell\\main_menu\\multiplayer_type_select\\multiplayer_type_select_screen",
-     "ui\\shell\\main_menu\\blueline"): (64, 358),
+     "ui\\shell\\main_menu\\blueline"): (64, 349),
     # the browser's rows up under the column titles, into the place of the
     # scroll up button (hidden: the list does not scroll)
     **{("ui\\shell\\main_menu\\multiplayer_type_select\\join_game\\join_game_items_list",
@@ -272,6 +280,31 @@ def attributes(pairs: list) -> str:
 def text_value(utf16: bytes) -> str:
     text = utf16.decode("utf-16-le").split("\0")[0]
     return text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "")
+
+
+def strings_xml(lists: dict) -> str:
+    """strings.xml: the PC version's string lists (each tag's strings), with
+    the port's changes to them (port_settings.STRING_OVERRIDES and
+    STRING_INSERTS). Each list names its tag (map=) and each of its strings
+    that is the PC version's its index there (map=), which a map in another
+    language has in its language (menu_tags.c's map_strings)."""
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             "<!-- The PC version's menus' text (tools/ce_menus.py) -->", "<menus>"]
+    for tag in sorted(lists):
+        strings = lists[tag]
+        originals = list(range(len(strings)))
+        if our_name(tag) in port_settings.STRING_OVERRIDES:
+            strings = port_settings.STRING_OVERRIDES[our_name(tag)]
+            originals = port_settings.OVERRIDE_ORIGINALS.get(our_name(tag), [None] * len(strings))
+        for index, texts in port_settings.STRING_INSERTS.get(our_name(tag), []):
+            strings = strings[:index] + texts + strings[index:]
+            originals = originals[:index] + [None] * len(texts) + originals[index:]
+        lines.append(f"\t<strings{attributes([('name', our_name(tag)), ('map', tag)])}>")
+        lines += [f"\t\t<string{attributes([('text', text), ('map', original)])}/>"
+                  for text, original in zip(strings, originals)]
+        lines.append("\t</strings>")
+    lines.append("</menus>")
+    return "\n".join(lines) + "\n"
 
 
 def flag_names(value: int, names: list) -> str:
@@ -542,6 +575,20 @@ def engine_names(source: Path, start: str, count: int) -> list:
     return re.findall(r'"([^"\\]*)"', text[:text.index("}")])[:count]
 
 
+def pause_art(art):
+    lines = []
+    for piece in ("left", "center", "right"):
+        heights = [port_settings.pause_box_height(buttons) for buttons in port_settings.PAUSE_BOX_BUTTONS]
+        heights += list(port_settings.PAUSE_BOX_EXTRA_HEIGHTS)
+        lines.append(art.port_picture(f"pause/pausebox_{piece}", [
+            (port_settings.pause_box_svg(piece, height), 4 if piece == "center" else 16, 256) for height in heights]))
+    for piece in ("left", "center", "right"):
+        lines.append(art.port_picture(f"pause/objectives_{piece}", [
+            (port_settings.pause_box_svg(piece, height, header=True), 4 if piece == "center" else 16, 256)
+            for height in port_settings.PAUSE_BOX_EXTRA_HEIGHTS]))
+    return lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tags", type=Path, required=True)
@@ -603,36 +650,28 @@ def main() -> None:
     for name, lines in [*port_settings.settings_files().items(), *port_settings.multiplayer_files().items()]:
         (CE / name).write_text("\n".join(lines))
     # their strings
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-             "<!-- The PC version's menus' text (tools/ce_menus.py) -->", "<menus>"]
-    for tag in sorted(string_lists):
-        strings = [text_value(item["string"]) for item in tags.load(tag, "unicode_string_list")["strings"]]
-        strings = port_settings.STRING_OVERRIDES.get(our_name(tag), strings)
-        for index, texts in port_settings.STRING_INSERTS.get(our_name(tag), []):
-            strings = strings[:index] + texts + strings[index:]
-        lines.append(f"\t<strings{attributes([('name', our_name(tag))])}>")
-        lines += [f"\t\t<string{attributes([('text', text)])}/>" for text in strings]
-        lines.append("\t</strings>")
-    lines.append("</menus>")
-    (CE / "strings.xml").write_text("\n".join(lines) + "\n")
+    (CE / "strings.xml").write_text(strings_xml({
+        tag: [text_value(item["string"]) for item in tags.load(tag, "unicode_string_list")["strings"]]
+        for tag in string_lists}))
     # their bitmaps
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              "<!-- The PC version's menus' bitmaps, drawn from the redraws, else the PC version's own pictures"
              " (NON_HANDDRAWN.md; tools/ce_menus.py) -->", "<menus>"]
     lines += [art.bitmap(tag) for tag in sorted(bitmaps)]
     lines += [art.title(name, text) for name, text in sorted(port_settings.TITLES.items())]
-    # (the in-game pause menu's taller box: menu_tags.c's pause_patch)
-    for piece in ("left", "center", "right"):
-        heights = [port_settings.pause_box_height(buttons) for buttons in port_settings.PAUSE_BOX_BUTTONS]
-        heights += list(port_settings.PAUSE_BOX_EXTRA_HEIGHTS)
-        lines.append(art.port_picture(f"pause/pausebox_{piece}", [
-            (port_settings.pause_box_svg(piece, height), 4 if piece == "center" else 16, 256) for height in heights]))
+    lines += pause_art(art)
     # (voice chat's speaker, of a player who talks and of one muted: Lucide's
     # icons, port/assets/icons/lucide, white for network_voice.c to tint)
     lines.append(art.port_picture("voice/speaker", [
         ((ROOT / "port/assets/icons/lucide" / f"{icon}.svg").read_text().replace('stroke="currentColor"',
                                                                                  'stroke="#FFFFFF"'), 24, 24)
         for icon in ("volume-2", "volume-x")]))
+    # (the main menu's MODS, in the redraws' own letters, and the mods'
+    # status icons: Lucide's, port/assets/icons/lucide)
+    lines.append(art.port_picture("main_menu/menu_mods", port_settings.menu_item_frames("MODS", art.redraws)))
+    lines.append(art.port_picture("mods/status", port_settings.mod_status_frames(ROOT / "port/assets/icons/lucide")))
+    lines.append(art.port_picture("mods/status_small",
+                                  port_settings.mod_status_frames(ROOT / "port/assets/icons/lucide", 16)))
     # (nothing: what a game map draws for a frame of ui.map's it has not,
     # menu_tags.c)
     lines.append(art.port_picture("blank", [

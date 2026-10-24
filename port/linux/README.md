@@ -35,9 +35,11 @@ To start the game:
 - The 32-bit OpenGL libraries (`lib32-mesa`).
 - The 32-bit PipeWire or PulseAudio client libraries (`lib32-pipewire` or
   `lib32-libpulse`).
-- The 32-bit X11 libraries (`lib32-libx11`, `lib32-libxext`). In a Wayland
-  session, the game uses them through XWayland. SDL uses Wayland itself
-  only if the 32-bit Wayland libraries are version 1.20 or later
+- The 32-bit X11 libraries (`lib32-libx11`, `lib32-libxext`, and
+  `lib32-libxi`, with which SDL holds the mouse; without it the game hides
+  the pointer and moves it back to the middle of the window instead). In a
+  Wayland session, the game uses them through XWayland. SDL uses Wayland
+  itself only if the 32-bit Wayland libraries are version 1.20 or later
   (`lib32-wayland`, `lib32-libxkbcommon`; Debian 11, Ubuntu 20.04 and
   Fedora 32 have older ones) and the compositor has the fifo-v1 protocol.
   On GNOME, the window then has borders only with the 32-bit libdecor
@@ -76,7 +78,10 @@ against it.
 To make the portable build you need, in addition to the tools above,
 CMake, `pkg-config` (`pkgconf`) and `wayland-scanner` (`wayland` on Arch
 Linux, `libwayland-bin` on Debian and Ubuntu). You do not need the 32-bit
-SDL3. You need the 32-bit glibc only for the tests.
+SDL3. You need the 32-bit glibc only for the tests. Keep the checkout in a
+folder whose path has no spaces: SDL's build takes the system root's
+include folders from `pkg-config`, which splits a path at its spaces, so the
+portable build stops with a message there.
 
 To see the glibc version that a build needs, enter
 `readelf -V build/linux/halo | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`.
@@ -107,11 +112,23 @@ sequence:
    contains the executable.
 
 If the game finds no data, it asks for an Xbox disc image (`.xiso` or
-`.iso`). This occurs at the first start:
+`.iso`). This occurs at the first start. First the game looks for a disc
+image in the folder of the executable (a name that ends in `.iso` or
+`.xiso`, in capitals or not). If it finds one, it names that image in its
+question:
 
 - Select "No" to stop the game.
-- Select "Yes" to open a file picker. Select the disc image. The game copies
-  `maps/` next to the executable and shows the progress.
+- Select "Yes" to copy `maps/` from the disc image. If the game found an
+  image next to the executable, it uses that image and shows no file picker.
+  Otherwise it opens a file picker: select the disc image, or cancel to see
+  the question again. The game copies `maps/` next to the executable and
+  shows the progress. If the copy from the image found next to the
+  executable fails, the next "Yes" opens the file picker.
+
+On Linux, the file picker needs the desktop portal or `zenity`. If neither
+is present, the game says to put the disc image next to the executable (or
+to install `zenity`) and stops. Put the image there and start the game
+again.
 
 The game writes the copy to `maps.partial`. When the copy is complete, the
 game changes the name to `maps`. If the copy stops before it is complete,
@@ -149,6 +166,21 @@ Do the set-up in Desktop Mode: unpack the release, put `maps/` next to
   wait: the host drops a machine that it has not heard from for 15 seconds,
   and while a Deck that hosts sleeps, the other players have no host.
 
+### NVIDIA on Wayland
+
+The game is a 32-bit program. NVIDIA's driver draws OpenGL into a Wayland
+window through its `egl-wayland` library, which most distributions only
+ship 64-bit (Arch and its derivatives have no 32-bit package of it). A
+32-bit OpenGL window on Wayland then falls back to Mesa's `llvmpipe`, which
+draws on the processor: the log shows `OpenGL ... on llvmpipe`, and the
+game is slow or never finishes loading.
+
+So on a Wayland desktop with NVIDIA's driver loaded, the game opens its
+window through XWayland (X11), where the 32-bit driver draws, unless a
+32-bit `egl-wayland` is installed. The log says so ("video: NVIDIA's
+driver ..."). `SDL_VIDEO_DRIVER=wayland` or `SDL_VIDEO_DRIVER=x11` chooses
+the video driver yourself.
+
 ## Files and folders
 
 | Xbox drive | Folder |
@@ -170,7 +202,7 @@ These files are in the data root:
 | --- | --- |
 | `debug.txt` | The log of the game. At start-up, the game shows the data root in the terminal. A crash writes its report (the faulting address and the calls that led to it) here as well; the `reference address` line at the top of each session places those addresses in the build. |
 | `init.txt` | Console commands that the game does at start-up. For example, `map_name levels\a10\a10` starts the first campaign level. |
-| `tags/` | Sound tag files that replace the sounds of the maps (`audio.loose_sounds`). |
+| `mods/` | Mods: folders of Halo PC tag files whose sounds, bitmaps, text and models play over the maps' on this machine, in the order of the main menu's Mods (`load_order.toml`). Refer to [docs/mods.md](../../docs/mods.md). |
 
 The settings are in `config.toml` next to the executable. Refer to
 "Settings". Internet play's MQTT brokers are in `brokers.txt` next to it
@@ -191,7 +223,9 @@ computer (co-op, or split screen in a network game) and only one gamepad,
 that gamepad is controller 2 (player 2) and the keyboard and mouse stay
 controller 1. The gamepad changes controller only when none of its buttons
 is held. The profile's button layout (Settings > Gamepads) is the
-gamepads' only.
+gamepads' only. Besides the Xbox's five, it has the Master Chief
+Collection's Bumper Jumper: jump on the left bumper, melee on the right,
+switching grenades on A, action and reload on B and the flashlight on X.
 
 | Action | Keys and buttons (default) |
 | --- | --- |
@@ -212,6 +246,12 @@ gamepads' only.
 | pause menu | escape |
 | screenshot | F10 |
 | talk in voice chat (hold) | V |
+| type a chat line to everyone | T |
+| type a chat line to your team | Y |
+| while typing a chat line: to everyone, the team or the vehicle, in turn | Tab |
+
+With a controller, or the touch controls' D-pad, D-pad Up opens the text
+chat's on-screen keyboard (refer to "Text chat").
 
 Always: \` opens the developer console, F12 releases or captures the mouse,
 F11 changes between fullscreen and window. Screenshot (default F10,
@@ -223,7 +263,9 @@ second get a numeric suffix so previous screenshots are preserved.
 One movement of the mouse wheel changes the weapon one time. A second
 movement after a short pause changes it again.
 
-In the menus, the mouse moves a pointer:
+In the menus, the mouse moves a pointer, a blue arrow
+(`port/assets/cursor/menu_cursor.png`) in place of the system's, sized to
+the window as Halo PC's was (32 of the menus' 480 lines tall):
 
 - The item below the pointer gets the focus.
 - A left click selects the item. On a setting with values, a click on the
@@ -260,6 +302,13 @@ change. The screens open, close and move between each other as the PC
 version's. `display.menus = "xbox"` gives the Xbox's menus, which start every
 kind of game.
 
+The menus' text is in the language of the Custom Edition whose `loc.map` is
+in `custom_maps` (French, German, Italian, Spanish and so on), as that
+edition shows it: each of the PC version's texts is that `loc.map`'s
+(`display.menu_language`). Without one, and for the lines the port adds,
+it is English. The pictures with words in them (the screens' titles, the
+main menu's items) are drawn in English.
+
 Multiplayer > CO-OP CAMPAIGN is the Xbox's cooperative play, which the PC
 version does not have: two players on this computer play the campaign in
 split screen. Player 1 is the player who chose it, on the current profile.
@@ -274,7 +323,9 @@ player's profile is chosen on the ADD PLAYER screen that opens (with any
 controller). With one gamepad, choose the lobby's ADD PLAYER button first:
 until then that gamepad shares controller 1 with the keyboard. Two players on one profile get different names from the host. A
 player's B in the lobby leaves the game alone, and the last player of the
-computer leaves it for all of them. In the game, each player's pause menu
+computer leaves it for all of them. When all the players are on the host's
+computer, START NOW starts the game without another computer, and a team
+game does not need a player on each team. In the game, each player's pause menu
 opens on their part of the screen, and its LEAVE GAME is theirs: their part
 of the screen stays until the game ends. A game under way shows its own
 screen before JOIN GAME: players join there the same way, START or ADD
@@ -282,6 +333,9 @@ PLAYER then START, and JOIN GAME brings them all into the game.
 
 In a multiplayer game, the pause menu (escape) has SETTINGS, which opens
 the profile's settings while the game goes on, and for the host END GAME.
+There Network Setup has only its pages that work in a game (Map Sharing,
+Multiplayer HUD with the text chat, and Streamer Mode), not INTERNET PLAY,
+which would drop the game, nor the rows for the main menu.
 END GAME ends the game as its time limit does: the players stay, and after
 the carnage report the host picks the next map and gametype (PICK GAME).
 LEAVE GAME of the host still ends the game for everyone. The buttons go into
@@ -295,7 +349,13 @@ In a single-player campaign, the pause menu has SETTINGS too, before REVERT
 TO SAVED, in the same box: a list with room for it centres its rows, and
 one without keeps its size, its rows closer. It opens the same settings,
 while the game stays paused, with only Controls, Gamepads, Mouse, Audio and
-Video Setup; Gamepads' OK saves the profile at once.
+Video Setup; Gamepads' OK saves the profile at once. In co-op the settings
+have Network Setup too, with its in-game pages as in a multiplayer game.
+
+In an online co-op game, the pause menu also has FRIENDLY FIRE ON or
+FRIENDLY FIRE OFF, after SETTINGS, in a box drawn taller for it: whether this
+computer's players hurt, and are hurt by, the other players
+(`network.coop_own_friendly_fire`). A or enter changes it, from that moment.
 
 The menus are XML files in `port/assets/menus` (`tools/ce_menus.py` writes
 them from the PC version's tags), which the game contains. To change them,
@@ -304,6 +364,51 @@ path replaces one of the game's, and another `.xml` file is added.
 `port/assets/menus/README.md` describes the files. If a file has a problem,
 the game uses the Xbox's menus and the log names the file, the line and the
 problem.
+
+## Bots
+
+Computer players (bots) can play a local multiplayer game with you:
+`bots.count` (1 to 15) of them join the lobby of a Slayer game played on
+this computer, which is Multiplayer > Split Screen in the Xbox's menus
+(`display.menus = "xbox"`; the PC version's menus have no game of this
+computer alone). They are players as you are: in the scores, the respawns
+and the game's rules, on the teams that `bots.teams` asks for, and they
+follow the teams' changes in the lobby. They look for enemies, aim, fire,
+throw grenades and pick up better weapons, as well as `bots.skill` lets
+them, and walk the paths that the campaign's AI finds on the maps' walkable
+surfaces (`game/bots.c`). They are never in system link or internet games,
+nor in other gametypes (but SWAT, Infection and Gun Game, which are
+Slayer's: below), and nothing that the machines send each other changes.
+
+## OpenCE gametypes
+
+Create Game's Select Gametype screen has a bank between STANDARD and
+CUSTOM: OPENCE, the port's own gametypes (`game/game_modes.c`).
+
+| Gametype | Rules |
+| --- | --- |
+| SWAT | Team Slayer with no shields, in which a shot to the head of any weapon kills (a bullet's, a plasma bolt's, a needle's or a shotgun pellet's, not a melee's or an explosion's). Everyone starts with a pistol and an assault rifle; no weapons are on the map, no one has grenades, and there is no motion sensor. |
+| Infection | Team Slayer. Humans are red and keep the map's weapons; zombies are blue, carry the Oddball skull and nothing else, move faster, hit harder with the skull, and cannot drive, pick up grenades or powerups. Once two players are alive the round counts down, then the host chooses the first zombies (a human is always left). A human killed by a zombie, by themselves or by a fall becomes a zombie, one killed by a teammate does not; a zombie respawns a zombie, and a player who joins late is one. The zombies win when no human is left, the humans when the round's time runs out (5 minutes). Each player scores a kill of the other side. The rules follow pull request #420's (`game/infection.c`). |
+| Gun Game | Free for all Slayer. Everyone starts with the first weapon of a list (the rocket launcher, the shotgun, the sniper rifle, the plasma rifle, the assault rifle, the needler, the plasma pistol, the pistol, of those the map has); each kill gives the killer the next, and a kill with the last wins. No one picks up a weapon, a weapon emptied is refilled, and a melee kill takes the victim back a weapon (`game/gun_game.c`). |
+| Hardcore Slayer, Hardcore CTF, Hardcore Oddball, Hardcore King | The team gametypes with Hardcore's rules: no motion sensor (the flag, the ball and the hill keep their nav points), no aim assist (no autoaim nor magnetism, for controllers and the mouse alike), friendly fire on, and a kill restores the killer's health, and their shields unless an overshield has them past full. |
+
+Edit Gametypes edits them as any gametype, and its OPENCE OPTIONS screen
+(after TEAMPLAY OPTIONS) gives any gametype these rules: its MODE (NONE,
+SWAT, INFECTION or GUN GAME: Slayer only; Infection is played on teams and
+Gun Game free for all, which the screen's OK sets), HARDCORE (any game
+type), and the mode's own options: Infection's first zombies, zombie speed,
+skull damage, zombie respawn time, countdown and zombie shields, and Gun
+Game's weapon order (strongest first, weakest first, or random, drawn by
+the host for each game) and whether a melee kill demotes. A saved gametype
+keeps them with its PC options (`saved games/playlist_profile.c`, version 2
+of their block; a gametype saved before them has none), and the network
+game carries them to every machine (network version 35, `NETCODE.md`).
+Only the host decides each mode's events (Infection's zombies, Gun Game's
+weapons, Hardcore's restores); the clients take them from it as they take
+the rest of the game. The lobby and Server Setup name the gametype's mode.
+`debug.network_test` hosts them by name: `swat`, `infection`, `gun_game`,
+`hardcore`, `hardcore_ctf`, `hardcore_oddball` and `hardcore_king`
+(`host:bloodgulch:infection`).
 
 ## Settings
 
@@ -314,7 +419,9 @@ values again, delete the file.
 
 The game reads the file at start-up. If a key is not correct, or a value
 has the wrong type, the game writes the line to the log and uses the default
-value. The Settings menu (Video, Mouse, Audio, Network and Controls Setup)
+value. A key in the wrong section is named with the section it goes under. A
+file that cannot be parsed leaves every setting at its default; a word value
+needs its quotes (`menus = "pc"`, not `menus = pc`). The Settings menu (Video, Mouse, Audio, Network and Controls Setup)
 changes the useful settings, writes them into the file (only their lines
 change) and applies them at once, but `audio.enabled`, and `display.menus`
 from the next main menu.
@@ -339,6 +446,7 @@ the setting for one start of the game. It has priority over the file.
 | `display.fov` | `0.0` | `HALO_FOV` | The first-person view's field of view on foot, in degrees across at 16:9, from 20 to 150. `0`: the stock view. Refer to "Field of view". |
 | `display.viewmodel_fov` | `0.0` | `HALO_VIEWMODEL_FOV` | The first-person weapon's and hands' field of view, in degrees across at 16:9, from 20 to 150. `0`: the weapon's stock view, also when `display.fov` widens the world. Refer to "Field of view". |
 | `display.viewmodel_visible` | `true` | `HALO_VIEWMODEL_VISIBLE` | `true`: the first-person weapon, hands and what is attached to them are drawn. `false`: they are not; firing, animation, sound and lights go on, and other players' models are drawn. |
+| `display.passenger_third_person` | `false` | `HALO_PASSENGER_THIRD_PERSON` | Third-person view for the Warthog's passenger and the Scorpion's four passengers. Uses the gunner's camera on the Warthog and the driver's on the Scorpion, within the passenger's firing arc. Smooth entry and exit; weapon zoom is disabled while riding. The reticle follows the shot's centre ray. Local view only. In the campaign and co-op only: not in multiplayer, where seeing around the vehicle would be an advantage. |
 | `display.viewmodel_shield` | `false` | `HALO_VIEWMODEL_SHIELD` | `true`: the energy shield's flare (its hits, its charging, its fall) is drawn on the first-person arms too, as on the body, with the unit's own shield shader, kept closer to the arms than to the body. The stock game draws it on the body only. |
 | `display.first_person_legs` | `false` | `HALO_FIRST_PERSON_LEGS` | `true`: your own body is drawn from the waist down in first person, so you see your legs when you look down, moving as the body's animation moves them. Refer to "Field of view". |
 | `display.shield_color` | `default` | `HALO_SHIELD_COLOR` | Your energy shield's flare as this machine draws it: `default` (the shield's own) or a multiplayer armor color (`white`, `black`, `red`, `blue`, `gray`, `yellow`, `green`, `pink`, `purple`, `cyan`, `cobalt`, `orange`, `teal`, `sage`, `brown`, `tan`, `maroon`, `salmon`), whatever the armor's, on the body and, with `display.viewmodel_shield`, on the first-person arms. The shield's own shader is drawn with its two colors replaced at their brightness; the flare is added to what is behind it, so `black` is drawn a faint grey. Only this machine sees it. |
@@ -346,31 +454,52 @@ the setting for one start of the game. It has priority over the file.
 | `display.high_res_text` | `true` | `HALO_HIGH_RES_TEXT` | `true`: the menus' and HUD's text is drawn with the fonts in `port/assets/fonts` (Overpass, in place of the maps' Interstate) at the resolution the game draws at, laid out as before; the menus' titles are drawn from the high-res pictures in `port/assets/titles`, and the controller button icons from those in `port/assets/buttons`. `false`: the maps' bitmap fonts, titles and button icons. |
 | `display.shadow_resolution` | `128` | `HALO_SHADOW_RESOLUTION` | The size of the maps that the shadows of the objects are drawn in, in pixels each way: `128`, `256`, `512` or `1024` (other values go down to one of these). The game draws the shadow of each object into a map of 128x128 pixels, blurs it and projects it onto the ground. On a large screen, the edges of these shadows show steps that move when the object moves. A larger map makes the edges smooth; the blur is made wider to match, so the shadows are as soft as on the Xbox. Each doubling adds two passes of the blur. `128`: as on the Xbox. |
 | `display.menus` | `"pc"` | `HALO_MENUS` | `"pc"`: the PC version's menus, from the files in `port/assets/menus` and a `menus` folder next to `config.toml`. Refer to "Menus". `"xbox"`: the Xbox's menus. |
+| `display.menu_language` | `"maps"` | `HALO_MENU_LANGUAGE` | The PC menus' language. `"maps"`: the language of the Custom Edition whose `loc.map` is in `custom_maps` (English without one). `"english"`: English. The port's own lines are English. |
 | `display.player_names` | `"all"` | `HALO_PLAYER_NAMES` | In multiplayer, whose names are drawn above their heads: `"all"`, `"allies"`, `"enemies"` or `"none"`. An ally's name is drawn above the triangle the game shows over teammates. An enemy's name shows only within the motion sensor's reach, while the enemy is in sight and not camouflaged, so it never shows where an enemy hides. The gametype's motion tracker setting also applies: no names if it shows no players, only allies' if it shows only friends. |
 | `display.player_name_scale` | `1.0` | `HALO_PLAYER_NAME_SCALE` | How large the players' names are drawn: `1.0` is three quarters of the size of the HUD's text, from `0.25` to `4`. With high-res text, larger names are rasterized at their size, so they stay sharp. |
+| `display.match_timer` | `false` | `HALO_MATCH_TIMER` | `true`: a multiplayer game draws its clock at the bottom right, counting up from the game's first tick, which the items' respawn periods count from too: a weapon is back on the map at every multiple of its period on the clock. Campaign and co-op have none. MATCH TIMER in Video Setup > Graphics. |
+| `display.text_chat` | `true` | `HALO_TEXT_CHAT` | Show the text chat of network games (Settings > Network Setup > Multiplayer HUD > TEXT CHAT). `false` hides its lines, and its keys and a controller's D-pad Up open nothing. Refer to "Text chat". |
+| `display.chat_style` | `"colors"` | `HALO_CHAT_STYLE` | The text chat's colours (Settings > Network Setup > Multiplayer HUD > CHAT TEXT): `"colors"`, the player's name in their team's colour and the text a pale blue; `"white"`, all of it white, as Custom Edition. |
 | `display.scoreboard_team_layout` | `"teams"` | `HALO_SCOREBOARD_TEAM_LAYOUT` | How the multiplayer scoreboard (hold BACK, or tab) lists a team game's players. `"teams"`: a column for each team, red on the left and blue on the right. `"score"`: all the players in order of score. With more players than fit, the mouse wheel and Page Up / Page Down scroll the scoreboard. |
 | `display.scoreboard_background` | `true` | `HALO_SCOREBOARD_BACKGROUND` | `true`: the multiplayer scoreboard (hold BACK, or tab) has a panel behind its text, for clearer text. |
 | `display.scoreboard_background_color` | `"16, 16, 16, 150"` | `HALO_SCOREBOARD_BACKGROUND_COLOR` | The colour of the scoreboard's panel: `"red, green, blue, alpha"`, each from `0` to `255`. Alpha `0` is see-through, `255` is solid. |
+| `display.anisotropic_filtering` | `0` | `HALO_ANISOTROPIC_FILTERING` | Textures seen at a grazing angle (floors, walls, terrain) are sampled along the angle from finer mip levels, so they stay sharp; the Xbox game asks for none. `0` or `1`: as on the Xbox. `2`, `4`, `8` or `16`: at most that many samples (at most the GPU's); `4` keeps most of `16`'s sharpness at less cost on slower GPUs. TEXTURE FILTERING in Video Setup > Graphics. It applies to the textures of the map that have mip levels and are filtered linearly (base, detail, bump and environment maps; lightmaps have no mip levels), not to what the game renders, such as the water's ripples. On Android and the web, only where the GPU has `GL_EXT_texture_filter_anisotropic`. |
+| `display.latency_meter` | `false` | `HALO_LATENCY_METER` | `true`: in a network game, your round trip to the host in milliseconds at the top right of the screen, "Ping 45 ms" with four bars: green below 80 ms, yellow below 150, red from 150. The host shows "Max ping", its slowest player's. A player's machine that has heard nothing from the host for two seconds shows "Connection problem". The round trip includes each machine's wait for its next tick, so a LAN reads 15 to 35 ms. Not shown in the menus, after the game, in a co-op cutscene or when the host plays alone. The scoreboard's pings take the same colours, and show the round trips this machine times itself (the host: each player's; a player: their own), so they agree with the meter. Nothing more is sent. Only in config.toml, not in the menus. |
 | `display.per_pixel_lighting` | `false` | `HALO_PER_PIXEL_LIGHTING` | `false`: the models (characters, weapons, vehicles, scenery) are lit at each vertex and the light is blended between them, as on the Xbox. The light across a curved surface then shows facets, and a point light that passes close lights only the vertices it reaches. `true`: the models are lit at each pixel by the same lights (the ambient light, two distant lights and two point lights), which changes their look. |
-| `display.shield_glow` | `false` | `HALO_SHIELD_GLOW` | `true`: as a unit's energy shield flares (hit, charging, falling), it lights what is around it and itself, as a plasma bolt does, in the shield shader's own color (a Spartan's gold, an Elite's blue), rising and falling with the flare seen on the body. An ordinary dynamic light of the game's, drawn with a light definition the map has (`shield_glow.c`). Up to 8 units near the camera. |
-| `display.shield_glow_intensity` | `default` | `HALO_SHIELD_GLOW_INTENSITY` | The shield glow's reach and brightness: `default`, or `light_show` (three times as far, and at full strength from a third of the flare: a light is no brighter than full). The units glowing are those near any local player's camera, so each of a split screen's views has the same. |
+| `display.structure_culling` | `31` | `HALO_STRUCTURE_CULLING` | Which tests skip the triangles of the level (its walls, floors and terrain) that the camera cannot see before they are drawn, as bits added together: `1`, triangles outside the view; `2`, groups of triangles that all face away from the camera; `4`, single triangles that face away; `8`, smaller groups, so that more of them are skipped whole; `16`, the rooms nearest the camera first. Each test is conservative: the picture is the same, with fewer triangles drawn. `0`: the original walk, which draws every triangle of each visible room. The console's `structure_culling <bits>` changes it until the game quits, and `debug_structure_culling true` shows what was skipped (red: outside the view, blue: facing away). |
+| `display.shield_glow` | `false` | `HALO_SHIELD_GLOW` | `true`: as a unit's energy shield flares (hit, charging, falling), it lights what is around it and itself, as a plasma bolt does, in the shield shader's own color (a Spartan's gold, an Elite's blue), rising and falling with the flare seen on the body. An ordinary dynamic light of the game's, drawn with a light definition the map has (`shield_glow.c`). Up to 8 units near the camera. Video Setup's Extra Effects screen sets it. In a network game, the host's `network.shield_effects` decides, unless it is `players` (each player's own). |
+| `display.shield_glow_intensity` | `default` | `HALO_SHIELD_GLOW_INTENSITY` | The shield glow's reach and brightness: `default`, or `light_show` (three times as far, and at full strength from a third of the flare: a light is no brighter than full). The units glowing are those near any local player's camera, so each of a split screen's views has the same. Video Setup's Extra Effects screen sets it. In a network game, the host's `network.shield_effects` decides, unless it is `players` (each player's own). |
+| `display.overshield_effect` | `false` | `HALO_OVERSHIELD_EFFECT` | `true`: the overshield's flare rises up the body from the feet as it charges, with a soft edge (2 seconds, the charge's time from a full shield; 3 from a shield that was down; 2 from any other), then stays lit, whole, for as long as the overshield lasts, its energy moving at 30% of its speed, in its own color (the powerup's, 253, 78, 116), whatever shield color its player chose; the shield's own flares are not drawn over it, and its glow (`display.shield_glow`) rises and stays with it. With `display.viewmodel_shield` it comes up on the first-person arms as the rise reaches them. A hit on it plays what the projectile plays on an Elite's shield (its sound, sparks and light), when the map has that effect and it only shows and sounds. `false`: the overshield as the stock game draws it. Only this machine's drawing and sounds change (`overshield_effect.c`; the rise is a fade in the vertex shader, `d3d8_gl_set_height_fade`). Video Setup's Extra Effects screen sets it. In a network game, the host's `network.shield_effects` decides, unless it is `players` (each player's own). |
+| `display.model_detail` | `"stock"` | `HALO_MODEL_DETAIL` | Which level of detail (of up to five) each model is drawn at. The game measures a model by its size in the lines of its 480-line screen, at any resolution, so at 1440 lines a model three times larger than the levels were made for is drawn as the Xbox drew it. `"stock"`: as on the Xbox. `"native"`: measured in the lines of the display (not supersampling's), so more detail is kept at a distance at high resolutions, and small far models that the Xbox left out are drawn. `"highest"`: measured as `"native"` for which models are drawn, and those drawn at their most detailed level. With either, a part that has no geometry at the level chosen draws its most detailed level below that has some, and a level made for a model's inside (one for a size over 1000 pixels, as the top level of a10's cryotubes) is drawn only while the camera is inside the model. Models whose map gives one level (the trees and rocks of b30) do not change. On Android, which draws 480 lines, `"native"` is `"stock"`. |
+| `display.hdr` | `false` | `HALO_HDR` | `true`: the back buffer that the 3D view is drawn into holds half floats (`GL_RGBA16F`) in place of 8 bits a channel, so that the light the game adds up (blended lights, glows, fog, particles) is kept past white in place of being clipped. Before the HUD and the menus, a tone mapping pass brings it back into the display's range (`display.hdr_tone_mapping`). The HUD and the menus do not change. On Android, only with a GPU that draws into half floats (OpenGL ES 3.2, `GL_EXT_color_buffer_half_float` or `GL_EXT_color_buffer_float`); otherwise off, with a line in the log. A change applies from the next frame. Video Setup's GRAPHICS screen sets it (HDR) and `display.hdr_output` (HDR DISPLAY). Refer to "HDR" in "What operates". |
+| `display.hdr_exposure` | `1.0` | `HALO_HDR_EXPOSURE` | With `display.hdr`, the light of the 3D view is multiplied by this before the tone mapping, from `0.25` to `4.0`. |
+| `display.hdr_tone_mapping` | `"neutral"` | `HALO_HDR_TONE_MAPPING` | With `display.hdr`, the curve that brings the light into the display's range. `"neutral"`: the picture is as without HDR up to 80% of white, and the light past it rolls off to white in place of being clipped. `"aces"`: the ACES filmic curve (Narkowicz's fit), with more contrast and darker shadows. `"reinhard"`: the extended Reinhard curve on luminance, softer and darker. |
+| `display.hdr_output` | `false` | `HALO_HDR_OUTPUT` | Not on Android or in a browser. With `display.hdr`, `true`: the window asks for floating-point pixels (scRGB). On a display that has HDR on (on Windows, "Use HDR"), the tone mapping then goes up to the display's headroom over SDR white, and the light past white is shown brighter than white. Without an HDR display the picture is as with `false`; if the driver has no such window, the game makes an 8-bit one. Read at start. With NVIDIA's driver on Windows, the NVIDIA Control Panel's "Vulkan/OpenGL present method" must be "Prefer layered on DXGI Swapchain": otherwise a fullscreen or borderless window turns black, then oversaturated. Experimental. |
 | `audio.enabled` | `true` | `HALO_NO_AUDIO=1` sets `false` | `false`: no audio device. The sound continues without output. |
 | `audio.volume` | `1.0` | `HALO_VOLUME` | The master volume. |
 | `audio.music_volume` | `1.0` | `HALO_MUSIC_VOLUME` | The music's volume, of the master volume. |
 | `audio.effects_volume` | `1.0` | `HALO_EFFECTS_VOLUME` | The volume of the other sounds (effects and speech), of the master volume. |
+| `audio.buffer_frames` | `512` | `HALO_AUDIO_BUFFER_FRAMES` | The audio device's buffer, in sample frames at 48 kHz, from `64` to `8192`. Larger rides out stalls that would cut the sound out; smaller has less delay (512 is 11 ms, 2048 is 43 ms). Not on Android or the web. |
+| `audio.channels` | `"stereo"` | `HALO_AUDIO_CHANNELS` | `"stereo"`, or `"5.1"` for surround sound as with Dolby Digital on the Xbox. `"auto"`: 5.1 if the sound device has 6 or more channels. Linux and Windows only. |
 | `audio.reverb` | `true` | `HALO_REVERB` | `true`: the sounds of the world reverberate as the place the player is in does: the sound environments of the maps (a corridor, a cave, a large hall, outdoors) set the reverberation, as the I3DL2 reverb of the Xbox did. A sound behind a wall or a door is muffled in it too. `false`: no reverberation (sounds behind a wall are still muffled). |
+| `audio.resampler` | `"sinc"` | `HALO_AUDIO_RESAMPLER` | How the sounds are converted to the output's rate (48 kHz): `"sinc"` with a band-limited low pass, which keeps out the images above the sound's own rate; `"linear"` between neighbouring samples, which lets some of them through and sounds brighter for it. Audio Setup's SOUND PROCESSING screen sets it, with `audio.reverb`. |
 | `audio.voice_chat` | `"push_to_talk"` | `HALO_VOICE_CHAT` | How you talk in voice chat: `"push_to_talk"` (while `controls.push_to_talk` is held; the microphone opens when you first press it), `"open_mic"` (when the microphone hears speech), or `"off"`. You hear the other players in every case. Refer to "Voice chat". |
 | `audio.voice_volume` | `1.0` | `HALO_VOICE_VOLUME` | The volume of the voices of the other players, `0` to `2`. |
 | `audio.output_device`, `audio.input_device` | `"default"` | `HALO_AUDIO_OUTPUT_DEVICE`, `HALO_AUDIO_INPUT_DEVICE` | The speakers and the microphone, by the name that Settings > Audio shows, or `"default"` for the device of the system. If the device is not found, the game uses the device of the system. Not on Android. |
-| `audio.loose_sounds` | `false` | `HALO_LOOSE_SOUNDS` | For those who make sounds. `true`: each sound of a map that has a sound tag file of its name in `tags/` in the data root (for example `tags/sound/sfx/weapons/assault rifle/fire.sound`) plays from that file. The files are Halo PC tag files, as the Halo Editing Kit and Invader write them. At the console, `loose_sounds_reload` reads the files again, and `loose_sounds false` plays the sounds of the map again. When a file changes, all sounds stop. |
 | `input.mouse_sensitivity` | `1.0` | `HALO_MOUSE_SENSITIVITY` | The multiplier for the mouse aim. |
 | `input.mouse_vertical_sensitivity` | `0.0` | `HALO_MOUSE_VERTICAL_SENSITIVITY` | The multiplier for the vertical mouse aim. `0`: the same as `input.mouse_sensitivity`. |
+| `input.playstation_kernel_driver` | `false` | `HALO_PLAYSTATION_KERNEL_DRIVER` | Linux: `true` drives a PlayStation controller (DualSense, DualShock 4) through the kernel's driver of it (`hid-playstation` since Linux 5.12, `hid-sony`): its buttons, sticks, triggers and rumble, with no setup, but not its lightbar. `false`: SDL's own driver, which needs access to the controller's `/dev/hidraw` device, as Steam's udev rules give it (`steam-devices`, or Steam installed). Read at start-up. |
 | `input.invert_mouse` | `false` | `HALO_MOUSE_INVERT=1` sets `true` | `true`: the vertical mouse aim is inverted. |
 | `input.mouse_aim_assist` | `false` | `HALO_MOUSE_AIM_ASSIST` | `true`: the magnetism of the controller also operates for the mouse. `false`: when the mouse moved after the right stick, the view is not slowed or dragged by a target. The autoaim of the bullets operates in both cases. |
-| `controls.<action>` | (the table in "Controls") | `HALO_KEY_<ACTION>` | The keys and mouse buttons of an action, up to two, separated by a comma: `move_forward`, `move_backward`, `strafe_left`, `strafe_right`, `jump`, `crouch`, `fire`, `throw_grenade`, `melee`, `reload`, `zoom`, `switch_weapon`, `switch_grenade`, `action`, `flashlight`, `scoreboard`, `pause`, `screenshot`, `push_to_talk`. Keys by their names (`"W"`, `"Space"`, `"Left Ctrl"`, `"F1"`), and `"Mouse Left"`, `"Mouse Right"`, `"Mouse Middle"`, `"Mouse 4"`, `"Mouse 5"`, `"Wheel"` (either way), `"Wheel Up"`, `"Wheel Down"`. |
+| `controls.<action>` | (the table in "Controls") | `HALO_KEY_<ACTION>` | The keys and mouse buttons of an action, up to two, separated by a comma: `move_forward`, `move_backward`, `strafe_left`, `strafe_right`, `jump`, `crouch`, `fire`, `throw_grenade`, `melee`, `reload`, `zoom`, `switch_weapon`, `switch_grenade`, `action`, `flashlight`, `scoreboard`, `pause`, `screenshot`, `push_to_talk`, `chat`, `team_chat`. Keys by their names on a US keyboard (`"W"`, `"Space"`, `"Left Ctrl"`, `"F1"`): a key is the one in that place on any keyboard, which Controls Setup shows by its own label (the US name on Android). Buttons: `"Mouse Left"`, `"Mouse Right"`, `"Mouse Middle"`, `"Mouse 4"`, `"Mouse 5"`, `"Wheel"` (either way), `"Wheel Up"`, `"Wheel Down"`. |
+| `game.downloaded_maps` | `""` | `HALO_DOWNLOADED_MAPS` | Maps to play as downloaded maps, besides the maps that map sharing downloaded (it names them in `downloaded_maps.txt` in `custom_maps`): their names (`bloodgulch`, `hugeass`), separated by commas, or `"*"` for all the maps. The scripts of a downloaded map cannot change the settings of the player or the games of other players. `debug.txt` names what the game refused. |
 | `game.console_log` | `"important"` | `HALO_CONSOLE_LOG` | What the console shows on the screen. `"important"`: bans, players that the host drops for cheating, the reasons that the game refuses a command, and the asserts that stop the game. `"all"`: all the lines. `"none"`: only the asserts that stop the game. The output of a command always shows. `debug.txt` gets all the lines. |
 | `game.language` | `""` | `HALO_LANGUAGE` | The language of the menus: `ja`, `de`, `fr`, `es` or `it`. Empty: English. |
 | `game.enhanced_animations` | `true` | `HALO_ENHANCED_ANIMATIONS` | `true`: the player bipeds' grenade throws keep their legs moving, blended by speed and direction (crouched throws stay crouched, throws in the air use the jump's legs), Warthog and Scorpion riders stay seated to throw and let go of the grips to throw and reload, and a player turns with the aim while throwing, as while meleeing. `false`: the original animations, which freeze the legs during a throw and stand a rider up. Only in config.toml, not in the menus. |
+| `game.unlock_all_levels` | `false` | `HALO_UNLOCK_ALL_LEVELS` | `true`: a profile created afterward starts with all the campaign levels finished on all the difficulties. `false`: a new profile starts at The Pillar of Autumn, and each level opens when you finish the level before it, as on the Xbox. Existing profiles keep their progress. To start a profile over, type `profile_reset_campaign` in the console. |
+| `bots.count` | `0` | `HALO_BOTS` | Computer players (bots) in a local (split screen) Slayer game: `0` to `15` join its lobby with the players, as far as the game has room. Not in system link or internet games. `0`: none, as in the stock game. Refer to "Bots". |
+| `bots.skill` | `"normal"` | `HALO_BOT_SKILL` | How well the bots play: `"easy"`, `"normal"`, `"heroic"` or `"legendary"`: how soon they react, how far and how wide they see, how large their aim error is and how fast it settles, how fast they turn. |
+| `bots.teams` | `"even"` | `HALO_BOT_TEAMS` | In a team game: `"even"` puts the bots on both teams, evening them with the players; `"against"` puts them all on the team the players are not on. |
 | `paths.data` | `""` | `HALO_DATA_ROOT` | The data root. Refer to "Start the game". |
 | `paths.saves` | `""` | `HALO_SAVE_ROOT` | The save root. Refer to "Files and folders". |
 | `network.address` | `""` | `HALO_NET_ADDRESS` | The IPv4 address of this machine for system link. Refer to "Play on one computer". |
@@ -381,38 +510,53 @@ the setting for one start of the game. It has priority over the file.
 | `network.allow_upnp` | `true` | `HALO_NET_ALLOW_UPNP` | `true`: internet play can ask the router to forward its port (UPnP). `false`: the game does not ask. Refer to "Internet play". |
 | `network.public_lobby` | `true` | `HALO_NET_PUBLIC_LOBBY` | `true`: the server browser. Public games are listed, and Join Game > Server Browser shows them. `false`: no games are listed or shown. Refer to "Server browser". |
 | `network.host_public` | `true` | `HALO_NET_HOST_PUBLIC` | `true`: a new game of Create Game > Internet starts as PUBLIC. `false`: it starts as PRIVATE. LISTING in Server Setup changes it for each game. Refer to "Server browser". |
-| `network.coop_friendly_fire` | `"on"` | `HALO_NET_COOP_FRIENDLY_FIRE` | Whether the players of an online co-op game hurt each other: `"off"`, `"on"`, `"shields_only"` or `"explosives_only"`. FRIENDLY FIRE in co-op's Server Setup > Co-op Options writes its choice here. Their AI allies they always can, as in the campaign. |
+| `network.coop_friendly_fire` | `"on"` | `HALO_NET_COOP_FRIENDLY_FIRE` | Whether the players of an online co-op game hurt each other: `"off"`, `"on"`, `"shields_only"` or `"explosives_only"`. FRIENDLY FIRE in co-op's Server Setup > Co-op Options writes its choice here. Their AI allies they hurt as `network.coop_ally_friendly_fire` says. |
+| `network.coop_ally_friendly_fire` | `true` | `HALO_NET_COOP_ALLY_FRIENDLY_FIRE` | Whether the players of an online co-op game hurt their AI allies (the Marines, Captain Keyes, the Sentinels while they are allies), as in the campaign. `false`: the players' weapons, grenades, melee and vehicles do them no harm, so that no player can kill the allies a level needs. The allies' and enemies' own damage is unchanged. ALLY FRIENDLY FIRE in co-op's Server Setup > Co-op Options writes its choice here; the host sends it with the game's settings. |
+| `network.coop_own_friendly_fire` | `true` | `HALO_NET_COOP_OWN_FRIENDLY_FIRE` | Whether this machine's players hurt, and are hurt by, the other players of an online co-op game. Two players hurt each other only if both have it `true`, and then as the host's `network.coop_friendly_fire` says. FRIENDLY FIRE in that game's pause menu writes its choice here. A player away from the controls for over 70 seconds is hurt by every player, whatever either chose. |
 | `network.coop_player_collisions` | `true` | `HALO_NET_COOP_PLAYER_COLLISIONS` | Whether the players of an online co-op game bump into each other. `false`: they walk through each other, so that one cannot block a doorway or stand on another; they still bump into the AI's characters. PLAYER COLLISIONS in co-op's Server Setup > Co-op Options writes its choice here. |
 | `network.coop_enemies_mode` | `"per_player"` | `HALO_NET_COOP_ENEMIES_MODE` | Online co-op's extra enemies: `"none"`; `"per_player"`, each squad of enemies that a level places grows by `network.coop_enemies` for each player past the first; or `"multiplier"`, each squad is `network.coop_enemies_multiplier` times as large, for any number of players. The extra enemies stand around the squad's places, and those that a dropship has no seats for drop out of it after its passengers. EXTRA ENEMIES in co-op's Server Setup > Co-op Options writes its choice here. |
 | `network.coop_enemies` | `50` | `HALO_NET_COOP_ENEMIES` | The extra enemies per player, a percentage from `25` to `200`: for each player past the first, each squad of enemies gets this much of itself more (`100`: as many again, so four players meet four times the squad), up to 8 times the squad however many players there are. PER PLAYER in co-op's Server Setup > Co-op Options writes its choice here. |
-| `network.coop_enemies_multiplier` | `2` | `HALO_NET_COOP_ENEMIES_MULTIPLIER` | The static multiplier of the enemies, `2` to `32`: each squad of enemies is this many times as large. MULTIPLIER in co-op's Server Setup > Co-op Options writes its choice here. |
+| `network.coop_pickups` | `"none"` | `HALO_NET_COOP_PICKUPS` | EXTRA PICKUPS in co-op Server Setup > Co-op Options. Modes: `"per_player"`, `"multiplier"`, `"none"`. Static mode uses the shared MULTIPLIER, capped at 8x. In per-player mode, the host scales scenario-placed campaign weapons, grenades, health kits, overshields and active camouflage by the shared PER PLAYER percentage, capped at 8 times their original count. Fractions are distributed over placements of the same item. Copies retain weapon ammunition and use clear nearby floor in the active BSP. No safe space or capacity means no extra pickup. Enemy drops, inventory and vehicles are excluded. Script-created supplies count surviving copies against their placement budget. Checkpoints retain pending counts and copies together, without multiplying again on restore. |
+| `network.coop_vehicles` | `"none"` | `HALO_NET_COOP_VEHICLES` | EXTRA VEHICLES after EXTRA PICKUPS in Co-op Options. Modes: `"per_player"`, `"multiplier"`, `"none"`. Each authored driveable vehicle supplies floor((players - 1) * Per Player * 2 / 300) extra copies in per-player mode, or floor((Multiplier - 1) * 2 / 3) extras in static mode, one at a time after a player drives the previous one clear of the home by the sum of both bounding-sphere radii plus 15%. Vehicle growth has an exact 2/3 modifier before rounding down; the default 50% requires four players for the first copy. Pelican cargo uses its unloaded resting position. Only the host spawns; obstructed pads and exhausted object capacity wait. Copies have no script name or AI passengers. In-memory checkpoint reverts restore the home table and budgets together; loading a disk/core checkpoint without that table forgets its old homes. None by default. |
+| `network.coop_enemies_multiplier` | `2` | `HALO_NET_COOP_ENEMIES_MULTIPLIER` | The shared static multiplier, `2` to `32`, for options set to STATIC MULTIPLIER. Enemy squads are this many times as large; pickups are capped at 8x; vehicles supply floor((Multiplier - 1) * 2 / 3) extra copies. MULTIPLIER in co-op's Server Setup > Co-op Options writes its choice here. |
 | `network.voice_lobby` | `true` | `HALO_NET_VOICE_LOBBY` | When you host: `true`, all players hear all players in the lobby, before and after a game. |
 | `network.voice_mode` | `"team_global_enemy_proximity"` | `HALO_NET_VOICE_MODE` | When you host: who hears whom during a game. `"off"`; `"team_proximity"` (teammates who are near); `"team_enemy_proximity"` (all players who are near); `"team_global"` (all teammates); `"team_global_enemy_proximity"` (all teammates, and enemies who are near). Refer to "Voice chat". |
 | `network.voice_kbps` | `24` | `HALO_NET_VOICE_KBPS` | When you host: the voice quality in the lobby and in a game, in kilobits per second, `8` to `64`. |
 | `network.voice_proximity` | `15.0` | `HALO_NET_VOICE_PROXIMITY` | When you host: the distance in world units (1 unit is approximately 3 metres) at which players are near, for voice chat. `5` to `100`. |
+| `network.text_chat` | `"on"` | `HALO_NET_TEXT_CHAT` | When you host: the text chat. `"on"`, lines with links refused; `"links"`, links allowed; `"off"`, no chat (in either case). Always off in a game listed in the server browser. TEXT CHAT in Server Setup > Teamplay Options (in co-op, Voice and Voting) writes its choice here. Refer to "Text chat". |
 | `network.votekick` | `true` | `HALO_NET_VOTEKICK` | When you host: `true`, the players can vote to kick a player. Refer to "Security". `false`: no votes. VOTE KICK in Server Setup > Teamplay Options (in co-op, Voice and Voting) writes its choice here. |
 | `network.votekick_minutes` | `5` | `HALO_NET_VOTEKICK_MINUTES` | When you host: the minutes that a player must play on the server before the player can start a vote to kick (`0` to `60`). To vote, a player must play for 2 minutes, or for this time if it is less. |
 | `network.votekick_ban_minutes` | `30` | `HALO_NET_VOTEKICK_BAN_MINUTES` | When you host: the minutes that a player who is kicked by a vote cannot join again (`1` to `1440`). |
+| `network.shield_effects` | `stock` | `HALO_NET_SHIELD_EFFECTS` | Host: the shield effects every player of a network game sees, whatever their own settings, so that none sees what another does not: `stock`, `glow` (`display.shield_glow`), `light_show` (its Light Show intensity), `overshield` (`display.overshield_effect`), `glow_overshield` or `light_show_overshield`; or `players`, not synced: each player sees their own settings' (PLAYERS' OWN). Sent to each client when it is ready and when it changes (`network_shield_effects.c`); a client draws stock until it has it. SHIELD EFFECTS in Server Setup > Player Options writes its choice here. |
+| `network.block_mouse_aim_assist` | `false` | `HALO_NET_BLOCK_MOUSE_AIM_ASSIST` | Host: Player Options > Aim Assist, Allowed or Block M+KB. Block overrides optional mouse magnetism while mouse/keyboard aims, including on the host, without changing the saved preference. Controllers and touch retain their existing behavior; bullet autoaim is unchanged. |
 | `network.map_share` | `true` | `HALO_NET_MAP_SHARE` | When you host: send a player who joins without the game's Custom Edition map the map, and the resource maps that it needs and that the player does not have. SHARE MAPS in Server Setup > Map Sharing writes its choice here. Refer to "Map sharing". |
-| `network.map_share_upload` | `1024` | `HALO_NET_MAP_SHARE_UPLOAD` | When you host: the most kilobytes per second that the game sends of maps (`16` to `65536`). UPLOAD LIMIT in Server Setup > Map Sharing writes its choice here. |
+| `network.map_share_upload` | `1024` | `HALO_NET_MAP_SHARE_UPLOAD` | When you host: the most kilobytes per second that the game sends of maps (`16` to `20480`, 20 MB/s). UPLOAD LIMIT in Server Setup > Map Sharing writes its choice here. |
 | `network.map_seed` | `true` | `HALO_NET_MAP_SEED` | When you play in the game of another machine: help send its map to players who join without it. HELP SEND MAPS in Settings > Network Setup > Map Sharing. |
-| `network.map_seed_upload` | `256` | `HALO_NET_MAP_SEED_UPLOAD` | When you play in the game of another machine: the most kilobytes per second that the game sends of maps to other players (`16` to `65536`). UPLOAD LIMIT in Settings > Network Setup > Map Sharing. |
+| `network.map_seed_upload` | `256` | `HALO_NET_MAP_SEED_UPLOAD` | When you play in the game of another machine: the most kilobytes per second that the game sends of maps to other players (`16` to `10240`, 10 MB/s). UPLOAD LIMIT in Settings > Network Setup > Map Sharing. |
 | `network.map_download` | `true` | `HALO_NET_MAP_DOWNLOAD` | When you join a game on a Custom Edition map that you do not have: download it from the players of the game. `false`: leave the game and show which map is missing. DOWNLOAD MAPS in Settings > Network Setup > Map Sharing. |
 | `network.coop_public` | `false` | `HALO_NET_COOP_PUBLIC` | `true`: an online co-op game (Create Game > Internet, a SINGLEPLAYER map) starts as PUBLIC. `false`: it starts as PRIVATE. LISTING in co-op's Server Setup writes its choice here. Refer to "Server browser". |
 | `network.brokers_file` | `"brokers.txt"` | `HALO_NET_BROKERS_FILE` | The file of the public MQTT brokers that let the machines of an invite find each other, and that carry the listings of the server browser: next to `config.toml`, unless a full path. One `host:port` on each line, up to 4; `#` starts a comment. |
 | `network.stun_servers` | Google and Cloudflare | `HALO_NET_STUN` | The public STUN servers (`host:port`, with commas between them) that give the internet address of a machine. |
 | `discord.application_id` | the application of the project | `HALO_DISCORD_APPLICATION` | The Discord application for invites. Empty: no Discord. |
 | `update.auto` | `true` | `HALO_UPDATE_AUTO` | `true`: at start-up, the game looks for a new version. Refer to "Updates". `false`: the game does not look. |
+| `streamer.enabled` | `false` | `HALO_STREAMER_MODE` | `true`: streamer mode hides offensive words, as stars, in the names and text of other players, maps and mods, at the levels below. Refer to "Streamer mode". STREAMER MODE in Settings > Network Setup > Streamer Mode. |
+| `streamer.slurs` | `"mild"` | `HALO_STREAMER_SLURS` | With `streamer.enabled`, the slurs (race, ethnicity, sexuality, gender, disability) hidden: `"off"`, `"severe"`, `"strong"` (strong and severe) or `"mild"` (all). CENSOR SLURS in Settings > Network Setup > Streamer Mode. |
+| `streamer.swearing` | `"strong"` | `HALO_STREAMER_SWEARING` | With `streamer.enabled`, the swearing and sexual words hidden: `"off"`, `"severe"`, `"strong"` or `"mild"`. CENSOR SWEARING in Settings > Network Setup > Streamer Mode. |
+| `streamer.insults` | `"off"` | `HALO_STREAMER_INSULTS` | With `streamer.enabled`, the insults that are not slurs hidden: `"off"`, `"severe"`, `"strong"` or `"mild"`. CENSOR INSULTS in Settings > Network Setup > Streamer Mode. |
 | `crash_reports.upload` | `"ask"` | `HALO_CRASH_REPORTS` | Windows only. `"yes"`: the game sends a report of each crash to the developers. `"no"`: the game sends no reports. `"ask"`: the game asks at the next crash and writes the answer here. Refer to "Crash reports" in [port/windows/README.md](../windows/README.md#crash-reports). |
 | `debug.update_answer` | `""` | `HALO_UPDATE_ANSWER` | The answer to the update question, for automatic tests: `yes`, `no` or `never`. Empty: the game asks. |
-| `debug.exit_after` | `0.0` | `HALO_EXIT_AFTER` | The game stops after this number of seconds. `0`: never. |
+| `debug.fixed_step` | `false` | `HALO_FIXED_STEP` | `true`: a game of this computer alone runs one tick a frame, whatever time has passed, so that it plays the same every time (tests). |
+| `debug.exit_after` | `0.0` | `HALO_EXIT_AFTER` | The game stops after this number of seconds (from when its window opens; with `debug.null_renderer`, or no display, from its first frame). `0`: never. |
 | `debug.screenshot_directory`, `debug.screenshot_every` | `""`, `0` | `HALO_SCREENSHOT_DIR`, `HALO_SCREENSHOT_EVERY` | The game writes each Nth frame to this folder as a BMP file. |
 | `debug.hidden_window`, `debug.null_renderer` | `false` | `HALO_HIDDEN_WINDOW`, `HALO_NULL_RENDERER` | `true`: no visible window, or no graphics. |
 | `debug.gpu_stats`, `debug.gpu_trace_frame`, `debug.gpu_trace_constants`, `debug.gpu_dump_shaders`, `debug.texture_dump_directory`, `debug.texture_log`, `debug.gl_debug`, `debug.texture_no_cache` | off | `HALO_GPU_STATS`, `HALO_GPU_TRACE`, `HALO_GPU_TRACE_CONSTANTS`, `HALO_GPU_DUMP_SHADERS`, `HALO_TEXTURE_DUMP`, `HALO_TEXTURE_LOG`, `HALO_GL_DEBUG`, `HALO_TEXTURE_NO_CACHE` | Tools to find problems in the graphics: counts for each frame, all the GL state of one frame, the GLSL code, the textures. |
 | `debug.menu_open` | `""` | `HALO_MENU_OPEN` | Start on this screen of the menus (`main_menu/settings_select/...`, as `port/assets/menus` names it), a player profile being edited, to look at it. |
 | `debug.gpu_skip_vertex_shaders`, `debug.gpu_debug_expression`, `debug.gpu_debug_flat`, `debug.gpu_debug_texture0` | off | `HALO_GPU_SKIP_VS`, `HALO_GPU_DEBUG_EXPR`, `HALO_GPU_DEBUG_FLAT`, `HALO_GPU_DEBUG_T0` | Tools to find problems in the graphics: skip the draws of a vertex shader, or replace the output of all pixel shaders with a GLSL expression (for example `t0.rgb`). |
-| `debug.network_test`, `debug.network_test_start`, `debug.network_test_kill`, `debug.network_test_score`, `debug.network_test_shoot`, `debug.network_test_vehicle`, `debug.network_test_pickup`, `debug.network_test_pickup_weapon`, `debug.network_test_public`, `debug.test_input` | off | `HALO_NETWORK_TEST`, `HALO_NETWORK_TEST_START`, `HALO_NETWORK_TEST_KILL`, `HALO_NETWORK_TEST_SCORE`, `HALO_NETWORK_TEST_SHOOT`, `HALO_NETWORK_TEST_VEHICLE`, `HALO_NETWORK_TEST_PICKUP`, `HALO_NETWORK_TEST_PICKUP_WEAPON`, `HALO_NETWORK_TEST_PUBLIC`, `HALO_TEST_INPUT` | Automatic tests of system link (`game/network_test.c`). Refer to `NETCODE.md`. |
+| `debug.network_test`, `debug.network_test_start`, `debug.network_test_kill`, `debug.network_test_score`, `debug.network_test_shoot`, `debug.network_test_vehicle`, `debug.network_test_pickup`, `debug.network_test_pickup_weapon`, `debug.network_test_chat`, `debug.network_test_name`, `debug.network_test_public`, `debug.test_input` | off | `HALO_NETWORK_TEST`, `HALO_NETWORK_TEST_START`, `HALO_NETWORK_TEST_KILL`, `HALO_NETWORK_TEST_SCORE`, `HALO_NETWORK_TEST_SHOOT`, `HALO_NETWORK_TEST_VEHICLE`, `HALO_NETWORK_TEST_PICKUP`, `HALO_NETWORK_TEST_PICKUP_WEAPON`, `HALO_NETWORK_TEST_CHAT`, `HALO_NETWORK_TEST_NAME`, `HALO_NETWORK_TEST_PUBLIC`, `HALO_TEST_INPUT` | Automatic tests of system link, or (`log`) a log of the game one machine plays (`game/network_test.c`). Refer to `NETCODE.md`. `debug.test_input = "menu:a down down a"` presses menu buttons one a second (`a`, `b`, `x`, `y`, `up`, `down`, `left`, `right`, `start`, `back` or `wait`), for testing the menus. |
+| `debug.network_test_cues`, `debug.network_test_cue_players` | none, `1` | `HALO_NETWORK_TEST_CUES`, `HALO_NETWORK_TEST_CUE_PLAYERS` | Console lines a test runs at their seconds, from the first tick that many players are in (`"<second> <line>\|..."`; not on the web). |
+| `debug.bot_trace` | `0` | `HALO_BOT_TRACE` | Every this many seconds, each bot's state is written to the log: where it is and where it goes, its path, its target and its weapon. `0`: never. |
 | `debug.touch_targets` | `false` | `HALO_TOUCH_TARGETS` | Outlines the tap targets of the menus (item green, value blue, list slot yellow, legend button red, the band beside the slots of a list orange, keys of the on-screen keyboard white), marks where the last finger went down and the last tap landed for 3 seconds, and logs each tap with the target that it hit (for a value, also where it splits into previous and next): to judge the accuracy of touch. |
+| `debug.log_addresses` | `false` | `HALO_LOG_ADDRESSES=1` sets `true` | `true`: other machines' internet addresses are written whole in `debug.txt` and the console, for debugging your own network. `false`: a public address is written as a tag (`addr#3f2a9c`) that matches up only within one run; local network addresses are always whole. Do not post a `debug.txt` written with this on. |
 | `debug.network_latency`, `debug.network_loss`, `debug.network_corrupt`, `debug.network_corrupt_stream`, `debug.network_corrupt_after` | `0` | `HALO_NETWORK_LATENCY`, `HALO_NETWORK_LOSS`, `HALO_NETWORK_CORRUPT`, `HALO_NETWORK_CORRUPT_STREAM`, `HALO_NETWORK_CORRUPT_AFTER` | The game holds all the data that it receives for this number of milliseconds, ignores this percentage of the datagrams, and damages this percentage of the datagrams it receives, and this percentage of its reads of streams, at random (bytes changed, cut short, stretched or replaced), from this many seconds after the start. Use the first two to test the netcode as on the internet, and the others to test that nothing another machine sends can crash the game (a damaged stream is closed, so a little goes a long way; a host's messages to its own client are damaged too, so start damaging once the game has started). |
 | `debug.voice_test` | `false` | `HALO_VOICE_TEST` | Automatic tests of voice chat: a tone replaces the microphone, and each voice that the game hears is written to the log once each second. |
 | `debug.telnet_console`, `debug.telnet_console_port` | `false`, `2323` | `HALO_TELNET_CONSOLE`, `HALO_TELNET_CONSOLE_PORT` | The game listens on 127.0.0.1, on this port, for a script console (connect with telnet). The console has no password, so only this computer can reach it. |
@@ -438,6 +582,11 @@ If the latest release is newer, the game asks: "Do you want to update?"
 - Select "Do not ask again", then "Yes", to stop the questions. The game
   writes `auto = false` in the `[update]` section of `config.toml`. To get
   the questions again, set `auto = true`.
+
+Under gamescope (the Game Mode of the Steam Deck), the game does not ask,
+because a system dialog stops the game there. The game writes the new
+version in the log. To update, start the game from the desktop, or set
+`update_answer = "yes"` in the `[debug]` section of `config.toml`.
 
 The game downloads through HTTPS. It examines the certificate of the server
 against the certificate authorities of the system: on Linux, the bundle of
@@ -656,6 +805,98 @@ as between native builds, two networks that do not let a direct connection
 through (some company and school networks block WebRTC) cannot play
 together.
 
+### Text chat
+
+Network games have a text chat, as the PC version had. Press T
+(`controls.chat`) to type a line to all the players, or Y
+(`controls.team_chat`) to type one to your team (in a game without teams,
+to all the players). While you type, Tab changes who the line is to, in
+turn: all the players, your team, or your vehicle (the players riding in
+the vehicle you ride in, whatever the map's vehicles are, Custom Edition
+maps' too; on foot, only you see it). Enter sends the line, Escape cancels
+it. While you type, your player does not move.
+
+With a controller, D-pad Up opens an on-screen keyboard at the bottom right
+(on Android, at the bottom in the middle) for a line to all the players:
+the left stick (or D-pad Left and Right) moves between the keys, A types
+the key, X deletes, Y switches capitals, D-pad Up and Down change who the
+line is to (all the players, your team, your vehicle), Start sends the
+line, and B closes the keyboard (the button that closed it does nothing in
+the game until you let it go). Its last row has Aa (capitals), #+= (the
+symbols), space, DEL and SEND. On a touchscreen (Android, and a browser on
+a phone or tablet), the touch controls' D-pad Up opens it, a tap on a key
+types it, and a tap anywhere else closes it: the touch controls hide while
+it is up. While the keyboard is up the controller and the touch controls
+move nothing in the game. The face buttons are the same places on
+other controllers (on a PlayStation controller: Cross types, Square
+deletes, Triangle switches capitals, Circle closes).
+
+The lines show above the motion sensor, in a column a little over half the
+screen wide: a long line wraps onto the next rows, and the line you type
+shows its end when it is wider. The player's name is in the colour of
+their team (blue in a game without teams), the text in a pale blue, and the
+host's notices in a pale gold; WHITE in CHAT TEXT in Settings > Network
+Setup > Multiplayer HUD (`display.chat_style`) draws them all white, as
+Custom Edition does. A line to the
+team says "(team)" after the name, one to the vehicle "(vehicle)". The
+lines go after ten seconds; while you type, the last six rows show. Where
+the touch controls are (Android, and a browser whose touch controls you
+use), the lines go at the top left, the newest highest. In split screen,
+each player's view shows the lines that player hears, and the first player
+types. No line shows, and none can be typed, in a menu, in a cinematic or
+while the HUD is hidden; opening a menu ends the line being typed. A new
+game starts with no lines. A line has 63 characters at most, letters,
+numbers and punctuation but `|` only (ASCII; `|` becomes `?`). `debug.txt`
+gets every line.
+
+Streamer mode (refer to "Streamer mode") hides offensive words in the
+chat's lines and players' names as it does in all the text the game draws:
+only on your screen, never in what is sent, and never in the line you are
+typing.
+
+The host sends each line on: a player of an older build does not see the
+lines and cannot send them. The host takes 5 lines at once from a machine,
+then one each 1.5 seconds; a machine that joins starts afresh.
+
+TEXT CHAT in Settings > Network Setup > Multiplayer HUD (`display.text_chat`)
+can HIDE the chat entirely, for purists and streamers: no lines show, and
+its keys open nothing.
+
+The host chooses the text chat for its games with TEXT CHAT in Server
+Setup > Teamplay Options (in co-op, Voice and Voting; `network.text_chat`):
+ON (the default: a line with a link, such as `discord.gg/...`,
+`example.com`, `www.`, an address, or `example [dot] com`, is refused),
+WITH LINKS, or OFF. A domain that is a word as well (`.me`, `.to`, `.is`)
+counts only with a path after it (`youtu.be/...`), so that `go.to` and
+`he.is` are not refused. A game listed in
+the server browser (a public internet game) never has the text chat,
+whatever it says (TEXT CHAT shows OFF there, and cannot be changed, while
+LISTING is PUBLIC); a private game, joined by its invite, and a LAN game have
+it as chosen. A player who joins a game from the server browser has no text
+chat in it even if its host turns it on: their game takes no line from that
+host and sends none. Pressing T where the chat is off says so, and a refused line
+tells its sender why.
+
+On the scoreboard (right-click, then click the player), Mute voice and chat
+mutes a player for you alone: you no longer see their lines or hear their
+voice, and nobody else is told. The host's scoreboard also has Mute for
+everyone: no machine sees the player's lines or hears their voice for 20
+minutes, or until the host picks Unmute for everyone, and all the players
+see "Milenko muted for 20 minutes". The mute holds in the lobby too. A
+machine's voice is one: muting one of two players in split screen mutes
+the other's voice too.
+
+The host can also mute a player from the chat: type `/mute <player>
+<minutes>`, as `/mute Milenko 5` (20 minutes when you give none, 1440 at
+most), which mutes their voice too. The player is found as the console's `kick` finds one: the whole
+name in either case, else the one player whose name begins with what you
+typed. All the players see "Milenko muted for 5 minutes". The muted
+player's lines go to no one, and they see how many minutes are left. The
+mute ends when its minutes are up, or with `/unmute <player>`. A player
+who leaves and joins again under the same name, in either case, is still
+muted. Only the
+host mutes: a player's `/mute` is not sent.
+
 ### Voice chat
 
 Network games have voice chat, on the local network and on the internet.
@@ -688,8 +929,10 @@ A speaker shows next to the name of a player who talks: in the lobby, on
 the scoreboard, in a list at the left of the screen during a game, and
 beside the name above their head (when names are shown there:
 `display.player_names`). To mute a player, open the scoreboard,
-right-click, click the player, and click Mute voice. You no longer hear
-them, and nobody else is told.
+right-click, click the player, and click Mute voice and chat. You no longer
+hear them or see their text chat lines, and nobody else is told. The host's
+Mute for everyone silences a player's voice for every machine (refer to
+"Text chat").
 
 The host sends each voice on to the players who can hear it. The host
 accepts a voice only from the machine of the player (with a key that it
@@ -716,11 +959,29 @@ GAME joins only with the correct password. The invite link of the game joins
 it without the password. The host keeps the password only while the game
 runs.
 
-In the Server Browser, select a game to join it. The game joins the invite
-of the game, as for a link. When it reaches the host, it opens the lobby.
-If it cannot reach the host in 30 seconds, it marks the game FAILED. A game
-that is full or starting shows CLOSED. REFRESH asks the hosts for their
-listings again.
+In the Server Browser, as in Custom Edition's, a click selects a game
+(outlined in yellow), and a click on the selected game, a double click, A,
+Enter or JOIN joins it. The game joins the invite of the game, as for a
+link. When it reaches the host, it opens the lobby. If it cannot reach the
+host in 30 seconds, it marks the game FAILED; when this machine's NAT gives
+each destination its own port and no router forwards
+`network.tunnel_port`, the line below the games says so (turn on UPnP on
+the router, or forward the port: refer to "Connection").
+
+The PING column shows the round trip to each host in milliseconds. The
+browser times it as a join would reach the host: it makes the tunnel with
+the listing's invite, keeps the shortest of three pings, and closes the
+tunnel again. It times a few hosts at once, each again every two minutes
+and on REFRESH. Joining a host whose tunnel is open uses that tunnel. A
+game with a password, whose invite the listing hides, shows no ping, nor
+does a host not reached; a game that is full or starting shows CLOSED.
+REFRESH also asks the hosts for their listings again.
+
+The gametype column names an OpenCE gametype's kind (SWAT, INFECTION, GUN
+GAME, or HC and the game engine for Hardcore: HC CTF, HC SLAYER), which the
+host sends with the game (network version 37), and otherwise the game
+engine's (SLAYER, CTF, KING OF THE HILL). The browser of LAN games, and the
+preview of a game before joining it, name it the same way.
 
 How it operates (`src/p2p_lobby.c`):
 
@@ -759,8 +1020,9 @@ as for any public server.
 The brokers are in `brokers.txt` next to the executable (from
 `port/assets/network/brokers.txt`; on Android, the app writes it next to
 `config.toml` at each start), one `host:port` on each line. The game uses
-all of them at once (up to 4), so one that works is enough. An update
-replaces `brokers.txt`: to use brokers of your own, put them in another
+all of them at once (up to 4), so one that works is enough. Without the
+file (a game run from somewhere the builds did not put it), the game uses
+its own copy of the list. An update replaces `brokers.txt`: to use brokers of your own, put them in another
 file and name it in `network.brokers_file`. All the players must use the
 same broker to see each other's games. The game uses
 MQTT 5 if the broker has it, else MQTT 3.1.1. A broker that does not keep
@@ -972,6 +1234,67 @@ the invite with the invite button of Discord. When a person accepts it, that
 person joins the game. If the game does not operate, Discord starts it.
 The game sends the activity only to a Discord client of the same user.
 
+## Mods
+
+A mod is a folder in `mods/` in the data root with a `mod.toml` and a
+`tags` folder of Halo PC tag files, as the Halo Editing Kit and Invader write
+them: sounds, bitmaps, string lists and models that play over the maps' tags
+of the same names, on this machine only (a high-res audio or texture pack, a
+translation, higher-detail models that keep the map's nodes, markers and
+regions). Every mod in the folder is on, in alphabetical order moved as the
+mods ask (`load_after`, `load_before`); the main menu's Mods lists them as a
+resource pack list does, the mod at the top playing over those below it,
+turns them off and moves them, and keeps that in `mods/load_order.toml`.
+Mods that say they cannot be played together (`incompatible`) are asked
+about at startup. The console's `mods_list` lists them, `mods_reload` reads
+their files again and `mods_enable false` plays the maps' own tags. The game
+checks every file before it plays it, and leaves out (with a line in
+`debug.txt`) one it cannot trust or that does not fit the map's tag it
+replaces. A mod changes nothing that the machines of a
+network game agree on. Refer to [docs/mods.md](../../docs/mods.md).
+
+## Streamer mode
+
+Streamer mode (Settings > Network Setup > Streamer Mode, `streamer.enabled`)
+hides offensive words as stars wherever the game draws text that other
+people or files wrote: the text chat's lines, players' names over their
+heads, in the chat, in the kill feed, on
+the scoreboards and in the lobbies, the server browser's games, the host's
+notices in the console, map and mod names, and the text of a map's or mod's
+own string lists, as well as the message boxes about mods and maps. It
+changes only what this machine shows: the names others see, and what the
+machines send each other, stay as they are.
+
+The words come from Surge AI's rated list of English profanities, reviewed
+for the game (`port/assets/text_filter`), in three groups, each with a level
+that hides that severity and worse:
+
+| Group | Setting | Default | What it has |
+| --- | --- | --- | --- |
+| SLURS | `streamer.slurs` | `"mild"` (all) | Slurs about race, ethnicity, nationality, religion, sexuality, gender and disability |
+| SWEARING | `streamer.swearing` | `"strong"` | Swearing and sexual words; the mildest (damn, hell) show at `"strong"` |
+| INSULTS | `streamer.insults` | `"off"` | Name-calling that is not a slur |
+
+A word is found however it is dressed: in capitals or with accents, in
+look-alike letters (Cyrillic, Greek, full-width, small capitals), in leet
+(`0` for o, `@` for a, `ph` for f), with its letters stretched ("fuuuck"),
+with punctuation between them (`f.u.c.k`), spaced out (`f u c k`, `fu ck`),
+and with characters the game does not draw (zero-width spaces, the menus'
+`|` codes) between them. Each word may be found inside a name, at a word's
+start, or only as a whole word, as fits it, and some words are never
+hidden though a hidden one is inside them (Scunthorpe). `python3
+tools/text_filter_terms.py --check "some text"` shows what would be hidden.
+
+What it cannot catch: letters added into a word or its letters scrambled, new
+spellings, a word split between two names or two lines, voice chat (mute a
+player from the scoreboard, or set `audio.voice_volume` to 0), and pictures.
+What you type is shown as you type it.
+
+Your own words: `text_filter.txt` in the data root, with lines of `add
+<word>` (hidden whenever streamer mode is on) and `allow <word>` (never
+hidden), read when the game starts and when the settings change. The web
+build's page draws its own list of mods, which is not filtered.
+
 ## Map checks
 
 The game reads a map's tags straight into memory and uses them as its own
@@ -1044,7 +1367,8 @@ crafted file) is refused, and the level starts over.
 | High-res HUD | The HUD is drawn from high-res assets: redraws at 8x the size of the maps' bitmaps (4x for the largest), in `port/assets/hud`. They cover the meters, counters, panels and their outlines, the motion sensor, reticles, waypoints and scopes, but no bitmap with English text. `tools/hud_assets.py` makes them from the SVG redraws (the weapons' reticles from those of the PC HUD sheet that match the Xbox's exactly, the sniper rifle's 2x and 10x set in Overpass), and the build embeds them in the executable. When the game uploads one of those bitmaps, `src/hud_hires.c` gives the high-res texture in its place, if the bitmap's pixels are those of the English maps: another language's maps keep their own. The game sizes and places the HUD from its tags as before. `display.high_res_hud = false` turns this off. |
 | High-res text | The menus' and HUD's text is drawn with Overpass (`port/assets/fonts`, SIL Open Font License) in place of the maps' bitmap fonts, which are Interstate. `src/text_hires.c` rasterizes each glyph with stb_truetype (`port/third_party/stb`) at the resolution the game draws at, into an atlas that a placeholder bitmap of the game stands for. The game lays the text out from its font tags as before: each font is as tall as its tag's capitals, and narrowed where the tag's letters are narrower than the Xbox maps' (the fonts of a Custom Edition `loc.map`), so that its letters do not run into each other. The menus' titles (the screens' headers and the main menu's items) are pictures of text in the maps, so they are drawn as the high-res HUD is: `tools/title_assets.py` sets each one again in OpenCE, Roger White's public-domain Newtown respaced to match the maps' commercial title typeface (`tools/title_font.py`), at 4x the bitmap's size over its own plate or glow, each letter placed where the map's letter is, in `port/assets/titles`. The postgame carnage report's title is set over a hand-made SVG redraw of its panel (`port/assets/titles/svg`) instead. The A, B, X and Y button icons beside the menus' key labels and in their text ("Press A to Join") are drawn from hand-made SVG redraws at 8x the size of the maps' bitmaps (`port/assets/buttons`, made by `tools/button_assets.py`), in the same sizes and places. `display.high_res_text = false` turns it off. |
 | Anti-aliasing | Off unless `display.anti_aliasing` is set (`src/d3d8_gl.c`, `src/xgpu_post.c`). FXAA (written in the port) and SMAA (`port/third_party/smaa`, MIT licensed, at its HIGH preset, compiled as GLSL) are passes over the 3D view of each window, after the lens flares and before the HUD and the menus (`render/render.c`). Their programs are built when the setting is chosen. Supersampling draws the render targets the size of the screen at two times the resolution in each direction, and the display blit scales them down. Multisampling draws the back buffer and its depth buffer into multisampled renderbuffers, and with them any target that is drawn together with one of them (a mirror's view, in the secondary target with the back buffer's depth buffer), so that the attachments of a framebuffer are all multisampled or none is. A target's pixels are resolved into its texture before something reads the texture (as a texture, or at the display blit). Visibility tests count samples, divided by the samples of a pixel. An alpha-tested surface (foliage, grates) covers the samples of a pixel in proportion to its alpha past the reference (`gl_SampleMask`, not on Android). |
-| Sound | Xbox DirectSound on SDL3 audio (`src/dsound_sdl.c`): PCM and Xbox ADPCM, mixed at 48 kHz, with volume, pitch, mix bins, distance, stereo pan, occlusion and obstruction. There is no Doppler effect, no cones and no reverb. |
+| HDR | Off unless `display.hdr` is set (`src/d3d8_gl.c`, `src/xgpu_post.c`). The back buffer's texture, and its multisampled renderbuffer, is `GL_RGBA16F` (`GL_HALF_FLOAT` on Android), with the same `GL_DEPTH24_STENCIL8` depth buffer. The game's pixel shaders give colours from 0 to 1, as the NV2A's register combiners did, so the light past white comes from blending, which a floating-point target does not clamp. The tone mapping pass is a pass over the 3D view of each window, before the anti-aliasing (`render/render.c`): it takes each pixel from gamma 2.2 to linear light, multiplies it by `display.hdr_exposure`, applies the curve, and returns to gamma 2.2. It writes the colour only, since the game keeps its own data in the alpha. The display blit becomes a draw that clamps to 1, or, in a floating-point window, gives scRGB (linear light, 1 at the display's SDR white, which SDL reports with the headroom). The settings are read between frames; a change of `display.hdr` makes the back buffer again in the other format. |
+| Sound | Xbox DirectSound on SDL3 audio (`src/dsound_sdl.c`): PCM and Xbox ADPCM, mixed at 48 kHz in stereo or 5.1, with volume, pitch, mix bins, distance, pan, occlusion and obstruction. There is no Doppler effect and no cones. On 5.1 the game gets the AC-3 speaker setting of the Xbox and sends its 2D sounds to the center and back speakers, 3D sounds pan across the five speakers, and the reverb plays from the front and back pairs. The game sends nothing to the LFE channel. |
 | Input | XInput on SDL3 (`src/xinput_sdl.c`): keyboard, mouse, gamepads with rumble, and the debug keyboard for the console. |
 | Files | The Win32 file functions and the MSVC file functions on POSIX, with the translation of Xbox paths. |
 | Threads | Threads, events, mutexes, critical sections, interlocked operations and alertable waits. |
@@ -1135,22 +1459,32 @@ Other changes:
 | `rasterizer/xbox/rasterizer_xbox_environment_fog.c` | A local pointer gets its value from the file-scope array with the same name. |
 | `game/player_control.c` | The mouse aims the player on controller 1 directly. |
 | `sound/game_sound.c` | The game calculates the obstruction of each sound one time for each tick, not for each frame. |
-| `cseries/errors.c` | `debug.txt` stays open between lines. |
+| `sound/sound_manager.c` | A track of a looping sound that is gone stops, even in the millisecond it started (`refresh_sound`). The Xbox never drew three frames in one millisecond; the port can (the null renderer, no frame limit), and then read the deleted looping sound and crashed. |
+| `cseries/errors.c` | `debug.txt` stays open between lines. A line that is the same as the line before it is counted, not written again (`last line repeated N times`). At 64 MB, `debug.txt` becomes `debug.old.txt` and a new `debug.txt` starts. |
 | `networking/`, `game/`, `interface/`, `bungie_net/network/` and the pools of objects, effects and sounds | The system link limits and the memory for them. |
 | `game/`, `objects/`, `units/`, `networking/` | The distributed netcode. Refer to `NETCODE.md`. |
-| `cache/cache_files.c` | When a map's tags load and unload, the port finds the bitmaps that the high-res HUD replaces (`game/hud_hires_tags.c`), and adds the tags of the menus to the menus' map (`game/menu_tags.c`). |
+| `cache/cache_files.c` | When a map's tags load and unload, the port finds the bitmaps that the high-res HUD replaces (`game/hud_hires_tags.c`), adds the tags of the menus to the menus' map (`game/menu_tags.c`), and plays the mods' tags (`game/mods.c`). |
+| `cache/xbox_sound_cache.c`, `cache/xbox_texture_cache.c` | The samples of a mod's sound are copied from memory, and the pixels of a mod's bitmap read from its file and laid out for the hardware, at once (`game/mod_sounds.c`, `game/mod_bitmaps.c`); a mod's linear bitmap need not have rows of whole steps of the pitch. |
+| `hs/hs.c` | The console's `mods_reload`, `mods_enable` and `mods_list`, which a client may run too. |
 | `interface/ui_widget.c`, `interface/ui_widget_event_handler_functions.c`, `interface/ui_widget_game_data_input_functions.c` | The main menu is the PC version's from `port/assets/menus` (`display.menus`); the menus' widgets can call the port's functions (`game/menu_functions.c`) and send the PC version's custom activation event; the widgets' memory is 256 KB, not 16 KB; the main menu and Multiplayer clear co-op's controllers, so that a gamepad going back to controller 1 is not a controller unplugged; the lobby's split screen players leave alone, and one who quits in game is not joined to the next game (`interface/player_ui.c`). |
 | `interface/player_ui.c` | Fast setup opens the pregame screen through the port's menus (the lobby), as `interface/ui_widget.c` does. |
+| `game/game_engine.c`, `game/game_engine.h`, `game/game_engine_slayer.c`, `game/game.c`, `game/aim_assist.c`, `game/players.c`, `objects/damage.c`, `objects/objects.c`, `units/units.c`, `items/weapons.c`, `saved games/playlist_profile.c`, `saved games/saved_game_files.c` | OpenCE's gametypes (`game/game_modes.c`, "OpenCE gametypes"): the gametype's PC options carry a mode and Hardcore with their options; the built-in ones are written after the Xbox's default gametypes; Infection's and Gun Game's game engines are Slayer's with their rules; SWAT's headshots, Hardcore's motion sensor, aim assist and restore of the killer; Infection's zombies' skulls, grenades, powerups, seats and melee. |
+| `game/game_time.c`, `main/main.c` | With `debug.fixed_step`, a game of one machine runs a tick a frame, each frame taking a tick's time, so that it plays the same every time (`tools/stagekit`). |
 | `input/input_abstraction.c`, `game/player_control.c`, `game/players.c`, `game/player_queues_new.c`, `units/units.h` | The keyboard and mouse's actions (`src/xinput_sdl.c`, `include/halo_keyboard.h`) join controller 1's game controls; their reload key reloads on its own, and their action key only acts (a control flag of the port's, sent with the player's action, stops the reload the controller's X falls back to). |
+| `saved games/player_profile.h`, `interface/player_ui.c` | A sixth button layout, the Master Chief Collection's Bumper Jumper (`profile.button_preset` 5). A layout the build does not know (a later build's) gets the standard buttons, not none, which moved start and back and stopped the game. |
 | `sound/sound_manager.c`, `interface/hud.c`, `game/game_engine.c` | The music's and the other sounds' volumes; the HUD's and the scoreboard's settings are read again when Settings changes them. |
 | `rasterizer/xbox/rasterizer_xbox_shadows.c` | With larger shadow maps (`display.shadow_resolution`), the blur's taps stay half a texel apart, and more passes widen it to cover the same part of the map as on the Xbox. |
 | `rasterizer/rasterizer.c` | The 128 KB of vertices of the debug display of a model's vertices are static, not on the stack: the compiler inlines the function in `render_model`, and the Windows build probed the stack a page at a time for every model drawn. |
-| `render/render.c` | The 3D view of each window is antialiased before the HUD is drawn (`display.anti_aliasing`). |
+| `render/render.c` | The 3D view of each window is tone mapped (`display.hdr`) and antialiased (`display.anti_aliasing`) before the HUD is drawn. |
+| `render/render.c` | `render_initialize` reads the structure culling tests from `display.structure_culling`. |
+| `models/models.c` | A model's size, which chooses its level of detail and whether it is drawn, is scaled as `display.model_detail` says (`halo_model_detail_scale`, `src/d3d8_gl.c`), and each permutation draws the level `game/model_detail.c` chooses from the model's (stock: the model's). |
 | `interface/hud.c` | In multiplayer, players' names are drawn above their heads (`display.player_names`, `display.player_name_scale`). |
+| `text/draw_string.c`, `interface/terminal.c`, `interface/virtual_keyboard.c` | Streamer mode's words are hidden in every string drawn or measured (`game/text_filter.c`), but in the console's line and the virtual keyboard's text being typed. |
 | `rasterizer/rasterizer_text.c`, `text/draw_string.c` | Text is drawn from an atlas of the fonts' glyphs, rasterized at the resolution the game draws at (`src/text_hires.c`), when the font has every character of the string. Text can be drawn scaled about a point (`rasterizer_text_set_scale`), as the players' names are. Each glyph's advance is centred on the font tag character's, so the layout is the same, and a glyph is cut at a text box only where the font tag's character visibly was. |
 | `interface/first_person_weapons.c` | The first-person hands are drawn with the unit's shield modifier shader, as its body is (`display.viewmodel_shield`). |
 | `render/render_objects.c`, `objects/objects.c` | In first person, your own body is drawn from the waist down with the pose `first_person_legs.c` makes (`display.first_person_legs`); the waist it found and the mesh `object_mesh.c` read are forgotten on a new map. |
 | `objects/object_lights.c` | Glows the port lights itself (`shield_glow.c`): dynamic lights attached to an object's node, colored and sized each frame by their maker, drawn with a light definition the map has. |
+| `render/render_objects.c`, `interface/first_person_weapons.c`, `rasterizer/xbox/rasterizer_xbox_plasma_energy.c`, `items/projectiles.c` | An overshield as `overshield_effect.c` draws it (`display.overshield_effect`): in its own color, its intensity full, its energy slower, faded above the height it has risen to; a hit on it plays the projectile's effect for an Elite's energy shield in place of its own (only the effect: the projectile's response is its own). |
 | `render/render_objects.c`, `interface/first_person_weapons.c`, `rasterizer/xbox/rasterizer_xbox_plasma_energy.c` | A local player's shield plasma is drawn in the chosen armor color (`display.shield_color`, `shield_color.c`), on the body and on the first-person arms. |
 | `rasterizer/xbox/rasterizer_xbox_text.c`, `rasterizer/rasterizer_text.c` | The characters of a string are one draw, not a draw each (and a second for the drop shadow). The batch is drawn early before a character is cached and before the high-res glyph atlas starts over (`src/text_hires.c`). |
 | `rasterizer/xbox/rasterizer_xbox_decals.c` | Decals drawn one after another with the same blend function and bitmap are one draw, with each decal's color in its vertices, not a draw each: a long fight leaves hundreds in view. Within a run of decals whose blend functions commute (multiply, add, min, max, reverse subtract), they are drawn by bitmap, so more of them share a draw. |
@@ -1160,7 +1494,9 @@ Other changes:
 | `cache/cache_files.c`, `networking/network_client_manager.c`, `networking/network_server_manager.c`, `networking/network_server_message_handler.c`, `main/main.c`, `interface/interface.c` | Map sharing (`game/map_share.c`): a client that does not have the game's Custom Edition map asks the host for it instead of leaving, is not given time to precache it until it has it, and adds its players to a game in progress only then; the host gives the game's map its own name and its version (its hash's start), takes the requests from any machine in the game, lobby too, and does not drop a machine that downloads; the transfers run each frame, and their progress is drawn over the screen. |
 | `cutscene/cinematics.c` | A scenario's titles (some Custom Edition maps show their name for the whole game) are not drawn over a menu, as the letterbox is not: the screen's overlays are drawn after the players' menus. |
 | `tag_files/tag_groups.h` | `TAG_BLOCK_GET_ELEMENT` returns an element in the block without a call, and calls `tag_block_get_element_with_size` for anything else. |
+| `game/players.c`, `networking/network_server_manager.c` | Bots (`game/bots.c`, `bots.count`): the lobby of a local Slayer game takes the bot players, each the one player of a machine of its own that no real machine is, and every tick their actions come from `game/bots.c` instead of their empty queues. Nothing changes in a system link or internet game. |
 | `input/input_xbox.c`, `physics/collision_usage.c` | The clock is read only for a button held, and for collision tests only when their times are shown: a read of the clock is slow in a browser. |
+| `main/main.c`, `interface/hud.c`, `interface/hud_unit.c`, `interface/hud_draw.c`, `game/game_engine.c` | The text chat of network games (`game/network_chat.c`): its keys are read each frame, and the debug keys are not while a line is typed; each view's HUD draws its lines, above the motion sensor, whose place the HUD notes (the left of the last picture drawn); the scoreboard's menu has Mute voice and chat, and the host's Mute for everyone. |
 
 The x86 inline assembly of the game is replaced by C. Thus the compiler
 can optimize that code for each processor:

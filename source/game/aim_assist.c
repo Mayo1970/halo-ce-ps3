@@ -44,9 +44,12 @@ symbols in this file:
 
 #include "cseries.h"
 #include "game/aim_assist.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 
 #include "camera/director.h"
 #include "camera/observer.h"
+#include "camera/first_person_camera.h" /* port: preserve the passenger's input aim basis */
+#include "passenger_camera.h" /* port: port/linux/game/passenger_camera.c */
 #include "game/game.h"
 #include "game/game_allegiance.h"
 #include "game/game_globals.h"
@@ -505,6 +508,9 @@ boolean aim_assist(
 	short ignore_team_index,
 	struct aim_assist_target *target)
 {
+	/* port: Hardcore has no aim assist: no autoaim, no magnetism */
+	if (game_modes_aim_assist_off())
+		return FALSE;
 	if (scenario_leaf_index_from_point(position)!=NONE)
 	{
 		short cluster_index= TAG_BLOCK_GET_ELEMENT(
@@ -539,7 +545,9 @@ boolean aim_assist(
 	return FALSE;
 }
 
-long player_aim_projectile(
+/* port: share the direction calculation with the reticle without updating
+the player's last shot. The firing wrapper below retains those writes. */
+long player_aim_projectile_preview(
 	long player_index,
 	real_point3d const *position,
 	real_vector3d *direction)
@@ -631,9 +639,17 @@ long player_aim_projectile(
 		global_current_collision_user_depth > 1);
 	--global_current_collision_user_depth;
 
-	player->aim_assist_unit_index= target_object_index;
-	player->aim_assist_timestamp= game_time_get();
+	return target_object_index;
+}
 
+/* port: firing keeps the original aim-assist bookkeeping */
+long player_aim_projectile(long player_index, real_point3d const *position, real_vector3d *direction)
+{
+	long target_object_index = player_aim_projectile_preview(player_index, position, direction);
+	struct player_datum *player = player_get(player_index);
+
+	player->aim_assist_unit_index = target_object_index;
+	player->aim_assist_timestamp = game_time_get();
 	return target_object_index;
 }
 
@@ -662,8 +678,12 @@ long local_player_aim_assist(
 		{
 			struct observer_result const *camera= observer_get_camera(local_player_index);
 			struct aim_assist_target target;
+			real_point3d aim_position = camera->position; /* port: the display camera never steers aim assist */
+			real_vector3d aim_forward = camera->forward;
 
-			if (aim_assist(&parameters, &camera->position, &camera->forward, aiming_unit_index, player->team_index, &target))
+			if (passenger_camera_enabled(local_player_index))
+				first_person_camera_deterministic(player->unit_index, &aim_position, &aim_forward);
+			if (aim_assist(&parameters, &aim_position, &aim_forward, aiming_unit_index, player->team_index, &target))
 			{
 				real_vector3d velocity, target_velocity, magnetism_velocity;
 

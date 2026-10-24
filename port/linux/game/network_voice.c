@@ -1,5 +1,5 @@
 /* NETWORK_VOICE.C: voice chat (port/linux/NETCODE.md). Opus frames go to the host, which checks each machine's key,
-size and rate and relays them by its settings (network.voice_*); each machine sets only its talk, volume and mutes. */
+size and rate and relays them by its settings (network.voice_*, its mutes); each machine sets only its talk, volume and mutes. */
 
 #include "cseries.h"
 #include "cseries/errors.h"
@@ -20,6 +20,7 @@ size and rate and relays them by its settings (network.voice_*); each machine se
 #include "objects/objects.h"
 #include "network_distributed.h"
 #include "network_voice.h"
+#include "network_chat.h"
 #include "../src/voice_audio.h"
 
 #include <math.h>
@@ -338,6 +339,27 @@ static void voice_machine_name(
 	}
 }
 
+/* (the host) whether a machine has a player the host muted for everyone
+(network_chat.c), by the network game's names, which the lobby has too */
+static boolean voice_machine_muted_for_everyone(
+	long machine_index)
+{
+	struct network_game *game = voice_network_game();
+	short index;
+
+	for (index = 0; game && index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+	{
+		struct network_player *player = &game->players[index];
+
+		if (network_player_is_valid(player) && player->machine_index == machine_index &&
+			network_chat_host_name_muted(player->name))
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 /* a player's living unit's position */
 static boolean voice_player_position(
 	struct player_datum const *player,
@@ -571,6 +593,9 @@ static void voice_host_relay(
 	{
 		return;
 	}
+	/* (a player the host muted for everyone is heard by no one) */
+	if (voice_machine_muted_for_everyone(speaker_machine))
+		return;
 	/* (no more than so many at once: those talking keep talking) */
 	if (!(voice_machines[speaker_machine].talked && now - voice_machines[speaker_machine].talked_at < VOICE_TALKING_MS) &&
 		voice_host_talkers(speaker_machine, now) >= VOICE_MAXIMUM_TALKERS)
@@ -887,7 +912,7 @@ void network_voice_update(
 	}
 	/* the microphone: open mic, open while voice is on; push to talk, from
 	the first press (none asked for until then) */
-	held = push_to_talk && halo_push_to_talk_held() && !console_is_active();
+	held = push_to_talk && halo_push_to_talk_held() && !console_is_active() && !network_chat_typing();
 	if (!voice_may_talk() || (!open_mic && !push_to_talk))
 		voice_microphone_wanted = FALSE;
 	else if (open_mic || held)

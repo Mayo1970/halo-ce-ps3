@@ -15,6 +15,7 @@ upstream halo-ce-universal copy of source/text/draw_string.c. */
 #include "text/font_group.h"
 #include "text/international_strings.h"
 #include "text/text_group.h"
+#include "text_filter.h" /* port: port/linux/game/text_filter.c and text_filter_match.c */
 
 #include <ctype.h>
 
@@ -674,10 +675,19 @@ static word parse_unicode_string(
 	switch (character)
 	{
 	case '|':
-		if (string[state->string_index++] == 'n')
+		/* port: the next character is taken only when it is the 'n' of
+		"|n"; any other '|' is a character, as parse_string has it. The
+		next character was taken whatever it was, so a string ending in '|'
+		(a player's name, a server's message) was read past its end */
+		if (string[state->string_index] == 'n')
 		{
+			state->string_index++;
 			state->character = '\r';
 			state->result = _parsed_end_of_line;
+		}
+		else
+		{
+			state->result = _parsed_character;
 		}
 		break;
 	case 0:
@@ -922,6 +932,10 @@ void draw_string(
 	struct parse_string_state state;
 	point2d cursor;
 
+	/* port: streamer mode's words hidden, in what is drawn and what is measured
+	(port/linux/game/text_filter.c) */
+	string = text_filter_string(string);
+
 	match_assert("c:\\halo\\SOURCE\\text\\draw_string.c", 648, bounds);
 	match_assert("c:\\halo\\SOURCE\\text\\draw_string.c", 649, string);
 
@@ -1119,6 +1133,10 @@ void draw_unicode_string(
 	short maximum_wrapped_line_index = 0;
 	struct parse_string_state state;
 	point2d cursor;
+
+	/* port: streamer mode's words hidden, in what is drawn and what is measured
+	(port/linux/game/text_filter.c) */
+	string = text_filter_unicode(string);
 
 	match_assert("c:\\halo\\SOURCE\\text\\draw_string.c", 848, bounds);
 	match_assert("c:\\halo\\SOURCE\\text\\draw_string.c", 849, string);

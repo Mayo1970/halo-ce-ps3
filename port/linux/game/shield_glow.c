@@ -35,6 +35,7 @@ machines.
 #include "camera/observer.h"
 #include "game/players.h"
 #include "objects/object_lights.h"
+#include "network_shield_effects.h"
 
 #include <math.h>
 #include <string.h>
@@ -47,6 +48,9 @@ unsigned long config_changes(void);
 /* object_lights.c (port) */
 long light_port_glow_definition_get(void);
 boolean light_port_glow_set(long light_index, long object_index, real_rgb_color const *color, real radius);
+/* port/linux/game/overshield_effect.c */
+real overshield_effect_flare(long unit_index);
+real_rgb_color const *overshield_effect_glow_color(void);
 
 enum
 {
@@ -89,13 +93,22 @@ static unsigned long shield_glow_frame = 0;
 static real shield_glow_scale = 1.f;
 
 /* display.shield_glow, and its intensity (display.shield_glow_intensity):
-"default", or "light_show", three times as bright and as far */
+"default", or "light_show", three times as bright and as far; in a network
+game, the host's (network_shield_effects.c) */
 static boolean shield_glow_enabled(
 	void)
 {
 	static unsigned long changes = (unsigned long)-1;
 	static boolean enabled = FALSE;
+	short effects = network_shield_effects();
 
+	if (effects != NONE)
+	{
+		changes = (unsigned long)-1;
+		shield_glow_scale = effects == _shield_effects_light_show ||
+			effects == _shield_effects_light_show_overshield ? 3.f : 1.f;
+		return effects != _shield_effects_stock && effects != _shield_effects_overshield;
+	}
 	if (changes != config_changes())
 	{
 		char const *intensity = config_string("display.shield_glow_intensity");
@@ -165,11 +178,21 @@ static real shield_glow_flare(
 	if (source < 1 || source > 4)
 		return 0.f;
 	value = object->object.outgoing_function_values[source - 1];
+	/* (an overshield: lit as it rises, then whole while it lasts) */
+	{
+		real overshield = overshield_effect_flare(unit_index);
+
+		if (overshield >= 0.f)
+			value = overshield;
+	}
 	if (!(value > 0.f))
 		return 0.f;
 	value = (real)pow((double)value, (double)plasma->intensity_exponent);
 
 	*color = plasma->perpendicular_color;
+	/* (an overshield: its own color) */
+	if (overshield_effect_flare(unit_index) >= 0.f)
+		*color = *overshield_effect_glow_color();
 	peak = MAX(color->red, MAX(color->green, color->blue));
 	if (!(peak > 0.f))
 		return 0.f;

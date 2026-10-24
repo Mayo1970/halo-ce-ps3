@@ -96,6 +96,7 @@ To install the data from a computer:
 | Item | Location in `/sdcard/Android/data/com.halo.decomp/files` |
 | --- | --- |
 | Saved games (`z:\` and `u:\`) | `save` |
+| Mods (`docs/mods.md`) | `mods`: `adb push <mod folder> /sdcard/Android/data/com.halo.decomp/files/mods/`; the main menu's Mods orders them and turns them off |
 | Log | `debug.txt` |
 | Settings | `config.toml` |
 
@@ -158,7 +159,7 @@ controller for player 1. With the default buttons of the profile:
 | Crouch, Zoom | left and right stick clicks |
 | Light, Gren. type | white, black |
 | Pause, Back | start, back |
-| Up, Down, Left, Right | D-pad |
+| Up, Down, Left, Right | D-pad (in a network game, Up opens the text chat's keyboard) |
 
 The names on the buttons follow the profile's "Button layout" (Settings >
 Gamepads): with "Swap triggers", the right trigger's button says "Grenade".
@@ -227,7 +228,7 @@ These settings are only for Android:
 | `input.touch_controls` | The touch controls in a game. `"auto"` (the default): shown on a touchscreen while no controller is connected. `"on"`: also shown with a controller. `"off"`: never shown. A device without a touchscreen never shows them. The menus take taps in any case. |
 | `display.screen_width` | The number of columns of the 480-line picture. `0` (the default): the shape of the display (1068 on a 20:9 phone). `640`: the 4:3 shape of the Xbox. |
 | `debug.sample_seconds` | Refer to "Find problems". |
-| `debug.memory_watch` | `true` (the default): the app notices the game's writes to textures and vertices by page protection. `false`: it compares page contents once a frame instead, which is slower. Refer to "Limits". |
+| `debug.memory_watch` | `true` (the default): the app notices the game's writes to cached textures by page protection. `false`: it compares page contents once a frame instead, which is slower. Geometry uses the streaming path in either mode. Refer to "Limits". |
 
 ## Internet play
 
@@ -307,7 +308,9 @@ The guest is the game, the platform layer and a small runtime:
    AArch64 target of clang. The options `-U__APPLE__` and
    `-fno-define-target-os-macros` hide the Darwin environment.
 2. `tools/android_asm_convert.py` changes the Mach-O assembly to ELF
-   assembly.
+   assembly. It renames symbols, but keeps string literals (`.ascii`,
+   `.asciz`) byte for byte: they hold tables as well as text
+   (`tools/test_android_asm_convert.py`).
 3. The AArch64 assembler makes the objects.
 4. `ld.lld` links the objects with `guest/guest.ld` to a static image,
    `build/android/halo_guest.elf`, at a fixed address above the Xbox memory
@@ -458,6 +461,23 @@ assembly of the port is necessary:
 - The symbol aliases in `guest/libc/src_include/features.h`. The Darwin
   target does not accept alias attributes.
 
+## Geometry uploads
+
+Android streams vertex and index data from the current CPU bytes instead
+of reusing the persistent geometry mirror or its cached index extents.
+This is automatic; no console command or configuration change is needed.
+Affected players reported that bypassing the cache resolved stretched or
+missing geometry, with some also reporting better performance. The exact
+cache failure mechanism remains unconfirmed.
+
+The Android-only guard in `mirror_range` uses the existing streaming
+fallback. Streamed upload methods, frame fences, shaders, texture caching
+and CPU write tracking are unchanged. Desktop and web retain their cache.
+Xbox and Custom Edition maps keep their existing loaders and resource
+paths. `tools/test_android_mirror_uploads.py` checks the bypass with large
+and reused ranges, frame-counter rollover and desktop/web cache controls;
+it does not substitute for device gameplay validation.
+
 ## Find problems
 
 - Enter `adb logcat -s halo` to see the log of the port and the errors of
@@ -487,8 +507,11 @@ assembly of the port is necessary:
   operate. The Xbox memory uses 4 KB pages.
 - The x86 Android emulator runs the app through its ARM translation. The
   translation cannot deliver the page faults that the renderer uses to
-  notice changed textures and vertices. On the emulator the app compares
+  notice changed textures. On the emulator the app compares
   page contents once a frame instead ("write tracking: page hashes" in the
-  log). This is slower, and a write shows one frame later, so moving
-  geometry can glitch briefly. `debug.memory_watch = false` does the same
-  on a device.
+  log). This is slower, and texture changes may appear one frame later.
+  `debug.memory_watch = false` does the same on a device. The translation
+  also has no scalar conversion from floating
+  point to an integer in a SIMD register (`fcvtzs s0, s1`, an illegal
+  instruction there), so `tools/android_asm_convert.py` writes each as the
+  vector form, which leaves the register and the exception flags the same.

@@ -42,6 +42,7 @@ hashing thread allocates what the game's thread frees) */
 network_server_manager.c's, cseries_windows.c's */
 int config_boolean(const char *name);
 long config_integer(const char *name);
+const char *config_string(const char *name);
 boolean network_distributed_client_send_reliably(void *message, word size);
 boolean network_distributed_server_send_to_machine_reliably(long machine_index, void *message, word size);
 unsigned long network_game_server_machine_address(long machine_index);
@@ -114,9 +115,11 @@ enum
 	MAXIMUM_MAP_BYTES = 0x30000000,
 	MAXIMUM_RESOURCE_MAP_BYTES = 0x20000000,
 
-	/* the kilobytes a second a machine sends, at least and at most */
+	/* the kilobytes a second a machine sends, at least and at most: the
+	host 20 MB/s, a player helping it 10 MB/s */
 	MINIMUM_UPLOAD_KILOBYTES = 16,
-	MAXIMUM_UPLOAD_KILOBYTES = 65536,
+	MAXIMUM_HOST_UPLOAD_KILOBYTES = 20480,
+	MAXIMUM_SEED_UPLOAD_KILOBYTES = 10240,
 
 	/* network_server_manager.c's host state in game, transport_endpoint_winsock.c's stream endpoint and
 	hud_messaging.c's centred text (their enums are their own) */
@@ -605,10 +608,11 @@ static unsigned long map_share_host_address(
 static long upload_limit(
 	void)
 {
-	long kilobytes = map_share_host() ? config_integer("network.map_share_upload") :
-		config_integer("network.map_seed_upload");
+	boolean host = map_share_host();
+	long kilobytes = host ? config_integer("network.map_share_upload") : config_integer("network.map_seed_upload");
 
-	return PIN(kilobytes, MINIMUM_UPLOAD_KILOBYTES, MAXIMUM_UPLOAD_KILOBYTES) * 1024;
+	return PIN(kilobytes, MINIMUM_UPLOAD_KILOBYTES, host ? MAXIMUM_HOST_UPLOAD_KILOBYTES : MAXIMUM_SEED_UPLOAD_KILOBYTES) *
+		1024;
 }
 
 /* whether this machine sends the game's files to the others: in a game on
@@ -976,9 +980,16 @@ static void connection_close(
 		return;
 	if (reason || connection->bytes_in || connection->bytes_out)
 	{
-		error(_error_silent, "map sharing: the connection with %d.%d.%d.%d closed: %s (%lu bytes in, %lu out)",
-			(int)(connection->address >> 24), (int)(connection->address >> 16 & 255),
-			(int)(connection->address >> 8 & 255), (int)(connection->address & 255), reason ? reason : "done",
+		unsigned char bytes[4];
+		char address[56];
+
+		/* (a public address as a tag: log_address.h) */
+		bytes[0] = (unsigned char)(connection->address >> 24);
+		bytes[1] = (unsigned char)(connection->address >> 16);
+		bytes[2] = (unsigned char)(connection->address >> 8);
+		bytes[3] = (unsigned char)connection->address;
+		error(_error_silent, "map sharing: the connection with %s closed: %s (%lu bytes in, %lu out)",
+			log_address(bytes, 4, -1, address, sizeof(address)), reason ? reason : "done",
 			connection->bytes_in, connection->bytes_out);
 	}
 	if (connection->source != NONE && connection->source < download->source_count)
@@ -1756,6 +1767,124 @@ static void download_unfinish(
 	custom_edition_maps_look_again();
 }
 
+/* ---------- downloaded maps
+
+The maps map sharing downloaded are named, a file name a line, in
+DOWNLOADED_MAPS_FILE beside them in custom_maps: their scripts are held to
+tighter rules (hs.c's hs_scenario_functions_check) in this run and the ones
+after it. game.downloaded_maps names more, by the names the game loads maps
+by, or "*" for all. */
+
+#define DOWNLOADED_MAPS_FILE "downloaded_maps.txt"
+
+/* the list's path beside a map's file */
+static boolean downloaded_maps_list_path(
+	char const *map_path,
+	char *list_path,
+	long size)
+{
+	char const *slash = strrchr(map_path, '\\');
+	char const *other = strrchr(map_path, '/');
+	long folder_length;
+
+	if (other && (!slash || other > slash))
+		slash = other;
+	folder_length = slash ? (long)(slash - map_path) + 1 : 0;
+	if (folder_length + (long)sizeof(DOWNLOADED_MAPS_FILE) > size)
+		return FALSE;
+	csmemcpy(list_path, map_path, folder_length);
+	csstrncpy(list_path + folder_length, DOWNLOADED_MAPS_FILE, size - folder_length - 1);
+	list_path[size - 1] = 0;
+	return TRUE;
+}
+
+/* a map file's name (past its folder) */
+static char const *downloaded_maps_file_name(
+	char const *map_path)
+{
+	char const *slash = strrchr(map_path, '\\');
+	char const *other = strrchr(map_path, '/');
+
+	if (other && (!slash || other > slash))
+		slash = other;
+	return slash ? slash + 1 : map_path;
+}
+
+/* whether the list beside a map's file names it */
+static boolean downloaded_maps_listed(
+	char const *map_path)
+{
+	char list_path[MAP_SHARE_PATH_SIZE];
+	char line[MAP_SHARE_PATH_SIZE];
+	char const *name = downloaded_maps_file_name(map_path);
+	boolean listed = FALSE;
+	FILE *stream;
+
+	if (!downloaded_maps_list_path(map_path, list_path, sizeof(list_path)))
+		return FALSE;
+	stream = fopen(list_path, "rb");
+	if (!stream)
+		return FALSE;
+	while (!listed && fgets(line, sizeof(line), stream))
+	{
+		line[strcspn(line, "\r\n")] = 0;
+		listed = line[0] && !csstrcasecmp(line, name);
+	}
+	fclose(stream);
+	return listed;
+}
+
+/* a map file map sharing downloaded, named in the list beside it */
+static void downloaded_maps_mark(
+	char const *map_path)
+{
+	char list_path[MAP_SHARE_PATH_SIZE];
+	FILE *stream;
+
+	if (downloaded_maps_listed(map_path) ||
+		!downloaded_maps_list_path(map_path, list_path, sizeof(list_path)))
+	{
+		return;
+	}
+	stream = fopen(list_path, "ab");
+	if (!stream)
+	{
+		error(_error_silent, "map sharing: could not name %s in %s", downloaded_maps_file_name(map_path), list_path);
+		return;
+	}
+	fprintf(stream, "%s\r\n", downloaded_maps_file_name(map_path));
+	fclose(stream);
+}
+
+/* (halo_linux_source_fixups.h) */
+int map_share_map_downloaded(
+	char const *map_name)
+{
+	char const *setting = config_string("game.downloaded_maps");
+	char const *path = custom_edition_cache_loaded_path();
+	char const *stripped;
+
+	if (path && downloaded_maps_listed(path))
+		return TRUE;
+	if (!map_name || !*map_name)
+		return FALSE;
+	stripped = tag_name_strip_path(map_name);
+	/* (game.downloaded_maps: names separated by commas or spaces, or "*") */
+	while (setting && *setting)
+	{
+		long length = (long)strcspn(setting, ", ");
+
+		if ((length == 1 && *setting == '*') ||
+			(length > 0 && (long)strlen(stripped) == length && !_strnicmp(setting, stripped, length)))
+		{
+			return TRUE;
+		}
+		setting += length;
+		setting += strspn(setting, ", ");
+	}
+	return FALSE;
+}
+
 /* the download's files, all had: renamed, the map checked (each deleted
 again if it cannot be played) */
 static void download_finish(
@@ -1794,6 +1923,12 @@ static void download_finish(
 		return;
 	}
 	error(_error_silent, "map sharing: downloaded %s (%lu bytes)", download->level_name, download->done_bytes);
+	/* (its scripts held to tighter rules: downloaded_maps_mark) */
+	for (index = 0; index < download->file_count; index++)
+	{
+		if (download->files[index].kind == _map_share_file_map)
+			downloaded_maps_mark(download->files[index].final_path);
+	}
 	download_report(_progress_done);
 	/* (sent on to the others from here, without hashing them again) */
 	for (index = 0; index < download->file_count; index++)
