@@ -206,6 +206,40 @@ $(BUILD)/obj/port/linux/src/posix_dtls.o $(BUILD)/obj/$(PS3_DIR)/src/ps3_mbedtls
 # the one unit with VMX (exact, for the simulation: no fused multiply-adds of its own)
 $(BUILD)/obj/$(PS3_DIR)/src/ps3_vmx.o: CFLAGS += -maltivec -ffp-contract=off
 
+# ---------- the shader pack: the pixel shader keys of shader_keys.txt and the game's vertex shaders, translated by
+# the image's host GCC with the PS3's translator; both without fused multiply-adds, so the same programs
+
+HOST_CC     := gcc
+RSX_SRCS    := $(addprefix $(PS3_DIR)/src/,ps3_rsx_asm.c ps3_rsx_vp.c ps3_rsx_fp.c)
+PACK_TOOL   := $(BUILD)/tools/ps3_shader_pack
+PACK_SRC    := $(BUILD)/gen/ps3_shader_pack.c
+PACK_OBJ    := $(BUILD)/obj/gen/ps3_shader_pack.o
+SHADER_KEYS := $(PS3_DIR)/shader_keys.txt
+
+$(BUILD)/obj/$(PS3_DIR)/src/ps3_rsx_fp.o $(BUILD)/obj/$(PS3_DIR)/src/ps3_rsx_vp.o: CFLAGS += -ffp-contract=off
+
+$(PACK_TOOL): tools/ps3_shader_pack.c $(RSX_SRCS) $(PS3_DIR)/src/ps3_rsx_program.h
+	@mkdir -p $(dir $@)
+	@echo "HOSTCC $@"
+	@$(HOST_CC) -std=gnu99 -O2 -Wall -ffp-contract=off -I$(PS3_DIR)/src -o $@ tools/ps3_shader_pack.c $(RSX_SRCS) -lm
+
+$(PACK_SRC): $(PACK_TOOL) $(SHADER_KEYS) source/rasterizer/xbox/rasterizer_xbox_vertex_shaders_data.inc \
+	source/rasterizer/xbox/rasterizer_xbox_vertex_shaders.c
+	@mkdir -p $(dir $@)
+	@echo "GEN $@"
+	@$(PACK_TOOL) --keys $(SHADER_KEYS) --source . --out $@
+
+$(PACK_OBJ): $(PACK_SRC)
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# SHADER_PACK_CHECK=1: the PS3 translates the pack's keys again at its load and logs the programs that differ (a
+# build folder of its own: make does not see a change of flags)
+ifeq ($(SHADER_PACK_CHECK),1)
+$(BUILD)/obj/$(PS3_DIR)/xbox/d3d8_rsx.o: XBOX_DEFINES := -DPS3_SHADER_PACK_CHECK
+endif
+
 # ---------- the SPU programs (port/ps3/spu): spu-gcc, linked in as data (bin2s) for sysSpuImageImport (ps3_spu.c)
 
 SPU_CC     := $(PS3DEV)/spu/bin/spu-gcc
@@ -236,7 +270,7 @@ all: $(BUILD)/$(TARGET).elf
 
 # the host objects come first, before libc, so ps3_setjmp.o replaces its setjmp
 ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) $(MBEDTLS_OBJS) \
-           $(SPU_OBJS) $(GAME_OBJS)
+           $(SPU_OBJS) $(PACK_OBJ) $(GAME_OBJS)
 
 $(BUILD)/$(TARGET).elf: $(ALL_OBJS)
 	@echo "LD $@"

@@ -51,6 +51,43 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-24: OpenCE upstream merge 2 (Matt: "Can you do both?": the merge
+  and an automatic check). Worktree `../PS3-merge`, branch
+  `upstream-merge-2`: `0fbd0a3f` merges `5e27f3a2` (376 commits, network
+  version 38, 30 conflicts) into `f84f09ea`; `1b3cb0d8` adds
+  `tools/ps3_upstream_check.py` (report: conflicts, network version, new
+  messages, hooks, pointer structs; `--build`: merge and PS3 build in
+  `../PS3-upstream-check`). Not in `main` yet. `check` passed; PKG of 13:42
+  in `../PS3-merge/build/ps3_merge/`. Run on hardware (Matt: "Seems like it
+  works"): a30 played, its saved game loaded, `[ps3] exit 0`; lowest free main
+  memory 17.6 MB (t=196 s); 28 `ps3_net_peer_name: lv2 error 57` at the
+  end (the network screens). Then an internet game joined (Matt: "all 3"
+  work: lobby, a game, a join in progress): host of version 38 at 12:13:01,
+  "successfully joined", a game, then "Next map: Wizard"; lowest free main
+  memory 36.6 MB; `[ps3] exit 0`. Then (Matt: "You can make them in the
+  meantime"): `16574b91` swaps messages 90 and 91 and Infection's state (the
+  chat's messages and the settings record's new bytes are bytes only), and
+  the check reports `source/rasterizer` changes (a new `shader_keys.txt`
+  sweep). `check` passed; PKG of 14:14 in `../PS3-merge/build/ps3_merge/`.
+  Not tested on the PS3. Merge into `main` waits for the shader session
+  (no merge while its tree is dirty or the sweep runs; this merge changed
+  13 files of `source/rasterizer`: a new sweep). Open: begin game's 16-bit
+  time is the long's high half on the PS3 (older too; the join in progress
+  worked).
+  `port/ps3/xbox/{include/pthread.h,posix_ps3.c,ps3_pthread.c,hud_hires_rsx.c}`
+  are in no commit (`.gitignore`'s `xbox/`): copied into the worktree.
+
+- 2026-10-22 to 10-24: Matt: "Work on shader.md" (the shader pack). Steps 1,
+  2, 4 and 5 done (shader.md, "Progress"; the audit: `shader_audit.md`);
+  step 3 (Matt chose the static sweep): `tools/ps3_shader_sweep.py` on the
+  Windows build of the game (built in this tree: `python configure.py
+  --pgo=off --lto=off`, Visual Studio's ninja), 357 keys from the 24 maps.
+  `check` passed. PKG of 17:12 in `build/ps3_shader_check/`
+  (`SHADER_PACK_CHECK=1`; the tree of `f84f09ea`, this work and the
+  buttons session's uncommitted PNGs). Not tested on the PS3. New files:
+  `tools/ps3_shader_pack.c`, `tools/ps3_shader_sweep.py`,
+  `tools/ps3_shader_sweep/`, `port/ps3/shader_keys.txt`, `shader_audit.md`.
+
 - 2026-10-22: Matt: "Change video settings into "Extra options". Implement
   the button changes." SETTINGS' VIDEO SETTINGS is EXTRA OPTIONS, with a
   third row BUTTON ICONS: XBOX, STYLE A (the default), STYLE B

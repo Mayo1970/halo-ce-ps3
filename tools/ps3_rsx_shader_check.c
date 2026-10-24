@@ -1824,12 +1824,89 @@ static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t numb
 	}
 }
 
+/* a random key with the leftovers of earlier draws in what the translation should not read; its cleaned key must give
+the same program. Counts the keys the clean changed. */
+static void check_key_clean(uint32_t number, uint32_t *changed)
+{
+	struct rsx_fragment_key key, cleaned, twice;
+	struct rsx_fragment_program full, clean;
+	uint32_t stage, index;
+	int full_result, clean_result;
+
+	random_key(&key);
+	for (stage = key.combiner_count & 0xff; stage < 8; stage++)
+	{
+		key.rgb_inputs[stage] = random_below(2) ? random_next() : 0;
+		key.rgb_outputs[stage] = random_below(2) ? random_next() : 0;
+		key.alpha_inputs[stage] = random_below(2) ? random_next() : 0;
+		key.alpha_outputs[stage] = random_below(2) ? random_next() : 0;
+	}
+	key.texture_modes |= random_below(2) ? random_next() << 20 : 0;
+	for (stage = 0; stage < 4; stage++)
+	{
+		if (random_below(5) == 0)
+			key.sampler_type[stage] = (uint8_t)random_below(4);
+		key.alpha_kill[stage] = (uint8_t)random_below(2);
+		key.color_sign[stage] = (uint8_t)random_below(16);
+	}
+	key.dot_mapping = random_next();
+	key.input_texture = random_next();
+	key.compare_mode = random_next();
+	key.fog_enable = (uint8_t)random_below(2);
+	key.fog_table_mode = (uint8_t)random_below(6);
+	key.texture_scaled = (uint8_t)random_below(16);
+	key.padding = (uint8_t)random_next();
+
+	cleaned = key;
+	rsx_fragment_key_clean(&cleaned);
+	twice = cleaned;
+	rsx_fragment_key_clean(&twice);
+	if (memcmp(&cleaned, &twice, sizeof(cleaned)))
+		fail("clean key %u: a second clean changed it", number);
+	/* the key list's text gives the key back */
+	{
+		char text[RSX_FRAGMENT_KEY_TEXT];
+
+		rsx_fragment_key_text(&cleaned, text);
+		if (strlen(text) != 39 * 9 + 15 * 3 - 1 || rsx_fragment_key_parse(text, &twice) != 0 ||
+			memcmp(&cleaned, &twice, sizeof(cleaned)))
+		{
+			fail("clean key %u: its text does not give it back (%s)", number, text);
+		}
+	}
+	*changed += memcmp(&key, &cleaned, sizeof(key)) != 0;
+
+	full_result = rsx_fragment_program_translate(&key, &full);
+	clean_result = rsx_fragment_program_translate(&cleaned, &clean);
+	if (full_result || clean_result)
+	{
+		if (full_result != clean_result)
+			fail("clean key %u: translation %d, cleaned %d", number, full_result, clean_result);
+	}
+	else if (full.word_count != clean.word_count || full.control != clean.control ||
+		full.register_count != clean.register_count || full.texcoord_mask != clean.texcoord_mask ||
+		full.uniform_count != clean.uniform_count || memcmp(full.uniforms, clean.uniforms, sizeof(full.uniforms)) ||
+		memcmp(full.microcode, clean.microcode, full.word_count * sizeof(uint32_t)))
+	{
+		for (index = 0; index < full.word_count && index < clean.word_count; index++)
+		{
+			if (full.microcode[index] != clean.microcode[index])
+				break;
+		}
+		fail("clean key %u: %u words, cleaned %u; first difference at word %u", number, full.word_count,
+			clean.word_count, index);
+	}
+	rsx_fragment_program_free(&full);
+	rsx_fragment_program_free(&clean);
+}
+
 /* ---------- main */
 
 int main(int argc, char *argv[])
 {
 	const char *source_root = argc > 1 ? argv[1] : ".";
 	uint32_t shader, unwritten = 0, relative = 0, number, fragment_keys = 300, instruction_total = 0;
+	uint32_t clean_keys = 20000, cleaned = 0;
 
 	if (argc > 2)
 		work = argv[2];
@@ -1837,6 +1914,8 @@ int main(int argc, char *argv[])
 		cgcomp = getenv("CGCOMP");
 	if (getenv("KEYS"))
 		fragment_keys = (uint32_t)atoi(getenv("KEYS"));
+	if (getenv("CLEAN_KEYS"))
+		clean_keys = (uint32_t)atoi(getenv("CLEAN_KEYS"));
 	if (getenv("SEED"))
 		random_state = (uint32_t)strtoul(getenv("SEED"), NULL, 0) | 1;
 	verbose = getenv("VERBOSE") != NULL;
@@ -1861,6 +1940,10 @@ int main(int argc, char *argv[])
 	printf("fragment programs: %u random keys, %u instructions on average; %.2f R registers on average (%.2f if each "
 		"were 32-bit), %u colours in H0\n", fragment_keys, instruction_total / fragment_keys,
 		(double)register_slots / fragment_keys, (double)register_distinct / fragment_keys, half_colors);
+	for (number = 0; number < clean_keys; number++)
+		check_key_clean(number, &cleaned);
+	printf("cleaned keys: %u random keys with leftovers, %u changed by the clean, the same programs unless a failure "
+		"says so\n", clean_keys, cleaned);
 	printf("%lu failures\n", failures);
 	return failures ? 1 : 0;
 }

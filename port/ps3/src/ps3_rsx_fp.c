@@ -2894,6 +2894,164 @@ static int expand_clamps(struct rsx_instruction *instructions, uint32_t *count, 
 	return 1;
 }
 
+/* the stages texture_stage gives a texel (a sampler, or a mode that needs none) */
+static int stage_active(const struct rsx_fragment_key *key, int stage)
+{
+	int mode = stage_mode(key, stage);
+
+	if (mode == _mode_passthru || mode == _mode_clipplane || mode == _mode_dot_product || mode == _mode_dot_zw)
+		return 1;
+	return mode != _mode_none && mode != _mode_brdf && mode <= _mode_dot_reflect_specular_constant &&
+		key->sampler_type[stage] != _rsx_sampler_none;
+}
+
+static int stage_dot_mode(int mode)
+{
+	return mode == _mode_dot_product || (mode >= _mode_dot_st && mode <= _mode_dot_str_cube) ||
+		mode == _mode_dot_reflect_specular_constant;
+}
+
+/* clears what the translation does not read (unused combiner stages, unused texture stages' states), so that the
+leftovers of earlier draws give no new key: the same microcode (tools/ps3_rsx_shader_check.c) */
+void rsx_fragment_key_clean(struct rsx_fragment_key *key)
+{
+	uint32_t combiner_count = key->combiner_count & 0xff, texture_modes = 0, dot_mapping = 0, input_texture = 0;
+	uint32_t compare_mode = 0;
+	int stage, mode, active, reads_dots, reads_input, sampled, diffuse_reflection;
+
+	if (combiner_count > 8)
+		combiner_count = 8;
+	for (stage = (int)combiner_count; stage < 8; stage++)
+	{
+		key->rgb_inputs[stage] = key->rgb_outputs[stage] = 0;
+		key->alpha_inputs[stage] = key->alpha_outputs[stage] = 0;
+	}
+	/* stage 2's diffuse reflection also takes stage 3's dot product, whatever stage 3's mode */
+	diffuse_reflection = stage_active(key, 2) && stage_mode(key, 2) == _mode_dot_reflect_diffuse;
+	for (stage = 0; stage < 4; stage++)
+	{
+		active = stage_active(key, stage);
+		mode = active ? stage_mode(key, stage) : _mode_none;
+		reads_dots = (active && stage_dot_mode(mode)) || (stage == 3 && diffuse_reflection);
+		reads_input = reads_dots || mode == _mode_dependent_ar || mode == _mode_dependent_gb;
+		sampled = active && mode != _mode_passthru && mode != _mode_clipplane && mode != _mode_dot_product &&
+			mode != _mode_dot_zw;
+		texture_modes |= (uint32_t)mode << (5 * stage);
+		if (mode == _mode_clipplane)
+			compare_mode |= key->compare_mode & (0xfu << (4 * stage));
+		/* (stage 0 has no mapping: dot_input's shift would be negative, so its value stays whole) */
+		if (reads_dots)
+			dot_mapping |= stage ? key->dot_mapping & (7u << ((stage - 1) * 4)) : key->dot_mapping;
+		if (reads_input && stage == 2)
+			input_texture |= key->input_texture & (1u << 16);
+		if (reads_input && stage == 3)
+			input_texture |= key->input_texture & (3u << 20);
+		if (!sampled)
+		{
+			key->sampler_type[stage] = _rsx_sampler_none;
+			key->texture_scaled &= (uint8_t)~(1 << stage);
+		}
+		if (!active)
+			key->alpha_kill[stage] = key->color_sign[stage] = 0;
+	}
+	key->texture_modes = texture_modes;
+	key->dot_mapping = dot_mapping;
+	key->input_texture = input_texture;
+	key->compare_mode = compare_mode;
+	if (!reads_fog(key, combiner_count))
+		key->fog_enable = 0;
+	if (!key->fog_enable || key->fog_table_mode > 3)
+		key->fog_table_mode = 0;
+	key->padding = 0;
+}
+
+/* the key's fields in the text's order: 39 words, then 15 bytes */
+static void key_fields(const struct rsx_fragment_key *key, const uint32_t *words[39], const uint8_t *bytes[15])
+{
+	int index;
+
+	for (index = 0; index < 8; index++)
+	{
+		words[index] = &key->rgb_inputs[index];
+		words[8 + index] = &key->rgb_outputs[index];
+		words[16 + index] = &key->alpha_inputs[index];
+		words[24 + index] = &key->alpha_outputs[index];
+	}
+	words[32] = &key->final_inputs_abcd;
+	words[33] = &key->final_inputs_efg;
+	words[34] = &key->combiner_count;
+	words[35] = &key->texture_modes;
+	words[36] = &key->dot_mapping;
+	words[37] = &key->input_texture;
+	words[38] = &key->compare_mode;
+	for (index = 0; index < 4; index++)
+	{
+		bytes[index] = &key->sampler_type[index];
+		bytes[4 + index] = &key->alpha_kill[index];
+		bytes[8 + index] = &key->color_sign[index];
+	}
+	bytes[12] = &key->fog_enable;
+	bytes[13] = &key->fog_table_mode;
+	bytes[14] = &key->texture_scaled;
+}
+
+static char *hex_write(char *text, uint32_t value, int digits)
+{
+	while (digits--)
+		*text++ = "0123456789abcdef"[(value >> (4 * digits)) & 0xf];
+	return text;
+}
+
+void rsx_fragment_key_text(const struct rsx_fragment_key *key, char text[RSX_FRAGMENT_KEY_TEXT])
+{
+	const uint32_t *words[39];
+	const uint8_t *bytes[15];
+	int index;
+
+	key_fields(key, words, bytes);
+	for (index = 0; index < 39; index++)
+	{
+		text = hex_write(text, *words[index], 8);
+		*text++ = ' ';
+	}
+	for (index = 0; index < 15; index++)
+	{
+		text = hex_write(text, *bytes[index], 2);
+		*text++ = index < 14 ? ' ' : 0;
+	}
+}
+
+int rsx_fragment_key_parse(const char *text, struct rsx_fragment_key *key)
+{
+	const uint32_t *words[39];
+	const uint8_t *bytes[15];
+	int index, digits;
+
+	memset(key, 0, sizeof(*key));
+	key_fields(key, words, bytes);
+	for (index = 0; index < 39 + 15; index++)
+	{
+		uint32_t value = 0;
+
+		while (*text == ' ' || *text == '\t')
+			text++;
+		for (digits = 0; digits < (index < 39 ? 8 : 2); digits++, text++)
+		{
+			int digit = *text >= '0' && *text <= '9' ? *text - '0' : *text >= 'a' && *text <= 'f' ? *text - 'a' + 10 :
+				*text >= 'A' && *text <= 'F' ? *text - 'A' + 10 : -1;
+
+			if (digit < 0)
+				return -1;
+			value = (value << 4) | (uint32_t)digit;
+		}
+		if (index < 39)
+			*(uint32_t *)words[index] = value;
+		else
+			*(uint8_t *)bytes[index - 39] = (uint8_t)value;
+	}
+	return 0;
+}
+
 int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 	struct rsx_instruction *instructions, uint32_t maximum, uint32_t *count)
 {
