@@ -180,6 +180,19 @@ static inline vec_float4 element_normshorts(const unsigned char *p, vec_uint4 ma
 	return spu_sel(defaults, value, mask);
 }
 
+/* the decals' word: its low 16 bits, then its high, each over 32767 with no clamp (-32768 too: its window is exact) */
+static inline vec_float4 element_texcoord_word(const unsigned char *p)
+{
+	static const vec_uchar16 halves =
+	{
+		2, 3, 0x80, 0x80, 0, 1, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+	};
+	vec_float4 value = divide_repeating(spu_rlmaska((vec_int4)load_pattern(p, halves), -16), spu_splats(15u),
+		spu_splats(32u), spu_splats(129u), spu_splats(~0u));
+
+	return spu_sel(defaults, value, lanes[2]);
+}
+
 /* 11, 11 and 10 signed bits, over 1023, 1023 and 511 */
 static inline vec_float4 element_normpacked3(const unsigned char *p)
 {
@@ -254,6 +267,9 @@ static void slot_convert(uint32_t type, const unsigned char *data, uint32_t stri
 		break;
 	case SPU_VERTICES_NORMPACKED3:
 		CONVERT_EACH(element_normpacked3);
+		break;
+	case SPU_VERTICES_TEXCOORD_WORD:
+		CONVERT_EACH(element_texcoord_word);
 		break;
 	case SPU_VERTICES_D3DCOLOR:
 		CONVERT_EACH(COLOR);

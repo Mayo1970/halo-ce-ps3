@@ -458,18 +458,21 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		(double)ps3_timer_counts[_ps3_timer_parts_transparent] / frames, t[_ps3_timer_parts_rest],
 		ps3_render_d3d[_ps3_timer_parts_rest] * scale);
 	ps3_log_printf("[time] lights and diffuse passes, ms a frame (Direct3D): lights: lens flares %.2f (%.2f), shadows "
-		"%.2f (%.2f), diffuse lights %.2f (%.2f), decals %.2f (%.2f); diffuse: structure %.2f (%.2f), decals %.2f (%.2f)\n",
+		"%.2f (%.2f), diffuse lights %.2f (%.2f), decals %.2f (%.2f); diffuse: structure %.2f (%.2f), decals %.2f (%.2f); "
+		"the decals' batches a frame %.1f, their vertices %.0f\n",
 		t[_ps3_timer_lights_flares], ps3_render_d3d[_ps3_timer_lights_flares] * scale, t[_ps3_timer_lights_shadows],
 		ps3_render_d3d[_ps3_timer_lights_shadows] * scale, t[_ps3_timer_lights_diffuse],
 		ps3_render_d3d[_ps3_timer_lights_diffuse] * scale, t[_ps3_timer_lights_decals],
 		ps3_render_d3d[_ps3_timer_lights_decals] * scale, t[_ps3_timer_diffuse_structure],
 		ps3_render_d3d[_ps3_timer_diffuse_structure] * scale, t[_ps3_timer_diffuse_decals],
-		ps3_render_d3d[_ps3_timer_diffuse_decals] * scale);
+		ps3_render_d3d[_ps3_timer_diffuse_decals] * scale, (double)ps3_timer_counts[_ps3_timer_decal_draws] / frames,
+		(double)ps3_timer_counts[_ps3_timer_decal_vertices] / frames);
 	/* the counts a frame, but the surfaces: a shadow's */
 	ps3_log_printf("[time] objects' shadows, ms a frame (Direct3D; a frame): the pass's begin and end %.2f (%.2f), checks "
 		"and lighting %.2f (%.2f; %.1f objects), begins %.2f (%.2f; %.1f), models %.2f (%.2f; %.1f shadows), volumes %.2f, "
 		"structure %.2f (%.2f; surfaces found %.2f, %.1f a shadow; triangles built %.2f; draws %.2f (%.2f)), ends %.2f "
-		"(%.2f)\n", t[_ps3_timer_shadow_pass], ps3_render_d3d[_ps3_timer_shadow_pass] * scale,
+		"(%.2f); a frame: models %.1f (node matrices kept %.1f)\n",
+		t[_ps3_timer_shadow_pass], ps3_render_d3d[_ps3_timer_shadow_pass] * scale,
 		t[_ps3_timer_shadow_objects], ps3_render_d3d[_ps3_timer_shadow_objects] * scale,
 		(double)ps3_timer_counts[_ps3_timer_shadow_objects] / frames, t[_ps3_timer_shadow_begin],
 		ps3_render_d3d[_ps3_timer_shadow_begin] * scale, (double)ps3_timer_counts[_ps3_timer_shadow_begin] / frames,
@@ -479,7 +482,9 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[_ps3_timer_shadow_surfaces], ps3_timer_counts[_ps3_timer_shadow_model] ?
 		(double)ps3_timer_counts[_ps3_timer_shadow_surfaces] / ps3_timer_counts[_ps3_timer_shadow_model] : 0.0,
 		t[_ps3_timer_shadow_triangles], t[_ps3_timer_shadow_draws], ps3_render_d3d[_ps3_timer_shadow_draws] * scale,
-		t[_ps3_timer_shadow_end], ps3_render_d3d[_ps3_timer_shadow_end] * scale);
+		t[_ps3_timer_shadow_end], ps3_render_d3d[_ps3_timer_shadow_end] * scale,
+		(double)ps3_timer_counts[_ps3_timer_shadow_models] / frames,
+		(double)ps3_timer_counts[_ps3_timer_shadow_models_kept] / frames);
 	length = (unsigned long)snprintf(line, sizeof(line), "[time] specular part's Direct3D draws and constants, ms a "
 		"frame:");
 	for (index = 0; index <= _ps3_timer_specular_fog - _ps3_timer_specular_lights && length < sizeof(line); index++)
@@ -507,7 +512,11 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 			transparent_names[index], t[_ps3_timer_transparent_effect + index],
 			(double)ps3_timer_counts[_ps3_timer_transparent_effect + index] / frames);
 	}
-	ps3_log_printf("%s\n", line);
+	ps3_log_printf("%s; generic definitions a frame: kept %.1f, made %.1f; the models' bounds a frame: VMX %.1f, checked "
+		"%.2f, apart %u\n", line, (double)ps3_timer_counts[_ps3_timer_generic_kept] / frames,
+		(double)ps3_timer_counts[_ps3_timer_generic_made] / frames,
+		(double)ps3_timer_counts[_ps3_timer_bounds_vmx] / frames,
+		(double)ps3_timer_counts[_ps3_timer_bounds_checked] / frames, (unsigned)ps3_timer_counts[_ps3_timer_bounds_apart]);
 	/* the draws, the flips, the RSX and the SPU are the Direct3D thread's; the vertical blank is the game thread's */
 	ps3_log_printf("[time] Direct3D thread: busy %.1f, the game thread's waits %.1f; draws: state %.1f (textures %.1f: "
 		"hash %.1f, uploads %.1f; colours %.1f), vertices %.1f, indices %.1f; waits: vblank %.1f, flip %.1f, RSX %.1f, "

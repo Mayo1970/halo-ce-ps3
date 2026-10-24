@@ -140,6 +140,152 @@ void ps3_vmx_matrix4x3_multiply(const float *a, const float *b, float *result)
 	STORE_ROW(row3, result + 10);
 }
 
+/* ---------- the transparent sort's model bounds (ps3_vmx_model_bounds): BOUNDS BEGIN */
+
+#define BOUNDS_MAXIMUM_MATRICES 64
+
+/* a real_matrix4x3 in lanes 0 to 2: its scale (splatted), forward, left, up, position */
+typedef struct
+{
+	vector float scale, forward, left, up, position;
+} bounds_matrix;
+
+/* matrix4x3_transform_point: the point times the scale (times 1 changes no float), then up z + left y + forward x +
+position, in that order */
+static inline vector float bounds_transform(const bounds_matrix *m, vector float point, vector float minus_zero)
+{
+	vector float scaled = vec_madd(point, m->scale, minus_zero);
+
+	return vec_add(vec_add(vec_add(vec_madd(m->up, vec_splat(scaled, 2), minus_zero),
+		vec_madd(m->left, vec_splat(scaled, 1), minus_zero)), vec_madd(m->forward, vec_splat(scaled, 0), minus_zero)),
+		m->position);
+}
+
+/* a vertex as the scalar loop takes it: invalid set as its tests fail (the result is then 0 whatever the rest), each
+node read within the matrices (an invalid index reads the first) */
+static inline vector float bounds_vertex(const unsigned char *v, int compressed, const bounds_matrix *m,
+	uint32_t matrix_count, int *invalid)
+{
+	const vector float zero = { 0.0f, 0.0f, 0.0f, 0.0f }, one = { 1.0f, 1.0f, 1.0f, 1.0f };
+	const vector float minus_zero = { -0.0f, -0.0f, -0.0f, -0.0f };
+	const vector float inverse = { 1.0f / 32767.0f, 1.0f / 32767.0f, 1.0f / 32767.0f, 1.0f / 32767.0f };
+	const vector float epsilon = { 0.00001f, 0.00001f, 0.00001f, 0.00001f };
+	const vector unsigned int sign = { 0x80000000u, 0x80000000u, 0x80000000u, 0x80000000u };
+	vector float point = load3((const float *)v), world = zero, weight0, weight1;
+	int32_t node0, node1;
+
+	if (matrix_count == 1)
+		return bounds_transform(m, point, minus_zero);
+	if (compressed)
+	{
+		/* the weight's halfword first, sign-extended: over 32767; the nodes' bytes over 3 */
+		vector signed short halves = (vector signed short)vec_perm(vec_ld(30, v), vec_ld(31, v), vec_lvsl(30, v));
+		uint32_t raw0 = v[28], raw1 = v[29];
+
+		weight0 = vec_splat(vec_madd(vec_ctf(vec_unpackh(halves), 0), inverse, minus_zero), 0);
+		weight1 = vec_sub(one, weight0);
+		node0 = (int32_t)(raw0 / 3);
+		node1 = (int32_t)(raw1 / 3);
+		if ((vec_all_gt(weight0, zero) && raw0 % 3) || (vec_all_gt(weight1, zero) && raw1 % 3))
+			*invalid = 1;
+	}
+	else
+	{
+		vector float weights = (vector float)vec_perm(vec_ld(60, v), vec_ld(67, v), vec_lvsl(60, v));
+
+		weight0 = vec_splat(weights, 0);
+		weight1 = vec_splat(weights, 1);
+		node0 = *(const int16_t *)(v + 56);
+		node1 = *(const int16_t *)(v + 58);
+		/* !(fabs(w0 + w1 - 1) < 0.00001) */
+		if (!vec_all_lt((vector float)vec_andc((vector unsigned int)vec_sub(vec_add(weight0, weight1), one), sign),
+			epsilon))
+			*invalid = 1;
+	}
+	if (!vec_all_ge(weight0, zero) || !vec_all_le(weight0, one) || !vec_all_ge(weight1, zero) ||
+		!vec_all_le(weight1, one))
+		*invalid = 1;
+	if (vec_all_gt(weight0, zero))
+	{
+		if (node0 < 0 || (uint32_t)node0 >= matrix_count)
+		{
+			*invalid = 1;
+			node0 = 0;
+		}
+		world = vec_add(world, vec_madd(weight0, bounds_transform(&m[node0], point, minus_zero), minus_zero));
+	}
+	if (vec_all_gt(weight1, zero))
+	{
+		if (node1 < 0 || (uint32_t)node1 >= matrix_count)
+		{
+			*invalid = 1;
+			node1 = 0;
+		}
+		world = vec_add(world, vec_madd(weight1, bounds_transform(&m[node1], point, minus_zero), minus_zero));
+	}
+	return world;
+}
+
+int ps3_vmx_model_bounds(const unsigned char *vertices, uint32_t count, uint32_t stride, int compressed,
+	const float *matrices, uint32_t matrix_count, float *bounds)
+{
+	const vector float zero = { 0.0f, 0.0f, 0.0f, 0.0f };
+	const vector float minimum = { -1000000.0f, -1000000.0f, -1000000.0f, -1000000.0f };
+	const vector float maximum = { 1000000.0f, 1000000.0f, 1000000.0f, 1000000.0f };
+	const vector unsigned int lane3 = { 0, 0, 0, ~0u };
+	bounds_matrix m[BOUNDS_MAXIMUM_MATRICES];
+	vector float low = zero, high = zero;
+	float out[8] __attribute__((aligned(16)));
+	uint32_t index;
+	int invalid = 0;
+
+	if (!count || !matrix_count || matrix_count > BOUNDS_MAXIMUM_MATRICES)
+		return 0;
+	java_mode();
+	for (index = 0; index < matrix_count; index++)
+	{
+		const float *matrix = matrices + index * 13;
+
+		m[index].scale = vec_splat(load3(matrix), 0);
+		m[index].forward = load3(matrix + 1);
+		m[index].left = load3(matrix + 4);
+		m[index].up = load3(matrix + 7);
+		m[index].position = load3(matrix + 10);
+	}
+	for (index = 0; index < count; index++)
+	{
+		/* (lane 3 holds no float of the vertex: 0, which passes) */
+		vector float world = vec_sel(bounds_vertex(vertices + index * stride, compressed, m, matrix_count, &invalid),
+			zero, lane3);
+
+		if (!vec_all_gt(world, minimum) || !vec_all_lt(world, maximum))
+			invalid = 1;
+		/* MIN (a > b ? b : a) and MAX (a > b ? a : b), as the scalar code's */
+		if (index)
+		{
+			low = vec_sel(low, world, (vector unsigned int)vec_cmpgt(low, world));
+			high = vec_sel(world, high, (vector unsigned int)vec_cmpgt(high, world));
+		}
+		else
+		{
+			low = world;
+			high = world;
+		}
+	}
+	if (invalid)
+		return 0;
+	vec_st(low, 0, out);
+	vec_st(high, 16, out);
+	for (index = 0; index < 3; index++)
+	{
+		bounds[index] = out[index];
+		bounds[3 + index] = out[4 + index];
+	}
+	return 1;
+}
+
+/* BOUNDS END */
+
 /* ---------- memory streams (ps3_vmx_copy and co.): STREAM BEGIN */
 
 /* the PPE's cache line; the source this far ahead is touched (dcbt) so its lines come in while earlier ones copy */
