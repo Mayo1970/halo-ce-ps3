@@ -1301,7 +1301,8 @@ struct fragment_entry
 #define SHADERS_LOGGED 8
 
 static struct fragment_entry *fragment_buckets[FRAGMENT_BUCKETS];
-static unsigned long fragment_program_count;
+static unsigned long fragment_program_count, fragment_translated_count;
+static BOOL fragment_pack_loaded;
 /* the last draw's (consecutive draws mostly use the same pixel shader) */
 static struct fragment_entry *fragment_last;
 
@@ -1317,42 +1318,116 @@ static DWORD hash_words(const void *data, unsigned long size)
 	return hash;
 }
 
+static void fragment_entry_add(struct fragment_entry *entry)
+{
+	struct fragment_entry **bucket = &fragment_buckets[entry->hash % FRAGMENT_BUCKETS];
+
+	fragment_program_count++;
+	entry->stamp_key = (uint16_t)(fragment_program_count < PS3_DRAW_STAMP_KEYS ? fragment_program_count :
+		PS3_DRAW_STAMP_KEYS - 1);
+	entry->next = *bucket;
+	/* (the game thread's shaders_log walks the buckets: the entry whole before it is seen) */
+	__sync_synchronize();
+	*bucket = entry;
+}
+
+/* the shader pack's programs (tools/ps3_shader_pack.c) into the cache: its keys are not translated at a draw */
+static void fragment_pack_load(void)
+{
+	struct fragment_entry *entries = calloc(rsx_packed_fragment_count ? rsx_packed_fragment_count : 1,
+		sizeof(*entries));
+	uint32_t index;
+#ifdef PS3_SHADER_PACK_CHECK
+	unsigned long pack_differences = 0;
+#endif
+
+	fragment_pack_loaded = TRUE;
+	if (!entries)
+		return;
+	for (index = 0; index < rsx_packed_fragment_count; index++)
+	{
+		struct fragment_entry *entry = &entries[index];
+
+		entry->key = rsx_packed_fragments[index].key;
+		entry->hash = hash_words(&entry->key, sizeof(entry->key));
+		entry->program = rsx_packed_fragments[index].program;
+		entry->translated = TRUE;
+		fragment_entry_add(entry);
+#ifdef PS3_SHADER_PACK_CHECK
+		/* the PC's translation against the PPE's (make SHADER_PACK_CHECK=1) */
+		{
+			struct rsx_fragment_program program;
+			const struct rsx_fragment_program *packed = &entry->program;
+
+			if (rsx_fragment_program_translate(&entry->key, &program) != 0 ||
+				program.word_count != packed->word_count || program.control != packed->control ||
+				program.register_count != packed->register_count || program.texcoord_mask != packed->texcoord_mask ||
+				program.uniform_count != packed->uniform_count ||
+				memcmp(program.uniforms, packed->uniforms, sizeof(program.uniforms)) ||
+				memcmp(program.microcode, packed->microcode, program.word_count * sizeof(uint32_t)))
+			{
+				pack_differences++;
+			}
+			rsx_fragment_program_free(&program);
+		}
+#endif
+	}
+#ifdef PS3_SHADER_PACK_CHECK
+	for (index = 0; index < rsx_packed_vertex_count; index++)
+	{
+		struct rsx_vertex_program program;
+		const struct rsx_vertex_program *packed = &rsx_packed_vertices[index].program;
+
+		if (rsx_vertex_program_translate(rsx_packed_vertices[index].nv2a, rsx_packed_vertices[index].nv2a_count,
+			&program) != 0 || program.instruction_count != packed->instruction_count ||
+			program.input_mask != packed->input_mask || program.output_mask != packed->output_mask ||
+			program.register_count != packed->register_count ||
+			memcmp(program.microcode, packed->microcode, program.instruction_count * 4 * sizeof(uint32_t)))
+		{
+			pack_differences++;
+		}
+		rsx_vertex_program_free(&program);
+	}
+	platform_log("Direct3D: shader pack check: %lu programs differ from the PPE's translation", pack_differences);
+#endif
+	platform_log("Direct3D: shader pack: %lu pixel shaders, %lu vertex shaders",
+		(unsigned long)rsx_packed_fragment_count, (unsigned long)rsx_packed_vertex_count);
+}
+
 static const struct rsx_fragment_program *fragment_program_get(const struct rsx_fragment_key *key)
 {
-	struct fragment_entry **bucket, *entry;
+	struct fragment_entry *entry;
 	DWORD hash;
 
 	if (fragment_last && !memcmp(&fragment_last->key, key, sizeof(*key)))
 		return fragment_last->translated ? &fragment_last->program : NULL;
+	if (!fragment_pack_loaded)
+		fragment_pack_load();
 	hash = hash_words(key, sizeof(*key));
-	bucket = &fragment_buckets[hash % FRAGMENT_BUCKETS];
-	for (entry = *bucket; entry; entry = entry->next)
+	for (entry = fragment_buckets[hash % FRAGMENT_BUCKETS]; entry; entry = entry->next)
 	{
 		if (entry->hash == hash && !memcmp(&entry->key, key, sizeof(*key)))
 			break;
 	}
 	if (!entry)
 	{
+		char text[RSX_FRAGMENT_KEY_TEXT];
+
 		entry = calloc(1, sizeof(*entry));
 		if (!entry)
 			return NULL;
 		entry->hash = hash;
 		entry->key = *key;
 		entry->translated = rsx_fragment_program_translate(key, &entry->program) == 0;
-		fragment_program_count++;
-		entry->stamp_key = (uint16_t)(fragment_program_count < PS3_DRAW_STAMP_KEYS ? fragment_program_count :
-			PS3_DRAW_STAMP_KEYS - 1);
+		fragment_translated_count++;
+		/* a key the pack lacks, as a line of port/ps3/shader_keys.txt */
+		rsx_fragment_key_text(key, text);
 		if (!entry->translated)
-			platform_log("Direct3D: cannot translate a pixel shader (%lu combiners, texture modes %05lx)",
-				(unsigned long)(key->combiner_count & 0xff), (unsigned long)key->texture_modes);
-		else if (fragment_program_count <= 8)
-			platform_log("Direct3D: pixel shader %lu: %lu combiners, texture modes %05lx, %lu words, %lu uniforms",
-				fragment_program_count, (unsigned long)(key->combiner_count & 0xff), (unsigned long)key->texture_modes,
-				(unsigned long)entry->program.word_count, (unsigned long)entry->program.uniform_count);
-		entry->next = *bucket;
-		/* (the game thread's shaders_log walks the buckets: the entry whole before it is seen) */
-		__sync_synchronize();
-		*bucket = entry;
+			platform_log("Direct3D: cannot translate a pixel shader: %s", text);
+		else
+			platform_log("Direct3D: pixel shader %lu not in the pack, translated (%lu words): %s",
+				fragment_translated_count, (unsigned long)entry->program.word_count, text);
+		fragment_entry_add(entry);
 	}
 	fragment_last = entry;
 	return entry->translated ? &entry->program : NULL;
@@ -1859,6 +1934,20 @@ static const struct rsx_vertex_program *vertex_program_get(struct vertex_shader_
 {
 	if (!object->translated && !object->untranslatable)
 	{
+		uint32_t index;
+
+		for (index = 0; index < rsx_packed_vertex_count && object->instructions; index++)
+		{
+			const struct rsx_packed_vertex *packed = &rsx_packed_vertices[index];
+
+			if (packed->nv2a_count == object->instruction_count &&
+				!memcmp(packed->nv2a, object->instructions, packed->nv2a_count * 4 * sizeof(uint32_t)))
+			{
+				object->program = packed->program;
+				object->translated = TRUE;
+				return &object->program;
+			}
+		}
 		object->translated = object->instructions &&
 			rsx_vertex_program_translate(object->instructions, object->instruction_count, &object->program) == 0;
 		object->untranslatable = !object->translated;
@@ -1866,9 +1955,10 @@ static const struct rsx_vertex_program *vertex_program_get(struct vertex_shader_
 			platform_log("Direct3D: cannot translate vertex shader %lu (%lu instructions)", object->id,
 				object->instruction_count);
 		else
-			platform_log("Direct3D: vertex shader %lu: %lu NV2A instructions, %lu RSX, inputs %04lx, outputs %05lx",
-				object->id, object->instruction_count, (unsigned long)object->program.instruction_count,
-				(unsigned long)object->program.input_mask, (unsigned long)object->program.output_mask);
+			platform_log("Direct3D: vertex shader %lu not in the pack, translated: %lu NV2A instructions, %lu RSX, "
+				"inputs %04lx, outputs %05lx", object->id, object->instruction_count,
+				(unsigned long)object->program.instruction_count, (unsigned long)object->program.input_mask,
+				(unsigned long)object->program.output_mask);
 	}
 	return object->translated ? &object->program : NULL;
 }
@@ -1910,6 +2000,7 @@ static const struct rsx_vertex_program *prepare_draw_state(void)
 	span = ps3_timer_now();
 	bind_textures(&key);
 	ps3_timer_add(_ps3_timer_draw_textures, span);
+	rsx_fragment_key_clean(&key);
 	fragment_program = fragment_program_get(&key);
 	if (!fragment_program)
 	{
@@ -4287,10 +4378,11 @@ static void present_run(void)
 
 		textures_measure(&texture_count, &texture_bytes, &unused_bytes);
 		platform_log("Direct3D: frame %lu: %lu draws; skipped %lu (program), %lu (target), %lu (scratch), "
-			"%lu (viewport); %lu texture uploads, %lu KB; %lu pixel shaders; %lu textures in RSX memory, %lu KB "
-			"(%lu KB not drawn for %lu frames)", device.frame, statistics.draws, statistics.skipped_program,
-			statistics.skipped_target, statistics.skipped_scratch, statistics.skipped_scissor,
-			statistics.texture_uploads, statistics.texture_bytes / 1024, fragment_program_count, texture_count,
+			"%lu (viewport); %lu texture uploads, %lu KB; %lu pixel shaders (%lu translated at a draw); %lu textures "
+			"in RSX memory, %lu KB (%lu KB not drawn for %lu frames)", device.frame, statistics.draws,
+			statistics.skipped_program, statistics.skipped_target, statistics.skipped_scratch, statistics.skipped_scissor,
+			statistics.texture_uploads, statistics.texture_bytes / 1024, fragment_program_count,
+			fragment_translated_count, texture_count,
 			texture_bytes / 1024, unused_bytes / 1024, (unsigned long)STATISTICS_FRAMES);
 		platform_log("Direct3D: frame %lu: vertex elements converted: %lu into the cache, %lu at draws; vertex "
 			"cache %lu arrays, %lu of %lu KB, %lu refused", device.frame, statistics.cached_elements,

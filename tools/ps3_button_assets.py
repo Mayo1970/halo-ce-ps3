@@ -39,6 +39,8 @@ FACES = {"a_butn.svg": "cross", "b_butn.svg": "circle", "x_butn.svg": "square", 
 CENTRE = (10.341, 12.879)
 PS3_RADIUS = 10.0
 XBOX_RADII = (8.659, 12.932)
+# the PS3 circles sit lower than the Xbox's tilted ovals: up by this (texels) to the key labels' middle
+RAISE = 2.7
 
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 ElementTree.register_namespace("", SVG_NAMESPACE)
@@ -120,7 +122,7 @@ def build(arguments) -> None:
             entry["png"] = []
             for style in STYLES:
                 svg = f"{style}_{FACES[xbox['svg']]}.svg"
-                body = f'<g transform="translate({x} {y}) scale({scale})">{art(svg, "")}</g>'
+                body = f'<g transform="translate({x} {y}) scale({scale}) translate(0 {-RAISE})">{art(svg, "")}</g>'
                 image = bleed(render(document(width, height, body), SCALE))
                 name = f"{style}_{xbox['name']}.png"
                 Image.fromarray(image, "RGBA").save(ASSETS / name, optimize=True)
