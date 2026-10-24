@@ -209,6 +209,18 @@ enum
 	_ps3_timer_nodes_children,
 	_ps3_timer_nodes_bounds,
 	_ps3_timer_nodes_postprocess,
+	/* the overlays and blends' parts (_ps3_timer_nodes_blends is the rest): the overlays, the type's preprocess, the
+	interpolation from the last animation; with their counts */
+	_ps3_timer_nodes_overlays,
+	_ps3_timer_nodes_preprocess,
+	_ps3_timer_nodes_interpolate,
+	/* the render interpolation (render_interpolation.c): a tick's objects kept (the nodes: a count only), then a frame's
+	blends: the snap tests (objects), the snapshots' rotations (nodes), the blends (nodes) */
+	_ps3_timer_interpolation_objects,
+	_ps3_timer_interpolation_nodes,
+	_ps3_timer_interpolation_snap,
+	_ps3_timer_interpolation_rotations,
+	_ps3_timer_interpolation_blend,
 	/* the render's objects pass before render_objects (render.c), and in it (render_objects.c) */
 	_ps3_timer_render_sky,
 	_ps3_timer_render_first_person,
@@ -224,6 +236,12 @@ enum
 	_ps3_timer_model_parts,
 	_ps3_timer_model_end,
 	_ps3_timer_render_widgets,
+	/* the objects' widgets by type, in the game's order (widgets.c), with their count */
+	_ps3_timer_widget_flag,
+	_ps3_timer_widget_antenna,
+	_ps3_timer_widget_glow,
+	_ps3_timer_widget_light_volume,
+	_ps3_timer_widget_lightning,
 	/* in the parts' draws (render_model_parts): the solid draws of model and environment shaders, the decals' draws, the
 	transparent parts' centroids and submits, each with its count; the rest: the loops over regions and parts, the links */
 	_ps3_timer_parts_model,
@@ -231,6 +249,17 @@ enum
 	_ps3_timer_parts_decals,
 	_ps3_timer_parts_transparent,
 	_ps3_timer_parts_rest,
+	/* a model shader's draw (rasterizer_xbox_models.c): render states, textures, colours, vertex shader, constants, fog,
+	pixel shader, the draws (their count), the fog screen's submit */
+	_ps3_timer_model_draw_states,
+	_ps3_timer_model_draw_textures,
+	_ps3_timer_model_draw_colours,
+	_ps3_timer_model_draw_vertex_shader,
+	_ps3_timer_model_draw_constants,
+	_ps3_timer_model_draw_fog,
+	_ps3_timer_model_draw_pixel_shader,
+	_ps3_timer_model_draw_draws,
+	_ps3_timer_model_draw_fog_screen,
 	/* the lights pass's parts (render.c): the lens flares' occlusion tests, the objects' shadows, the lights' diffuse
 	part, the light and alpha-tested decals; the diffuse pass's: the structure's diffuse textures, the decals */
 	_ps3_timer_lights_flares,
@@ -278,6 +307,13 @@ enum
 	_ps3_timer_transparent_sort,
 	_ps3_timer_transparent_qsort,
 	_ps3_timer_transparent_order_models,
+	/* in the models' order (rasterizer_xbox_transparent_geometry.c): the glass scan, the chains' roots, the models' bounds
+	(their calls), the planes' tests, the order written */
+	_ps3_timer_order_scan,
+	_ps3_timer_order_roots,
+	_ps3_timer_order_bounds,
+	_ps3_timer_order_planes,
+	_ps3_timer_order_write,
 	_ps3_timer_transparent_begin_end,
 	_ps3_timer_transparent_effect,
 	_ps3_timer_transparent_model,
@@ -359,9 +395,33 @@ enum
 	/* the game thread's Direct3D calls (d3d8_rsx.c): the draws with their prologue, the vertex constants; no ring waits */
 	_ps3_timer_front_draws,
 	_ps3_timer_front_constants,
+	/* in the draws: the prologue's render states, attributes, targets and textures recorded (the rest: the draw's record) */
+	_ps3_timer_front_states,
+	_ps3_timer_front_attributes,
+	_ps3_timer_front_targets,
+	_ps3_timer_front_textures,
 	/* the Direct3D thread's time running records, and the game thread's waits for it (d3d8_rsx.c) */
 	_ps3_timer_thread_busy,
 	_ps3_timer_thread_wait,
+	/* the Direct3D thread's records by type, in d3d8_rsx.c's order from _record_wrap, with their count */
+	_ps3_timer_record_wrap,
+	_ps3_timer_record_states,
+	_ps3_timer_record_attributes,
+	_ps3_timer_record_texture,
+	_ps3_timer_record_vertex_shader,
+	_ps3_timer_record_constants,
+	_ps3_timer_record_constant_mode,
+	_ps3_timer_record_viewport,
+	_ps3_timer_record_render_target,
+	_ps3_timer_record_ui_offset,
+	_ps3_timer_record_clear,
+	_ps3_timer_record_draw,
+	_ps3_timer_record_draw_indexed,
+	_ps3_timer_record_immediate,
+	_ps3_timer_record_elements,
+	_ps3_timer_record_timestamp,
+	_ps3_timer_record_draw_stamps,
+	_ps3_timer_record_present,
 	/* the Direct3D device's draws (d3d8_rsx.c): the state includes the textures and the colours */
 	_ps3_timer_draw_state,
 	_ps3_timer_draw_textures,
@@ -370,6 +430,17 @@ enum
 	_ps3_timer_draw_colours,
 	_ps3_timer_draw_vertices,
 	_ps3_timer_draw_indices,
+	/* the state's other parts: the vertex program found, targets, raster state, screen constants, the fragment key, the
+	fragment program found, the uniforms (in the colours), the vertex program set, the constants */
+	_ps3_timer_draw_program,
+	_ps3_timer_draw_targets,
+	_ps3_timer_draw_raster,
+	_ps3_timer_draw_screen,
+	_ps3_timer_draw_key,
+	_ps3_timer_draw_fragment,
+	_ps3_timer_draw_uniforms,
+	_ps3_timer_draw_vertex_program,
+	_ps3_timer_draw_constants,
 	/* waits in the present: two flips pending (d3d8_rsx.c), the display flips and the RSX (ps3_gpu.c); the
 	conversions' SPU (ps3_spu.c) */
 	_ps3_timer_vblank_wait,

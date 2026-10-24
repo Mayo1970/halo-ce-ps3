@@ -78,6 +78,18 @@ static const char *const specular_names[] =
 {
 	"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog",
 };
+/* the objects' widgets by type, as the timers from _ps3_timer_widget_flag */
+static const char *const widget_names[] =
+{
+	"flag", "antenna", "glow", "light volume", "lightning",
+};
+/* the Direct3D thread's records by type, as the timers from _ps3_timer_record_wrap */
+static const char *const record_names[] =
+{
+	"wrap", "states", "attributes", "texture", "vertex shader", "constants", "constant mode", "viewport",
+	"render target", "ui offset", "clear", "draw", "indexed draw", "immediate", "elements", "timestamp", "draw stamps",
+	"present",
+};
 
 /* the game thread's jobs on the game and render SPUs (ps3_spu.c), by kind: jobs a frame, the SPU's microseconds a job
 (its DMA waits), the game thread's waits in ms a frame; the copies are the checkpoint's three kinds */
@@ -297,19 +309,41 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		k[_ps3_timer_tick_scripts], k[_ps3_timer_tick_objects], k[_ps3_timer_tick_hud], k[_ps3_timer_tick_other],
 		k[_ps3_timer_tick_interpolation], k[_ps3_timer_tick_network], t[_ps3_timer_frame_particles],
 		t[_ps3_timer_frame_widgets], t[_ps3_timer_frame_sound], t[_ps3_timer_frame_other]);
+	/* the rest: objects_update's time outside its objects' parts */
 	ps3_log_printf("[time] objects_update, ms a tick: units %.2f, items %.2f, projectiles %.2f, others %.2f, damage %.2f, "
-		"node matrices %.2f, lights %.2f, values %.2f, activation %.2f, cleanup %.2f\n", k[_ps3_timer_objects_units],
-		k[_ps3_timer_objects_items], k[_ps3_timer_objects_projectiles], k[_ps3_timer_objects_others],
-		k[_ps3_timer_objects_damage], k[_ps3_timer_objects_nodes], k[_ps3_timer_objects_lights],
-		k[_ps3_timer_objects_values], k[_ps3_timer_objects_activation], k[_ps3_timer_objects_cleanup]);
-	ps3_log_printf("[time] node matrices, ms a tick: orientations %.2f, overlays and blends %.2f, matrices %.2f (first "
-		"node %.2f, checks %.2f, other nodes %.2f, bounds %.2f); postprocess %.2f; %.1f calls and %.1f nodes a tick\n",
-		k[_ps3_timer_nodes_orientations], k[_ps3_timer_nodes_blends], k[_ps3_timer_nodes_root] +
-		k[_ps3_timer_nodes_checks] + k[_ps3_timer_nodes_children] + k[_ps3_timer_nodes_bounds],
-		k[_ps3_timer_nodes_root], k[_ps3_timer_nodes_checks], k[_ps3_timer_nodes_children], k[_ps3_timer_nodes_bounds],
-		k[_ps3_timer_nodes_postprocess],
+		"node matrices %.2f, lights %.2f, values %.2f, activation %.2f, cleanup %.2f, rest %.2f\n",
+		k[_ps3_timer_objects_units], k[_ps3_timer_objects_items], k[_ps3_timer_objects_projectiles],
+		k[_ps3_timer_objects_others], k[_ps3_timer_objects_damage], k[_ps3_timer_objects_nodes],
+		k[_ps3_timer_objects_lights], k[_ps3_timer_objects_values], k[_ps3_timer_objects_activation],
+		k[_ps3_timer_objects_cleanup], k[_ps3_timer_tick_objects] - k[_ps3_timer_objects_units] -
+		k[_ps3_timer_objects_items] - k[_ps3_timer_objects_projectiles] - k[_ps3_timer_objects_others] -
+		k[_ps3_timer_objects_damage] - k[_ps3_timer_objects_nodes] - k[_ps3_timer_objects_lights] -
+		k[_ps3_timer_objects_values] - k[_ps3_timer_objects_activation] - k[_ps3_timer_objects_cleanup]);
+	ps3_log_printf("[time] node matrices, ms a tick: orientations %.2f, overlays and blends %.2f (overlays %.2f (%.1f), "
+		"the type's preprocess %.2f (%.1f), interpolations %.2f (%.1f), rest %.2f), matrices %.2f (first node %.2f, "
+		"checks %.2f, other nodes %.2f, bounds %.2f); postprocess %.2f; %.1f calls and %.1f nodes a tick\n",
+		k[_ps3_timer_nodes_orientations], k[_ps3_timer_nodes_overlays] + k[_ps3_timer_nodes_preprocess] +
+		k[_ps3_timer_nodes_interpolate] + k[_ps3_timer_nodes_blends], k[_ps3_timer_nodes_overlays],
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_nodes_overlays] / ps3_timer_game_ticks : 0.0,
+		k[_ps3_timer_nodes_preprocess],
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_nodes_preprocess] / ps3_timer_game_ticks : 0.0,
+		k[_ps3_timer_nodes_interpolate],
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_nodes_interpolate] / ps3_timer_game_ticks : 0.0,
+		k[_ps3_timer_nodes_blends], k[_ps3_timer_nodes_root] + k[_ps3_timer_nodes_checks] +
+		k[_ps3_timer_nodes_children] + k[_ps3_timer_nodes_bounds], k[_ps3_timer_nodes_root], k[_ps3_timer_nodes_checks],
+		k[_ps3_timer_nodes_children], k[_ps3_timer_nodes_bounds], k[_ps3_timer_nodes_postprocess],
 		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_nodes_orientations] / ps3_timer_game_ticks : 0.0,
 		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_nodes_children] / ps3_timer_game_ticks : 0.0);
+	/* a tick's walk over the objects is what its objects kept leave of the tick's interpolation */
+	ps3_log_printf("[time] render interpolation: a tick, ms a tick: objects kept %.2f (%.1f, %.1f nodes), the walk and "
+		"the rest %.2f; a frame, ms a frame: snap tests %.2f (%.1f objects), rotations %.2f (%.1f nodes), blends %.2f "
+		"(%.1f nodes)\n", k[_ps3_timer_interpolation_objects],
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_interpolation_objects] / ps3_timer_game_ticks : 0.0,
+		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_interpolation_nodes] / ps3_timer_game_ticks : 0.0,
+		k[_ps3_timer_tick_interpolation] - k[_ps3_timer_interpolation_objects], t[_ps3_timer_interpolation_snap],
+		(double)ps3_timer_counts[_ps3_timer_interpolation_snap] / frames, t[_ps3_timer_interpolation_rotations],
+		(double)ps3_timer_counts[_ps3_timer_interpolation_rotations] / frames, t[_ps3_timer_interpolation_blend],
+		(double)ps3_timer_counts[_ps3_timer_interpolation_blend] / frames);
 	ps3_log_printf("[time] particles, ms a frame: particles_update %.2f (their physics %.2f; %.1f particles, %.1f with "
 		"physics), contrails %.2f, particle systems %.2f\n", t[_ps3_timer_particles_update],
 		t[_ps3_timer_particles_physics], (double)ps3_timer_counts[_ps3_timer_particles_update] / frames,
@@ -340,18 +374,29 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_perception_props] / ps3_timer_game_ticks : 0.0,
 		ps3_timer_game_ticks ? (double)ps3_timer_counts[_ps3_timer_perception_prop_refresh] / ps3_timer_game_ticks : 0.0);
 	ai_log(tick_scale, k);
-	/* a pass's parts; the objects pass's render_objects holds find, first person, lighting and models */
-	ps3_log_printf("[time] render: sound %.1f; windows: visibility %.1f, objects %.1f, lightmaps %.1f, lights %.1f, "
-		"diffuse %.1f, specular %.1f, effects %.1f, interface %.1f, end %.1f\n", t[_ps3_timer_sound],
-		t[_ps3_timer_window_visibility], t[_ps3_timer_window_objects] + t[_ps3_timer_render_sky] +
-		t[_ps3_timer_render_first_person] + t[_ps3_timer_render_lights], t[_ps3_timer_window_lightmaps],
-		t[_ps3_timer_window_lights] + t[_ps3_timer_lights_flares] + t[_ps3_timer_lights_shadows] +
-		t[_ps3_timer_lights_diffuse] + t[_ps3_timer_lights_decals], t[_ps3_timer_window_diffuse] +
-		t[_ps3_timer_diffuse_structure] + t[_ps3_timer_diffuse_decals], t[_ps3_timer_window_specular],
-		t[_ps3_timer_window_effects] + t[_ps3_timer_effects_weather] + t[_ps3_timer_effects_particles] +
-		t[_ps3_timer_effects_contrails] + t[_ps3_timer_effects_transparent] + t[_ps3_timer_effects_decals] +
-		t[_ps3_timer_effects_detail], t[_ps3_timer_window_interface] + t[_ps3_timer_hud_fog_flares] +
-		t[_ps3_timer_hud_screen] + t[_ps3_timer_hud_flash] + t[_ps3_timer_hud_widgets], t[_ps3_timer_window_end]);
+	/* a pass's parts; the objects pass's render_objects holds find, first person, lighting and models; the rest: the
+	render's time outside the sound and the windows' parts */
+	{
+		double objects_pass = t[_ps3_timer_window_objects] + t[_ps3_timer_render_sky] +
+			t[_ps3_timer_render_first_person] + t[_ps3_timer_render_lights];
+		double lights_pass = t[_ps3_timer_window_lights] + t[_ps3_timer_lights_flares] + t[_ps3_timer_lights_shadows] +
+			t[_ps3_timer_lights_diffuse] + t[_ps3_timer_lights_decals];
+		double diffuse_pass = t[_ps3_timer_window_diffuse] + t[_ps3_timer_diffuse_structure] +
+			t[_ps3_timer_diffuse_decals];
+		double effects_pass = t[_ps3_timer_window_effects] + t[_ps3_timer_effects_weather] +
+			t[_ps3_timer_effects_particles] + t[_ps3_timer_effects_contrails] + t[_ps3_timer_effects_transparent] +
+			t[_ps3_timer_effects_decals] + t[_ps3_timer_effects_detail];
+		double interface_pass = t[_ps3_timer_window_interface] + t[_ps3_timer_hud_fog_flares] +
+			t[_ps3_timer_hud_screen] + t[_ps3_timer_hud_flash] + t[_ps3_timer_hud_widgets];
+
+		ps3_log_printf("[time] render: sound %.1f; windows: visibility %.1f, objects %.1f, lightmaps %.1f, lights %.1f, "
+			"diffuse %.1f, specular %.1f, effects %.1f, interface %.1f, end %.1f; rest %.1f\n", t[_ps3_timer_sound],
+			t[_ps3_timer_window_visibility], objects_pass, t[_ps3_timer_window_lightmaps], lights_pass, diffuse_pass,
+			t[_ps3_timer_window_specular], effects_pass, interface_pass, t[_ps3_timer_window_end],
+			t[_ps3_timer_render] - t[_ps3_timer_sound] - t[_ps3_timer_window_visibility] - objects_pass -
+			t[_ps3_timer_window_lightmaps] - lights_pass - diffuse_pass - t[_ps3_timer_window_specular] - effects_pass -
+			interface_pass - t[_ps3_timer_window_end]);
+	}
 	ps3_log_printf("[time] unit parts, ms a tick: unit %.2f, biped %.2f (turning %.2f, moving %.2f, dead air landing "
 		"slipping %.2f, animation %.2f, rest %.2f), vehicle %.2f, item %.2f, projectile %.2f, other %.2f\n",
 		k[_ps3_timer_part_unit], k[_ps3_timer_part_biped], k[_ps3_timer_biped_turning], k[_ps3_timer_biped_moving],
@@ -457,6 +502,23 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[_ps3_timer_parts_transparent], ps3_render_d3d[_ps3_timer_parts_transparent] * scale,
 		(double)ps3_timer_counts[_ps3_timer_parts_transparent] / frames, t[_ps3_timer_parts_rest],
 		ps3_render_d3d[_ps3_timer_parts_rest] * scale);
+	/* every model shader's draw, the first person's too; (Direct3D): the game thread's draws and constants in a part */
+	ps3_log_printf("[time] model shaders' draws, ms a frame (Direct3D): render states %.2f, textures %.2f, colours %.2f, "
+		"vertex shader %.2f, constants %.2f (%.2f), fog %.2f, pixel shader %.2f, draws %.2f (%.2f; %.1f a frame), fog "
+		"screen %.2f\n", t[_ps3_timer_model_draw_states], t[_ps3_timer_model_draw_textures],
+		t[_ps3_timer_model_draw_colours], t[_ps3_timer_model_draw_vertex_shader], t[_ps3_timer_model_draw_constants],
+		ps3_render_d3d[_ps3_timer_model_draw_constants] * scale, t[_ps3_timer_model_draw_fog],
+		t[_ps3_timer_model_draw_pixel_shader], t[_ps3_timer_model_draw_draws],
+		ps3_render_d3d[_ps3_timer_model_draw_draws] * scale,
+		(double)ps3_timer_counts[_ps3_timer_model_draw_draws] / frames, t[_ps3_timer_model_draw_fog_screen]);
+	length = (unsigned long)snprintf(line, sizeof(line), "[time] the objects' widgets by type, ms a frame (a frame):");
+	for (index = 0; index <= _ps3_timer_widget_lightning - _ps3_timer_widget_flag && length < sizeof(line); index++)
+	{
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f)", index ? "," : "",
+			widget_names[index], t[_ps3_timer_widget_flag + index],
+			(double)ps3_timer_counts[_ps3_timer_widget_flag + index] / frames);
+	}
+	ps3_log_printf("%s\n", line);
 	ps3_log_printf("[time] lights and diffuse passes, ms a frame (Direct3D): lights: lens flares %.2f (%.2f), shadows "
 		"%.2f (%.2f), diffuse lights %.2f (%.2f), decals %.2f (%.2f); diffuse: structure %.2f (%.2f), decals %.2f (%.2f); "
 		"the decals' batches a frame %.1f, their vertices %.0f\n",
@@ -502,9 +564,12 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[_ps3_timer_weather_sprites] - t[_ps3_timer_weather_draw], t[_ps3_timer_weather_sprites],
 		(double)ps3_timer_counts[_ps3_timer_weather_sprites] / frames, t[_ps3_timer_weather_draw]);
 	length = (unsigned long)snprintf(line, sizeof(line), "[time] transparent geometry, ms a frame (groups a frame): "
-		"sort %.2f (%.1f; qsort %.2f, the models' order %.2f), begin and end %.2f; by shader:",
-		t[_ps3_timer_transparent_sort], (double)ps3_timer_counts[_ps3_timer_transparent_sort] / frames,
-		t[_ps3_timer_transparent_qsort], t[_ps3_timer_transparent_order_models], t[_ps3_timer_transparent_begin_end]);
+		"sort %.2f (%.1f; qsort %.2f, the models' order %.2f (glass scan %.2f, roots %.2f, bounds %.2f (%.1f), planes "
+		"%.2f, written %.2f)), begin and end %.2f; by shader:", t[_ps3_timer_transparent_sort],
+		(double)ps3_timer_counts[_ps3_timer_transparent_sort] / frames, t[_ps3_timer_transparent_qsort],
+		t[_ps3_timer_transparent_order_models], t[_ps3_timer_order_scan], t[_ps3_timer_order_roots],
+		t[_ps3_timer_order_bounds], (double)ps3_timer_counts[_ps3_timer_order_bounds] / frames, t[_ps3_timer_order_planes],
+		t[_ps3_timer_order_write], t[_ps3_timer_transparent_begin_end]);
 	for (index = 0; index <= _ps3_timer_transparent_other - _ps3_timer_transparent_effect && length < sizeof(line);
 		index++)
 	{
@@ -525,6 +590,35 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[_ps3_timer_texture_hash], t[_ps3_timer_texture_upload], t[_ps3_timer_draw_colours],
 		t[_ps3_timer_draw_vertices], t[_ps3_timer_draw_indices], t[_ps3_timer_vblank_wait], t[_ps3_timer_flip_wait],
 		t[_ps3_timer_rsx_wait], t[_ps3_timer_spu_wait]);
+	/* the colours: the uniforms built, then the fragment program set with them */
+	ps3_log_printf("[time] Direct3D thread's draw state, ms a frame: vertex program found %.2f, targets %.2f, raster "
+		"state %.2f, screen constants %.2f, fragment key %.2f, textures %.2f, fragment program found %.2f, colours %.2f "
+		"(uniforms %.2f, the program set %.2f), vertex program set %.2f, constants %.2f\n", t[_ps3_timer_draw_program],
+		t[_ps3_timer_draw_targets], t[_ps3_timer_draw_raster], t[_ps3_timer_draw_screen], t[_ps3_timer_draw_key],
+		t[_ps3_timer_draw_textures], t[_ps3_timer_draw_fragment], t[_ps3_timer_draw_colours],
+		t[_ps3_timer_draw_uniforms], t[_ps3_timer_draw_colours] - t[_ps3_timer_draw_uniforms],
+		t[_ps3_timer_draw_vertex_program], t[_ps3_timer_draw_constants]);
+	/* the loop: the thread's busy time outside its records (the room given back, the SPU's pending tasks) */
+	{
+		double records = 0.0;
+
+		length = (unsigned long)snprintf(line, sizeof(line), "[time] Direct3D thread's records, ms a frame (a frame):");
+		for (index = 0; index <= _ps3_timer_record_present - _ps3_timer_record_wrap && length < sizeof(line); index++)
+		{
+			records += t[_ps3_timer_record_wrap + index];
+			length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f)", index ? "," : "",
+				record_names[index], t[_ps3_timer_record_wrap + index],
+				(double)ps3_timer_counts[_ps3_timer_record_wrap + index] / frames);
+		}
+		ps3_log_printf("%s; the loop %.2f\n", line, t[_ps3_timer_thread_busy] - records);
+	}
+	/* the draws' record: what the prologue's parts leave of the game thread's draws */
+	ps3_log_printf("[time] the game thread's Direct3D draws, ms a frame: %.2f; the prologue: render states %.2f, "
+		"attributes %.2f, targets %.2f, textures %.2f; the draws' record %.2f; constants %.2f\n",
+		t[_ps3_timer_front_draws], t[_ps3_timer_front_states], t[_ps3_timer_front_attributes],
+		t[_ps3_timer_front_targets], t[_ps3_timer_front_textures], t[_ps3_timer_front_draws] -
+		t[_ps3_timer_front_states] - t[_ps3_timer_front_attributes] - t[_ps3_timer_front_targets] -
+		t[_ps3_timer_front_textures], t[_ps3_timer_front_constants]);
 	spu_game_log(frames, t);
 	if (!ps3_rsx_frames)
 		return;

@@ -11,6 +11,7 @@ Resources: d3d8_resources.c. The game's thread records calls; the PPE's other th
 #include "ps3_spu.h"
 #include "ps3_system.h"
 #include "ps3_timers.h"
+#include "ps3_vmx.h"
 
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 480
@@ -71,8 +72,9 @@ int halo_interpolation_enabled(void);
 
 /* ---------- state the XDK header's inline functions read and write */
 
-DWORD D3D__RenderState[D3DRS_MAX];
-DWORD D3D__TextureState[D3DTSS_MAXSTAGES][D3DTSS_MAX];
+/* (16-byte aligned: record_states compares them a doubleword at a time) */
+DWORD D3D__RenderState[D3DRS_MAX] __attribute__((aligned(16)));
+DWORD D3D__TextureState[D3DTSS_MAXSTAGES][D3DTSS_MAX] __attribute__((aligned(16)));
 WORD *D3D__IndexData;
 
 /* ---------- the device */
@@ -210,8 +212,8 @@ static struct
 	unsigned long frame;
 	long ui_offset;
 	/* what the records have given the Direct3D thread */
-	DWORD recorded_render_state[D3DRS_MAX];
-	DWORD recorded_texture_state[D3DTSS_MAXSTAGES][D3DTSS_MAX];
+	DWORD recorded_render_state[D3DRS_MAX] __attribute__((aligned(16)));
+	DWORD recorded_texture_state[D3DTSS_MAXSTAGES][D3DTSS_MAX] __attribute__((aligned(16)));
 	float recorded_attributes[VERTEX_ATTRIBUTE_COUNT][4];
 	struct stage_texture recorded_stages[TEXTURE_STAGES];
 	struct surface_words recorded_targets[2];
@@ -242,6 +244,10 @@ enum
 	_record_draw_stamps,
 	_record_present
 };
+
+/* the timer build's records by type (_ps3_timer_record_wrap on) */
+typedef char record_timers_check[_record_present - _record_wrap ==
+	_ps3_timer_record_present - _ps3_timer_record_wrap ? 1 : -1];
 
 /* each record starts 16-aligned with this header; bytes: the whole record, a multiple of 16 */
 struct record
@@ -1586,68 +1592,54 @@ static void fragment_key_build(struct rsx_fragment_key *key)
 	key->fog_table_mode = (unsigned char)rs[D3DRS_FOGTABLEMODE];
 }
 
-/* the per-draw constants (ps3_rsx_program.h's _rsx_uniform_*), converted again only when the states they come from
-change: most draws keep them, and each float from a state word goes through memory on the PPE */
+/* a colour constant converted again only when its state word changes (a model's draw changes a few of them) */
+static void colour_update(DWORD now, DWORD *source, BOOL valid, float *out)
+{
+	if (valid && now == *source)
+		return;
+	*source = now;
+	color_to_vec4(now, out);
+}
+
+/* a float constant's words as the states hold them (a float taken from a word goes through memory on the PPE) */
+static void words_set(float *out, DWORD x, DWORD y, DWORD z, DWORD w)
+{
+	DWORD *words = (DWORD *)out;
+
+	words[0] = x;
+	words[1] = y;
+	words[2] = z;
+	words[3] = w;
+}
+
+/* the per-draw constants (ps3_rsx_program.h's _rsx_uniform_*) */
 static void fragment_uniforms_build(float uniforms[_rsx_uniform_count][4])
 {
-	static DWORD sources[22 + TEXTURE_STAGES * 6];
+	static DWORD colours[19];
 	static float converted[_rsx_uniform_texture_scale][4];
 	static BOOL valid;
-	DWORD now[22 + TEXTURE_STAGES * 6];
 	DWORD *rs = render_state;
-	int stage, count = 0;
+	int stage;
 
 	for (stage = 0; stage < 8; stage++)
 	{
-		now[count++] = rs[D3DRS_PSCONSTANT0_0 + stage];
-		now[count++] = rs[D3DRS_PSCONSTANT1_0 + stage];
+		colour_update(rs[D3DRS_PSCONSTANT0_0 + stage], &colours[stage * 2], valid, converted[_rsx_uniform_c0 + stage]);
+		colour_update(rs[D3DRS_PSCONSTANT1_0 + stage], &colours[stage * 2 + 1], valid,
+			converted[_rsx_uniform_c1 + stage]);
 	}
-	now[count++] = rs[D3DRS_PSFINALCOMBINERCONSTANT0];
-	now[count++] = rs[D3DRS_PSFINALCOMBINERCONSTANT1];
-	now[count++] = rs[D3DRS_FOGCOLOR];
-	now[count++] = rs[D3DRS_FOGSTART];
-	now[count++] = rs[D3DRS_FOGEND];
-	now[count++] = rs[D3DRS_FOGDENSITY];
+	colour_update(rs[D3DRS_PSFINALCOMBINERCONSTANT0], &colours[16], valid, converted[_rsx_uniform_final_c0]);
+	colour_update(rs[D3DRS_PSFINALCOMBINERCONSTANT1], &colours[17], valid, converted[_rsx_uniform_final_c1]);
+	colour_update(rs[D3DRS_FOGCOLOR], &colours[18], valid, converted[_rsx_uniform_fog_color]);
+	valid = TRUE;
+	words_set(converted[_rsx_uniform_fog], rs[D3DRS_FOGSTART], rs[D3DRS_FOGEND], rs[D3DRS_FOGDENSITY], 0);
 	for (stage = 0; stage < TEXTURE_STAGES; stage++)
 	{
 		DWORD *state = texture_state[stage];
 
-		now[count++] = state[D3DTSS_BUMPENVMAT00];
-		now[count++] = state[D3DTSS_BUMPENVMAT01];
-		now[count++] = state[D3DTSS_BUMPENVMAT10];
-		now[count++] = state[D3DTSS_BUMPENVMAT11];
-		now[count++] = state[D3DTSS_BUMPENVLSCALE];
-		now[count++] = state[D3DTSS_BUMPENVLOFFSET];
-	}
-	if (!valid || memcmp(now, sources, sizeof(now)))
-	{
-		memcpy(sources, now, sizeof(now));
-		valid = TRUE;
-		for (stage = 0; stage < 8; stage++)
-		{
-			color_to_vec4(rs[D3DRS_PSCONSTANT0_0 + stage], converted[_rsx_uniform_c0 + stage]);
-			color_to_vec4(rs[D3DRS_PSCONSTANT1_0 + stage], converted[_rsx_uniform_c1 + stage]);
-		}
-		color_to_vec4(rs[D3DRS_PSFINALCOMBINERCONSTANT0], converted[_rsx_uniform_final_c0]);
-		color_to_vec4(rs[D3DRS_PSFINALCOMBINERCONSTANT1], converted[_rsx_uniform_final_c1]);
-		color_to_vec4(rs[D3DRS_FOGCOLOR], converted[_rsx_uniform_fog_color]);
-		converted[_rsx_uniform_fog][0] = dword_to_float(rs[D3DRS_FOGSTART]);
-		converted[_rsx_uniform_fog][1] = dword_to_float(rs[D3DRS_FOGEND]);
-		converted[_rsx_uniform_fog][2] = dword_to_float(rs[D3DRS_FOGDENSITY]);
-		converted[_rsx_uniform_fog][3] = 0.0f;
-		for (stage = 0; stage < TEXTURE_STAGES; stage++)
-		{
-			DWORD *state = texture_state[stage];
-
-			converted[_rsx_uniform_bump_matrix + stage][0] = dword_to_float(state[D3DTSS_BUMPENVMAT00]);
-			converted[_rsx_uniform_bump_matrix + stage][1] = dword_to_float(state[D3DTSS_BUMPENVMAT01]);
-			converted[_rsx_uniform_bump_matrix + stage][2] = dword_to_float(state[D3DTSS_BUMPENVMAT10]);
-			converted[_rsx_uniform_bump_matrix + stage][3] = dword_to_float(state[D3DTSS_BUMPENVMAT11]);
-			converted[_rsx_uniform_bump_luminance + stage][0] = dword_to_float(state[D3DTSS_BUMPENVLSCALE]);
-			converted[_rsx_uniform_bump_luminance + stage][1] = dword_to_float(state[D3DTSS_BUMPENVLOFFSET]);
-			converted[_rsx_uniform_bump_luminance + stage][2] = 0.0f;
-			converted[_rsx_uniform_bump_luminance + stage][3] = 0.0f;
-		}
+		words_set(converted[_rsx_uniform_bump_matrix + stage], state[D3DTSS_BUMPENVMAT00], state[D3DTSS_BUMPENVMAT01],
+			state[D3DTSS_BUMPENVMAT10], state[D3DTSS_BUMPENVMAT11]);
+		words_set(converted[_rsx_uniform_bump_luminance + stage], state[D3DTSS_BUMPENVLSCALE],
+			state[D3DTSS_BUMPENVLOFFSET], 0, 0);
 	}
 	memcpy(uniforms, converted, sizeof(converted));
 	for (stage = 0; stage < TEXTURE_STAGES; stage++)
@@ -1674,6 +1666,52 @@ static DWORD blend_equation(DWORD operation)
 	}
 }
 
+/* the NV2A's scissor follows the viewport, which keeps split screens apart (d3d8_gl.c); in the target's pixels, made
+again only when the viewport or the target changes (a pixel's float conversions go through memory on the PPE) */
+static void viewport_scissor(long *left, long *top, long *right, long *bottom)
+{
+	static struct
+	{
+		DWORD x, y, width, height;
+		float scale[2];
+		unsigned long pixel_width, pixel_height;
+		long left, top, right, bottom;
+		BOOL valid;
+	} kept;
+
+	if (!kept.valid || kept.x != device.viewport.X || kept.y != device.viewport.Y ||
+		kept.width != device.viewport.Width || kept.height != device.viewport.Height ||
+		!(kept.scale[0] == device.target_scale[0]) || !(kept.scale[1] == device.target_scale[1]) ||
+		kept.pixel_width != device.target_pixel_width || kept.pixel_height != device.target_pixel_height)
+	{
+		kept.x = device.viewport.X;
+		kept.y = device.viewport.Y;
+		kept.width = device.viewport.Width;
+		kept.height = device.viewport.Height;
+		kept.scale[0] = device.target_scale[0];
+		kept.scale[1] = device.target_scale[1];
+		kept.pixel_width = device.target_pixel_width;
+		kept.pixel_height = device.target_pixel_height;
+		kept.left = scaled_pixel((float)device.viewport.X, device.target_scale[0]);
+		kept.top = scaled_pixel((float)device.viewport.Y, device.target_scale[1]);
+		kept.right = scaled_pixel((float)(device.viewport.X + device.viewport.Width), device.target_scale[0]);
+		kept.bottom = scaled_pixel((float)(device.viewport.Y + device.viewport.Height), device.target_scale[1]);
+		if (kept.left < 0)
+			kept.left = 0;
+		if (kept.top < 0)
+			kept.top = 0;
+		if (kept.right > (long)device.target_pixel_width)
+			kept.right = (long)device.target_pixel_width;
+		if (kept.bottom > (long)device.target_pixel_height)
+			kept.bottom = (long)device.target_pixel_height;
+		kept.valid = TRUE;
+	}
+	*left = kept.left;
+	*top = kept.top;
+	*right = kept.right;
+	*bottom = kept.bottom;
+}
+
 /* FALSE when the viewport leaves nothing of the target */
 static BOOL apply_raster_state(BOOL has_depth)
 {
@@ -1683,19 +1721,7 @@ static BOOL apply_raster_state(BOOL has_depth)
 	struct ps3_gpu_state state;
 	long left, top, right, bottom;
 
-	/* the NV2A's scissor follows the viewport, which keeps split screens apart (d3d8_gl.c); in the target's pixels */
-	left = scaled_pixel((float)device.viewport.X, device.target_scale[0]);
-	top = scaled_pixel((float)device.viewport.Y, device.target_scale[1]);
-	right = scaled_pixel((float)(device.viewport.X + device.viewport.Width), device.target_scale[0]);
-	bottom = scaled_pixel((float)(device.viewport.Y + device.viewport.Height), device.target_scale[1]);
-	if (left < 0)
-		left = 0;
-	if (top < 0)
-		top = 0;
-	if (right > (long)device.target_pixel_width)
-		right = (long)device.target_pixel_width;
-	if (bottom > (long)device.target_pixel_height)
-		bottom = (long)device.target_pixel_height;
+	viewport_scissor(&left, &top, &right, &bottom);
 	if (left >= right || top >= bottom)
 		return FALSE;
 
@@ -1731,8 +1757,9 @@ static BOOL apply_raster_state(BOOL has_depth)
 	state.polygon_mode = rs[D3DRS_FILLMODE] ? rs[D3DRS_FILLMODE] : GCM_POLYGON_MODE_FILL;
 	/* D3DRS_ZBIAS is expressed in these states (D3DDevice_SetRenderState_ZBias) */
 	state.polygon_offset = rs[D3DRS_SOLIDOFFSETENABLE] != 0;
-	state.polygon_offset_factor = dword_to_float(rs[D3DRS_POLYGONOFFSETZSLOPESCALE]);
-	state.polygon_offset_units = dword_to_float(rs[D3DRS_POLYGONOFFSETZOFFSET]);
+	/* (the floats' words copied as they are) */
+	memcpy(&state.polygon_offset_factor, &rs[D3DRS_POLYGONOFFSETZSLOPESCALE], sizeof(float));
+	memcpy(&state.polygon_offset_units, &rs[D3DRS_POLYGONOFFSETZOFFSET], sizeof(float));
 	state.scissor_x = (uint16_t)left;
 	state.scissor_y = (uint16_t)top;
 	state.scissor_width = (uint16_t)(right - left);
@@ -2010,13 +2037,13 @@ static const struct rsx_vertex_program *vertex_program_get(struct vertex_shader_
 /* the state, programs and textures of a draw; the vertex program's on success */
 static const struct rsx_vertex_program *prepare_draw_state(void)
 {
+	uint64_t span = ps3_timer_now(), colours;
 	struct vertex_shader_object *object = current_program();
 	const struct rsx_vertex_program *vertex_program;
 	const struct rsx_fragment_program *fragment_program;
 	struct rsx_fragment_key key;
 	float uniforms[_rsx_uniform_count][4];
 	BOOL has_depth = FALSE;
-	uint64_t span;
 
 	if (!device.gpu_ready)
 		return NULL;
@@ -2025,23 +2052,27 @@ static const struct rsx_vertex_program *prepare_draw_state(void)
 		statistics.skipped_program++;
 		return NULL;
 	}
+	span = ps3_timer_add(_ps3_timer_draw_program, span);
 	if (!bind_targets(&has_depth))
 	{
 		statistics.skipped_target++;
 		return NULL;
 	}
+	span = ps3_timer_add(_ps3_timer_draw_targets, span);
 	if (!apply_raster_state(has_depth))
 	{
 		statistics.skipped_scissor++;
 		return NULL;
 	}
+	span = ps3_timer_add(_ps3_timer_draw_raster, span);
 	screen_constants_update();
+	span = ps3_timer_add(_ps3_timer_draw_screen, span);
 
 	memset(&key, 0, sizeof(key));
 	fragment_key_build(&key);
-	span = ps3_timer_now();
+	span = ps3_timer_add(_ps3_timer_draw_key, span);
 	bind_textures(&key);
-	ps3_timer_add(_ps3_timer_draw_textures, span);
+	span = ps3_timer_add(_ps3_timer_draw_textures, span);
 	rsx_fragment_key_clean(&key);
 	fragment_program = fragment_program_get(&key);
 	if (!fragment_program)
@@ -2049,16 +2080,19 @@ static const struct rsx_vertex_program *prepare_draw_state(void)
 		statistics.skipped_program++;
 		return NULL;
 	}
-	span = ps3_timer_now();
+	colours = span = ps3_timer_add(_ps3_timer_draw_fragment, span);
 	fragment_uniforms_build(uniforms);
+	span = ps3_timer_add(_ps3_timer_draw_uniforms, span);
 	if (ps3_gpu_set_fragment_program(fragment_program, (const float (*)[4])uniforms) != 0)
 	{
 		statistics.skipped_scratch++;
 		return NULL;
 	}
-	ps3_timer_add(_ps3_timer_draw_colours, span);
+	span = ps3_timer_add(_ps3_timer_draw_colours, colours);
 	ps3_gpu_set_vertex_program(vertex_program);
+	span = ps3_timer_add(_ps3_timer_draw_vertex_program, span);
 	constants_upload();
+	ps3_timer_add(_ps3_timer_draw_constants, span);
 	return vertex_program;
 }
 
@@ -3076,35 +3110,47 @@ static BOOL static_data(const void *begin, unsigned long bytes)
 	return static_vertices_end && data >= static_vertices_begin && data + bytes <= static_vertices_end;
 }
 
+typedef char states_doubleword_check[D3DRS_MAX % 2 == 0 && D3DTSS_MAX % 2 == 0 ? 1 : -1];
+
+/* the words of now unlike recorded's, as (first + index, value) pairs, which recorded then holds; count even, both
+8-aligned: a doubleword's compare takes two states (a word's loop ran 16 instructions a state) */
+static unsigned long states_changed(const DWORD *now, DWORD *recorded, unsigned long count, unsigned long first,
+	uint32_t *pairs)
+{
+	const uint64_t *now_words = (const uint64_t *)now;
+	uint64_t *recorded_words = (uint64_t *)recorded;
+	unsigned long index, changed = 0;
+
+	for (index = 0; index < count / 2; index++)
+	{
+		if (now_words[index] != recorded_words[index])
+		{
+			unsigned long word = index * 2, half;
+
+			for (half = word; half < word + 2; half++)
+			{
+				if (now[half] != recorded[half])
+				{
+					pairs[changed * 2] = (uint32_t)(first + half);
+					pairs[changed * 2 + 1] = now[half];
+					changed++;
+				}
+			}
+			recorded_words[index] = now_words[index];
+		}
+	}
+	return changed;
+}
+
 /* the render and texture stage states the game changed since the last record (the inline setters write them) */
 static void record_states(void)
 {
 	uint32_t pairs[(D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX) * 2];
-	unsigned long count = 0, index, stage;
+	unsigned long count = states_changed(D3D__RenderState, front.recorded_render_state, D3DRS_MAX, 0, pairs);
 
-	for (index = 0; index < D3DRS_MAX; index++)
-	{
-		if (D3D__RenderState[index] != front.recorded_render_state[index])
-		{
-			front.recorded_render_state[index] = D3D__RenderState[index];
-			pairs[count * 2] = (uint32_t)index;
-			pairs[count * 2 + 1] = D3D__RenderState[index];
-			count++;
-		}
-	}
-	for (stage = 0; stage < D3DTSS_MAXSTAGES; stage++)
-	{
-		for (index = 0; index < D3DTSS_MAX; index++)
-		{
-			if (D3D__TextureState[stage][index] != front.recorded_texture_state[stage][index])
-			{
-				front.recorded_texture_state[stage][index] = D3D__TextureState[stage][index];
-				pairs[count * 2] = (uint32_t)(D3DRS_MAX + stage * D3DTSS_MAX + index);
-				pairs[count * 2 + 1] = D3D__TextureState[stage][index];
-				count++;
-			}
-		}
-	}
+	/* (a stage's states follow the last's: D3DRS_MAX + stage * D3DTSS_MAX + state) */
+	count += states_changed(&D3D__TextureState[0][0], &front.recorded_texture_state[0][0],
+		D3DTSS_MAXSTAGES * D3DTSS_MAX, D3DRS_MAX, pairs + count * 2);
 	if (count)
 	{
 		memcpy(record_begin(_record_states, count * 2 * sizeof(uint32_t), (uint32_t)count, 0), pairs,
@@ -3119,9 +3165,13 @@ static void record_attributes(void)
 	unsigned long reg, count = 0;
 	float *payload;
 
+	/* (the registers' words compared, not a memcmp call each) */
 	for (reg = 0; reg < VERTEX_ATTRIBUTE_COUNT; reg++)
 	{
-		if (memcmp(front.attributes[reg], front.recorded_attributes[reg], sizeof(front.attributes[0])))
+		const uint32_t *now = (const uint32_t *)front.attributes[reg];
+		const uint32_t *recorded = (const uint32_t *)front.recorded_attributes[reg];
+
+		if ((now[0] ^ recorded[0]) | (now[1] ^ recorded[1]) | (now[2] ^ recorded[2]) | (now[3] ^ recorded[3]))
 		{
 			mask |= 1u << reg;
 			count++;
@@ -3157,6 +3207,13 @@ static void record_targets(void)
 	}
 }
 
+/* (every field compared, not a memcmp call) */
+static BOOL stage_texture_same(const struct stage_texture *a, const struct stage_texture *b)
+{
+	return !((a->bound ^ b->bound) | (a->data ^ b->data) | (a->format ^ b->format) | (a->size ^ b->size) |
+		(a->palette ^ b->palette) | (a->fresh ^ b->fresh));
+}
+
 static void record_textures(DWORD draw)
 {
 	unsigned long stage;
@@ -3176,7 +3233,7 @@ static void record_textures(DWORD draw)
 		/* as the Xbox's runtime: Lock holds the last draw that reads it (d3d8_resource_busy) */
 		if (texture)
 			texture->Lock = draw;
-		if (memcmp(&now, &front.recorded_stages[stage], sizeof(now)))
+		if (!stage_texture_same(&now, &front.recorded_stages[stage]))
 		{
 			memcpy(record_begin(_record_texture, sizeof(now), (uint32_t)stage, 0), &now, sizeof(now));
 			record_commit();
@@ -3186,18 +3243,33 @@ static void record_textures(DWORD draw)
 	}
 }
 
+/* the timer build: a part of a call since start, without the ring's waits in it (front_call_end) */
+static uint64_t front_part(int timer, uint64_t start, uint64_t *waits)
+{
+	uint64_t now = ps3_timer_now();
+
+	ps3_timers[timer] += now - start - (ps3_timers[_ps3_timer_thread_wait] - *waits);
+	*waits = ps3_timers[_ps3_timer_thread_wait];
+	return now;
+}
+
 /* before a draw, what the game changed that its record does not carry; the draw's number */
 static DWORD draw_prologue(void)
 {
 	DWORD draw = ring.recorded_draws + 1;
+	uint64_t waits = ps3_timers[_ps3_timer_thread_wait], span = ps3_timer_now();
 
 	if (!draw)
 		draw = 1;
 	ring.recorded_draws = draw;
 	record_states();
+	span = front_part(_ps3_timer_front_states, span, &waits);
 	record_attributes();
+	span = front_part(_ps3_timer_front_attributes, span, &waits);
 	record_targets();
+	span = front_part(_ps3_timer_front_targets, span, &waits);
 	record_textures(draw);
+	front_part(_ps3_timer_front_textures, span, &waits);
 	return draw;
 }
 
@@ -3324,7 +3396,8 @@ static void draw_indexed_record(D3DPRIMITIVETYPE primitive_type_value, UINT vert
 {
 	/* the buffer's vertices from its vertex 0, as the cache counts them; for this draw only */
 	unsigned long extent = front.draw_vertex_count ? front.base_vertex_index + front.draw_vertex_count : 0;
-	unsigned long streams, index_bytes = 0, index, minimum = 0xffff, maximum = 0, first = 0, count = 0;
+	unsigned long streams, index_bytes = 0, first = 0, count = 0;
+	uint32_t minimum = 0xffff, maximum = 0;
 	struct stream_plan plan;
 	struct record_draw *draw;
 	unsigned char *next;
@@ -3342,13 +3415,7 @@ static void draw_indexed_record(D3DPRIMITIVETYPE primitive_type_value, UINT vert
 		index_bytes = (vertex_count * sizeof(WORD) + 15) & ~15UL;
 	if (plan.copied)
 	{
-		for (index = 0; index < vertex_count; index++)
-		{
-			if (index_data[index] < minimum)
-				minimum = index_data[index];
-			if (index_data[index] > maximum)
-				maximum = index_data[index];
-		}
+		ps3_vmx_index_range(index_data, (uint32_t)vertex_count, &minimum, &maximum);
 		first = front.base_vertex_index + minimum;
 		count = maximum - minimum + 1;
 	}
@@ -3886,8 +3953,14 @@ static void direct3d_thread(void *unused)
 			const struct record *record = (const struct record *)(ring.memory + position % RING_BYTES);
 			DWORD draw = record_draw_number(record);
 			uint32_t head = ps3_spu_vertices_head();
+			uint64_t record_span = ps3_timer_now();
 
 			record_execute(record);
+			if (record->type <= _record_present)
+			{
+				ps3_timer_add(_ps3_timer_record_wrap + (int)record->type, record_span);
+				ps3_timer_counts[_ps3_timer_record_wrap + record->type]++;
+			}
 			/* the record read before its room is given back */
 			__asm__ volatile("lwsync" : : : "memory");
 			if (draw)
