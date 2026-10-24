@@ -57,12 +57,22 @@ symbols in this file:
 #include "saved games/game_state.h"
 #include "tag_files/tag_groups.h"
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+#endif
+
 /* ---------- constants */
 
 enum
 {
 	MAXIMUM_WIDGETS_PER_MAP = HALO_PORT_MAXIMUM_WIDGETS
 };
+
+#ifdef HALO_PS3
+/* port: the timer build's widgets by type (port/ps3/include/ps3_timers.h, in the game's order) */
+typedef char ps3_widget_timers_check[_ps3_timer_widget_lightning - _ps3_timer_widget_flag + 1 ==
+	NUMBER_OF_WIDGET_TYPES ? 1 : -1];
+#endif
 
 /* ---------- macros */
 
@@ -368,6 +378,10 @@ void widgets_render(
 
 		if (type_definition->render_proc)
 		{
+#ifdef HALO_PS3
+			uint64_t ps3_span = ps3_timer_now(); /* port: (the timer build) */
+#endif
+
 			match_assert(
 				"c:\\halo\\SOURCE\\objects\\widgets\\widgets.c",
 				241,
@@ -377,6 +391,14 @@ void widgets_render(
 				widget->type_datum_index,
 				lighting,
 				animation);
+#ifdef HALO_PS3
+			/* port: (the timer build) */
+			if (widget->type >= 0 && widget->type < NUMBER_OF_WIDGET_TYPES)
+			{
+				ps3_timer_add(_ps3_timer_widget_flag + widget->type, ps3_span);
+				ps3_timer_counts[_ps3_timer_widget_flag + widget->type]++;
+			}
+#endif
 		}
 		widget_index = widget->next_widget_index;
 	}

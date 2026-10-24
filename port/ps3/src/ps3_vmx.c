@@ -286,6 +286,56 @@ int ps3_vmx_model_bounds(const unsigned char *vertices, uint32_t count, uint32_t
 
 /* BOUNDS END */
 
+/* ---------- an indexed draw's index range (ps3_vmx_index_range) */
+
+void ps3_vmx_index_range(const uint16_t *indices, uint32_t count, uint32_t *minimum, uint32_t *maximum)
+{
+	uint16_t lanes[8] __attribute__((aligned(16)));
+	uint32_t low = 0xffff, high = 0, index = 0, lane;
+
+	/* one at a time to the first quadword, then 8 at once */
+	for (; index < count && ((uintptr_t)(indices + index) & 15); index++)
+	{
+		if (indices[index] < low)
+			low = indices[index];
+		if (indices[index] > high)
+			high = indices[index];
+	}
+	if (count - index >= 8)
+	{
+		vector unsigned short lows = vec_splat_u16(-1), highs = vec_splat_u16(0);
+
+		for (; index + 8 <= count; index += 8)
+		{
+			vector unsigned short quad = vec_ld(0, indices + index);
+
+			lows = vec_min(lows, quad);
+			highs = vec_max(highs, quad);
+		}
+		vec_st(lows, 0, lanes);
+		for (lane = 0; lane < 8; lane++)
+		{
+			if (lanes[lane] < low)
+				low = lanes[lane];
+		}
+		vec_st(highs, 0, lanes);
+		for (lane = 0; lane < 8; lane++)
+		{
+			if (lanes[lane] > high)
+				high = lanes[lane];
+		}
+	}
+	for (; index < count; index++)
+	{
+		if (indices[index] < low)
+			low = indices[index];
+		if (indices[index] > high)
+			high = indices[index];
+	}
+	*minimum = low;
+	*maximum = high;
+}
+
 /* ---------- memory streams (ps3_vmx_copy and co.): STREAM BEGIN */
 
 /* the PPE's cache line; the source this far ahead is touched (dcbt) so its lines come in while earlier ones copy */

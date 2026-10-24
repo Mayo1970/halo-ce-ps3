@@ -265,10 +265,15 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 	return handle;
 }
 
+/* every transfer's bytes so far, for a large one's line: what the others moved while it ran */
+static volatile __uint64 transfers_bytes;
+
 static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDWORD done_count, BOOL positioned,
 	__uint64 offset, BOOL write)
 {
-	__uint64 saved = 0, done = 0, start, elapsed;
+	__uint64 saved = 0, done = 0, start, elapsed, locked = ps3_host_microseconds(), seeked, at = offset;
+	__uint64 others = transfers_bytes, slowest = 0;
+	unsigned long pieces = 0, slowest_piece = 0;
 	DWORD total = 0;
 	int result = 0;
 	int direction = write ? 1 : 0;
@@ -280,17 +285,29 @@ static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDW
 		ps3_host_file_seek(file->descriptor, 0, 1, &saved);
 		result = ps3_host_file_seek(file->descriptor, (__int64)offset, 0, NULL);
 	}
+	else if (count >= TRANSFER_LOG_BYTES)
+		ps3_host_file_seek(file->descriptor, 0, 1, &at);
+	seeked = ps3_host_microseconds();
 	while (!result && total < count)
 	{
 		DWORD piece = count - total;
+		__uint64 piece_start = ps3_host_microseconds(), piece_time;
 
 		if (!write && piece > READ_PIECE_BYTES)
 			piece = READ_PIECE_BYTES;
 		result = write ?
 			ps3_host_file_write(file->descriptor, (const char *)buffer + total, piece, &done) :
 			ps3_host_file_read(file->descriptor, (char *)buffer + total, piece, &done);
+		piece_time = ps3_host_microseconds() - piece_start;
+		if (piece_time > slowest)
+		{
+			slowest = piece_time;
+			slowest_piece = pieces;
+		}
+		pieces++;
 		if (result || !done)
 			break;
+		__sync_fetch_and_add(&transfers_bytes, done);
 		total += (DWORD)done;
 	}
 	if (positioned)
@@ -302,9 +319,12 @@ static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDW
 	if (write && total)
 		file->written = TRUE;
 	ps3_host_lock_leave(file->lock);
+	/* (the pieces: where the time went; the others: another thread's reads moving the disk's head meanwhile) */
 	if (total >= TRANSFER_LOG_BYTES)
-		platform_log("%s: %s %lu KB in %llu ms", file->path, write ? "wrote" : "read", (unsigned long)(total >> 10),
-			elapsed / 1000);
+		platform_log("%s: %s %lu KB in %llu ms (at %llu KB; the file's lock %llu ms, the seek %llu ms; %lu pieces, the "
+			"slowest %llu ms (piece %lu); others' transfers meanwhile %llu KB)", file->path, write ? "wrote" : "read",
+			(unsigned long)(total >> 10), elapsed / 1000, at >> 10, (start - locked) / 1000, (seeked - start) / 1000,
+			pieces, slowest / 1000, slowest_piece, (transfers_bytes - others - total) >> 10);
 	if (done_count)
 		*done_count = total;
 	if (result)

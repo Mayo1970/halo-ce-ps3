@@ -19,6 +19,8 @@ void ps3_vmx_matrix4x3_multiply(const float *a, const float *b, float *result);
 real_matrix4x3s; 1 with bounds (low x, y, z, high x, y, z) if every vertex is valid, else 0 */
 int ps3_vmx_model_bounds(const unsigned char *vertices, uint32_t count, uint32_t stride, int compressed,
 	const float *matrices, uint32_t matrix_count, float *bounds);
+/* the least and the greatest of count indices (0xffff and 0 for none), 8 at once */
+void ps3_vmx_index_range(const uint16_t *indices, uint32_t count, uint32_t *minimum, uint32_t *maximum);
 
 /* memcpy, memset to 0 and a test for all zeroes, for large buffers: the source's lines touched ahead, a destination
 line written whole zeroed in the cache first (not read); fastest with both 128-byte aligned, any alignment works */

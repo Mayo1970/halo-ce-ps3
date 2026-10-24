@@ -2603,6 +2603,7 @@ void object_compute_node_matrices(
 						}
 
 						overlay_animation_apply_continuous(animation, frame_index, node_orientations);
+						PS3_OBJECTS_COUNT(_ps3_timer_nodes_overlays, 1); /* port: (the timer build) */
 					}
 					/* port: and a frame to pick (a map's frame count of 0 divided
 					by zero) */
@@ -2615,10 +2616,12 @@ void object_compute_node_matrices(
 							frame_index,
 							value,
 							node_orientations);
+						PS3_OBJECTS_COUNT(_ps3_timer_nodes_overlays, 1); /* port: (the timer build) */
 					}
 				}
 			}
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_nodes_overlays, ps3_span); /* port: (the timer build) */
 
 		// Scale the object orientations
 		if (object->object.scale>0.f)
@@ -2630,10 +2633,13 @@ void object_compute_node_matrices(
 		}
 
 
+		PS3_OBJECTS_ADD(_ps3_timer_nodes_blends, ps3_span); /* port: (the timer build) */
 		if (object_definition->object.animation_graph.index!=NONE)
 		{
 			object_type_preprocess_node_orientations(object_index, node_orientations);
+			PS3_OBJECTS_COUNT(_ps3_timer_nodes_preprocess, 1); /* port: (the timer build) */
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_nodes_preprocess, ps3_span); /* port: (the timer build) */
 
 		if (object->object.animation.interpolation_frame_count>0)
 		{
@@ -2648,7 +2654,9 @@ void object_compute_node_matrices(
 				node_orientations,
 				object->object.animation.interpolation_frame_index,
 				object->object.animation.interpolation_frame_count);
+			PS3_OBJECTS_COUNT(_ps3_timer_nodes_interpolate, 1); /* port: (the timer build) */
 		}
+		PS3_OBJECTS_ADD(_ps3_timer_nodes_interpolate, ps3_span); /* port: (the timer build) */
 
 		if (!world_relative)
 		{

@@ -46,6 +46,15 @@ upstream halo-ce-universal copy of source/rasterizer/xbox/rasterizer_xbox_transp
 #ifdef HALO_PS3
 #include "ps3_timers.h"
 #include "ps3_vmx.h" /* port: port/ps3/src/ps3_vmx.c */
+
+/* port: the timer build's parts of the models' order (port/ps3/include/ps3_timers.h) */
+#define PS3_ORDER_SPAN(span) ((span) = ps3_timer_now())
+#define PS3_ORDER_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_ORDER_COUNT_IF(timer, condition) ((void)((condition) ? ps3_timer_counts[(timer)]++ : 0))
+#else
+#define PS3_ORDER_SPAN(span) ((void)0)
+#define PS3_ORDER_ADD(timer, span) ((void)0)
+#define PS3_ORDER_COUNT_IF(timer, condition) ((void)0)
 #endif
 
 /* ---------- constants */
@@ -3732,11 +3741,15 @@ void rasterizer_transparent_geometry_order_models(short *order, long count)
 	boolean unit_seen[RASTERIZER_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS] = {0};
 	long i, j, gap, phase, unit_count = 0, surface_count = 0, emitted = 0;
 	boolean changed = FALSE;
+#ifdef HALO_PS3
+	uint64_t ps3_span; /* port: (the timer build) */
+#endif
 
 	if (count < 2 || count > RASTERIZER_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS)
 	{
 		return;
 	}
+	PS3_ORDER_SPAN(ps3_span); /* port: (the timer build) */
 	/* Avoid reading any model vertices in scenes without eligible BSP glass. */
 	for (i = 0; i < count; ++i)
 	{
@@ -3745,6 +3758,7 @@ void rasterizer_transparent_geometry_order_models(short *order, long count)
 			++surface_count;
 		}
 	}
+	PS3_ORDER_ADD(_ps3_timer_order_scan, ps3_span); /* port: (the timer build) */
 	if (!surface_count)
 	{
 		return;
@@ -3776,6 +3790,7 @@ void rasterizer_transparent_geometry_order_models(short *order, long count)
 			}
 		}
 	}
+	PS3_ORDER_ADD(_ps3_timer_order_roots, ps3_span); /* port: (the timer build) */
 	for (i = 0; i < unit_count; ++i)
 	{
 		short root = units[i], member = root;
@@ -3798,10 +3813,13 @@ void rasterizer_transparent_geometry_order_models(short *order, long count)
 			{
 				valid = FALSE;
 			}
+			PS3_ORDER_ADD(_ps3_timer_order_planes, ps3_span); /* port: (the timer build) */
+			PS3_ORDER_COUNT_IF(_ps3_timer_order_bounds, valid); /* port: (the timer build) */
 			if (valid && !transparent_model_world_bounds(group, part_bounds))
 			{
 				valid = FALSE;
 			}
+			PS3_ORDER_ADD(_ps3_timer_order_bounds, ps3_span); /* port: (the timer build) */
 			if (valid)
 			{
 				for (k = 0; k < 3; ++k)
@@ -3837,6 +3855,7 @@ void rasterizer_transparent_geometry_order_models(short *order, long count)
 		target_gap[root] = (short)PIN(original_gap[root], lower, upper);
 		changed |= target_gap[root] != original_gap[root];
 	}
+	PS3_ORDER_ADD(_ps3_timer_order_planes, ps3_span); /* port: (the timer build) */
 	if (!changed)
 	{
 		return;
@@ -3881,4 +3900,5 @@ void rasterizer_transparent_geometry_order_models(short *order, long count)
 	{
 		memcpy(order, result, count * sizeof(*order));
 	}
+	PS3_ORDER_ADD(_ps3_timer_order_write, ps3_span); /* port: (the timer build) */
 }

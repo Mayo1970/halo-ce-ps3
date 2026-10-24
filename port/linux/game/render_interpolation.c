@@ -51,6 +51,10 @@ unsigned long config_changes(void);
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+#endif
+
 /* ---------- constants */
 
 /* (by absolute index: the object array's all) */
@@ -422,6 +426,9 @@ void render_interpolation_tick(void)
 		struct interpolated_object *record;
 		short node_count = (short)(object->object.node_matrices.size / (short)sizeof(real_matrix4x3));
 		boolean continuing;
+#ifdef HALO_PS3
+		uint64_t ps3_span = ps3_timer_now(); /* port: (the timer build: the walk is the rest of the tick's) */
+#endif
 
 		if (absolute_index >= MAXIMUM_INTERPOLATED_OBJECTS)
 			continue;
@@ -475,6 +482,12 @@ void render_interpolation_tick(void)
 		record->tick = interpolation_tick;
 		record->has_previous = continuing;
 		record->blended_frame = NONE;
+#ifdef HALO_PS3
+		/* port: (the timer build) */
+		ps3_timer_add(_ps3_timer_interpolation_objects, ps3_span);
+		ps3_timer_counts[_ps3_timer_interpolation_objects]++;
+		ps3_timer_counts[_ps3_timer_interpolation_nodes] += (uint32_t)node_count;
+#endif
 	}
 }
 
@@ -538,6 +551,9 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 		/* (so written that a position not a number snaps) */
 		boolean snap = !(distance_squared(&previous[0].position, &latest[0].position) <=
 			OBJECT_SNAP_DISTANCE * OBJECT_SNAP_DISTANCE);
+#ifdef HALO_PS3
+		uint64_t ps3_span = ps3_timer_now(); /* port: (the timer build) */
+#endif
 
 		/* a node moved further in the root's frame than a tick allows: the
 		two snapshots are different poses, not one moving (so written that
@@ -550,6 +566,11 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 			matrix4x3_inverse_transform_point(&latest[0], &latest[node_index].position, &latest_local);
 			snap = !(distance_squared(&previous_local, &latest_local) <= NODE_SNAP_DISTANCE * NODE_SNAP_DISTANCE);
 		}
+#ifdef HALO_PS3
+		/* port: (the timer build) */
+		ps3_span = ps3_timer_add(_ps3_timer_interpolation_snap, ps3_span);
+		ps3_timer_counts[_ps3_timer_interpolation_snap]++;
+#endif
 		if (!snap)
 		{
 			struct interpolation_rotation *previous_rotations =
@@ -571,8 +592,16 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 					for (node_index = 0; node_index < record->node_count; node_index++)
 						rotation_from_matrix(&nodes[node_index], &rotations[node_index]);
 					record->rotations_valid[snapshot] = TRUE;
+#ifdef HALO_PS3
+					/* port: (the timer build) */
+					ps3_timer_counts[_ps3_timer_interpolation_rotations] += (uint32_t)record->node_count;
+#endif
 				}
 			}
+#ifdef HALO_PS3
+			ps3_span = ps3_timer_add(_ps3_timer_interpolation_rotations, ps3_span); /* port: (the timer build) */
+			ps3_timer_counts[_ps3_timer_interpolation_blend] += (uint32_t)record->node_count;
+#endif
 			for (node_index = 0; node_index < record->node_count; node_index++)
 			{
 				matrix_blend_rotations(&previous[node_index], &latest[node_index], &previous_rotations[node_index],
@@ -594,6 +623,9 @@ real_matrix4x3 *render_interpolation_object_node_matrices(long object_index)
 			}
 		}
 		record->blended_frame = interpolation_frame;
+#ifdef HALO_PS3
+		ps3_timer_add(_ps3_timer_interpolation_blend, ps3_span); /* port: (the timer build) */
+#endif
 	}
 	return record->nodes + 2 * record->node_capacity;
 }
