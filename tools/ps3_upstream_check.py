@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reports what merging OpenCE's main (remote `upstream`) into the PS3 port takes, this tree unchanged; --build merges
-in ../PS3-upstream-check and builds there. Exit status: 0 nothing to merge, 1 a merge waits, 2 the check failed."""
+"""Reports what merging OpenCE's main (remote `upstream`) into the PS3 port takes; --merge also merges and builds it in
+../PS3-upstream-check, never in this tree. Exit status: 0 nothing to merge, 1 a merge waits, 2 the check failed."""
 
 import argparse
 import re
@@ -22,12 +22,15 @@ MESSAGE = re.compile(r"^\+\s*(_distributed_message_\w+)\s*=\s*(\d+)")
 VERSION = re.compile(r"#define\s+HALO_PORT_NETWORK_VERSION\s+(\d+)")
 STRUCT = re.compile(r"struct\s+(\w+)\s*\{([^{}]*)\}\s*(\w*)\s*(?:\[[^\]]*\])?\s*;", re.S)
 POINTER_MEMBER = re.compile(r"^\s*(?!typedef)[\w\s]+\*\s*(?!HALO_PTR32)(\w+)\s*(?:\[[^\]]*\])?\s*;", re.M)
+BLOCK_COMMENT = re.compile(r"/\*.*?(?:\*/|$)", re.S)
+LINE_COMMENT = re.compile(r"//[^\n]*")
+SPACE = re.compile(r"\s+")
 
 
-def git(*arguments, cwd=ROOT, check=True):
+def git(*arguments, cwd=ROOT, check=True, stdin=None):
     # core.autocrlf=false: the tree is LF, the system's git writes CRLF
     result = subprocess.run(["git", "-c", "core.autocrlf=false", *arguments], cwd=cwd, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace")
+                            text=True, encoding="utf-8", errors="replace", input=stdin)
     if check and result.returncode != 0:
         raise RuntimeError(f"git {' '.join(arguments)}: {result.stderr.strip()}")
     return result
@@ -43,14 +46,13 @@ def bash():
     raise RuntimeError("no bash for build.sh")
 
 
-def conflicts(upstream):
+def conflicts(start, upstream):
     # --name-only: the tree, the conflicting paths, a blank line, the messages
-    result = git("merge-tree", "--write-tree", "--name-only", "HEAD", upstream, check=False)
+    result = git("merge-tree", "--write-tree", "--name-only", start, upstream, check=False)
     if result.returncode not in (0, 1):
         raise RuntimeError(f"git merge-tree: {result.stderr.strip()}")
-    lines = result.stdout.splitlines()[1:]
     names = []
-    for line in lines:
+    for line in result.stdout.splitlines()[1:]:
         if not line:
             break
         names.append(line)
@@ -103,48 +105,134 @@ def pointer_structs(base, upstream):
     return found
 
 
-def build_merge(upstream, report):
+def code_only(lines):
+    """A conflict side's C code without its comments and spaces (a side can begin or end inside a comment)."""
+    text = "\n".join(lines)
+    first_end, first_open = text.find("*/"), text.find("/*")
+    if first_end != -1 and (first_open == -1 or first_end < first_open):
+        text = text[first_end + 2:]
+    return SPACE.sub("", LINE_COMMENT.sub(" ", BLOCK_COMMENT.sub(" ", text)))
+
+
+def resolve_comment_conflicts(path):
+    """Upstream's side of each conflict (diff3 markers) where ours differs from the base in comments only; returns
+    how many conflicts were taken and how many are left."""
+    lines = path.read_text(encoding="utf-8", errors="surrogateescape").split("\n")
+    out, taken, left, index = [], 0, 0, 0
+    while index < len(lines):
+        if not lines[index].startswith("<<<<<<< "):
+            out.append(lines[index])
+            index += 1
+            continue
+        parts, side, end = {"ours": [], "base": [], "theirs": []}, "ours", index + 1
+        while end < len(lines) and not lines[end].startswith(">>>>>>> "):
+            if lines[end].startswith("||||||| "):
+                side = "base"
+            elif lines[end] == "=======":
+                side = "theirs"
+            else:
+                parts[side].append(lines[end])
+            end += 1
+        if end < len(lines) and code_only(parts["ours"]) == code_only(parts["base"]):
+            out += parts["theirs"]
+            taken += 1
+        else:
+            out += lines[index:end + 1]
+            left += 1
+        index = end + 1
+    with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as output:
+        output.write("\n".join(out))
+    return taken, left
+
+
+def prepare_worktree(start):
     if WORKTREE.exists():
-        git("checkout", "-q", "-B", CHECK_BRANCH, "HEAD", cwd=WORKTREE)
-        git("reset", "-q", "--hard", git("rev-parse", "HEAD").stdout.strip(), cwd=WORKTREE)
+        git("merge", "--abort", cwd=WORKTREE, check=False)
+        git("checkout", "-q", "-f", "-B", CHECK_BRANCH, start, cwd=WORKTREE)
+        git("reset", "-q", "--hard", start, cwd=WORKTREE)
     else:
-        git("worktree", "add", "-q", "-B", CHECK_BRANCH, str(WORKTREE), "HEAD")
+        git("worktree", "add", "-q", "-B", CHECK_BRANCH, str(WORKTREE), start)
     # the PS3's units the .gitignore's xbox/ hides, if not added with git add -f
     for name in git("ls-files", "--others", "--ignored", "--exclude-standard", "--", "port/ps3").stdout.split("\n"):
         if name and "/build/" not in name:
             (WORKTREE / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, WORKTREE / name)
-    merged = git("merge", "-q", "--no-edit", upstream, cwd=WORKTREE, check=False)
-    if merged.returncode != 0:
-        git("merge", "--abort", cwd=WORKTREE, check=False)
-        report.append("Build: not done, the merge stopped:\n  " + merged.stdout.strip().replace("\n", "\n  "))
-        return
-    log = WORKTREE / BUILD / "upstream_check.log"
+
+
+def run_build(target, report):
+    log = WORKTREE / BUILD / f"upstream_check_{target}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "w", encoding="utf-8") as output:
-        status = subprocess.run([bash(), "build.sh", "-j12", "-k", f"BUILD={BUILD}", "all"], cwd=WORKTREE,
+        status = subprocess.run([bash(), "build.sh", "-j12", "-k", f"BUILD={BUILD}", target], cwd=WORKTREE,
                                 stdout=output, stderr=subprocess.STDOUT).returncode
     text = log.read_text(encoding="utf-8", errors="replace")
     errors = sorted(set(re.findall(r"^(\S+:\d+:\d+: error: .*)$", text, re.M)))
     undefined = sorted(set(re.findall(r"undefined reference to `([^']+)'", text)))
-    report.append(f"Build ({WORKTREE}, {BUILD}): {'linked' if status == 0 else 'failed'}; the log: {log}")
+    report.append(f"Build {target}: {'passed' if status == 0 else 'failed'} (the log: {log})")
+    report += [f"  {line}" for line in re.findall(r"^(r2off stubs:.*|\.got size:.*|shader pack:.*)$", text, re.M)]
     report += [f"  {line}" for line in errors[:60]]
     if undefined:
         report.append("  undefined (each a hook the PS3 must give: port/ps3/xbox/port_stubs.c, or code):")
         report += [f"    {name}" for name in undefined]
+    return status == 0
+
+
+def merge(start, upstream, head, report):
+    """The merge in the worktree (comment-only conflicts: upstream's side), committed there, then check and pkg."""
+    prepare_worktree(start)
+    merged = git("-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", upstream, cwd=WORKTREE,
+                 check=False)
+    taken_files, left_files = [], []
+    for line in git("status", "--porcelain", cwd=WORKTREE).stdout.splitlines():
+        state, name = line[:2], line[3:]
+        if state == "DU":
+            # deleted on purpose here (as .github/workflows/build.yml), changed upstream: it stays deleted
+            git("rm", "-q", "--", name, cwd=WORKTREE)
+            taken_files.append(f"{name} (kept deleted)")
+        elif state == "UU" and name.endswith((".c", ".h")):
+            taken, left = resolve_comment_conflicts(WORKTREE / name)
+            if left:
+                left_files.append(f"{name} ({left} conflicts left, {taken} comment-only taken from upstream)")
+            else:
+                git("add", "--", name, cwd=WORKTREE)
+                taken_files.append(f"{name} ({taken} comment-only)")
+        elif state in ("UU", "AA", "UD", "AU", "UA", "DD"):
+            left_files.append(f"{name} ({state})")
+    if taken_files:
+        report.append("Conflicts resolved with upstream's side:")
+        report += [f"  {name}" for name in taken_files]
+    if left_files:
+        report.append(f"Merge: stopped in {WORKTREE} (branch {CHECK_BRANCH}); these files need a person:")
+        report += [f"  {name}" for name in left_files]
+        return
+    if merged.returncode != 0 and not taken_files:
+        report.append("Merge: failed:\n  " + (merged.stdout + merged.stderr).strip().replace("\n", "\n  "))
+        return
+    message = f"Merge OpenCE upstream ({head}) into the PS3 port\n\nMade by tools/ps3_upstream_check.py --merge."
+    if taken_files:
+        message += " Conflicts taken from upstream:\n" + "\n".join(f"- {name}" for name in taken_files)
+    git("commit", "-q", "-F", "-", cwd=WORKTREE, stdin=message + "\n")
+    commit = git("rev-parse", "--short", "HEAD", cwd=WORKTREE).stdout.strip()
+    report.append(f"Merge: {commit} on {CHECK_BRANCH} in {WORKTREE}")
+    if run_build("check", report) and run_build("pkg", report):
+        report.append(f"PKG: {WORKTREE / BUILD / 'halo_ps3.pkg'}. After a PS3 test, with main's tree clean and no"
+                      f" shader sweep running: git merge --ff-only {CHECK_BRANCH}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--report", type=Path, help="also write the report to this file")
-    parser.add_argument("--build", action="store_true", help="merge in a worktree and build for the PS3")
+    parser.add_argument("--merge", action="store_true",
+                        help="merge in ../PS3-upstream-check (comment-only conflicts: upstream's), then check and pkg")
+    parser.add_argument("--start", default="HEAD", help="the commit to merge into (for a test: an older one)")
     args = parser.parse_args()
 
     git("fetch", "-q", REMOTE, BRANCH)
     upstream = f"{REMOTE}/{BRANCH}"
     head = git("rev-parse", "--short", upstream).stdout.strip()
-    base = git("merge-base", "HEAD", upstream).stdout.strip()
-    waiting = int(git("rev-list", "--count", f"HEAD..{upstream}").stdout)
+    start = git("rev-parse", args.start).stdout.strip()
+    base = git("merge-base", start, upstream).stdout.strip()
+    waiting = int(git("rev-list", "--count", f"{start}..{upstream}").stdout)
     report = [f"OpenCE {upstream} at {head}: {waiting} commits not merged (merged up to {base[:8]})"]
     if waiting == 0:
         print(report[0])
@@ -152,7 +240,7 @@ def main():
             args.report.write_text(report[0] + "\n", encoding="utf-8")
         return 0
 
-    names = conflicts(upstream)
+    names = conflicts(start, upstream)
     report.append(f"Conflicts: {len(names)} files")
     report += [f"  {name}" for name in names]
     old_version, new_version = network_version(base), network_version(upstream)
@@ -174,11 +262,8 @@ def main():
     rasterizer = git("diff", "--name-only", base, upstream, "--", "source/rasterizer").stdout.split()
     if rasterizer:
         report.append(f"Rasterizer: {len(rasterizer)} files changed: port/ps3/shader_keys.txt needs a new sweep")
-    if args.build:
-        if names:
-            report.append("Build: not done, the merge has conflicts")
-        else:
-            build_merge(upstream, report)
+    if args.merge:
+        merge(start, upstream, head, report)
 
     text = "\n".join(report)
     print(text)
