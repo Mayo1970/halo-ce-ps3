@@ -110,7 +110,7 @@ PLATFORM_SEMANTICS := $(BUILD)/platform_msvc_semantics.h
 XBOX_SRCS := $(wildcard $(PS3_DIR)/xbox/*.c) \
              $(addprefix port/linux/src/,bink_null.c d3d8_resources.c halo_linker_common.c msvc_crt.c \
              msvc_wide.c port_config.c xbdm.c xbox_xapi.c p2p.c p2p_crypto.c p2p_discord.c p2p_lobby.c \
-             p2p_signal.c p2p_webrtc.c) \
+             p2p_signal.c p2p_webrtc.c log_address.c) \
              $(KCP_DIR)/ikcp.c
 XBOX_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(XBOX_SRCS))
 
