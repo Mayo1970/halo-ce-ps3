@@ -45,12 +45,28 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
    Matt reports SUCCESS.
 5. Do `./build.sh check` before each hardware test.
 6. Before Matt boots, look at UDP port 18194 again (see "Hardware test").
-7. Comments: only for logic that is not obvious. At most 2 lines each, and
-   keep the "why". When you edit a file, shorten its longer comments too.
+7. Comments: only for logic that is not obvious. Our own (port/ps3,
+   tools/ps3_*, HALO_PS3 blocks, our port: comments) at most 2 lines, and
+   keep the "why"; upstream's comments stay as they are (fewer merge
+   conflicts: tools/ps3_upstream_check.py --merge takes them).
 8. Commits and PRs: no co-author line, no AI attribution.
 
 ## Now (2026-10-22)
 
+- 2026-10-24: the shader pack on hardware (b40, PKG of 17:12 in
+  `build/ps3_shader_check/`): `0 programs differ`, 1 pixel shader of the
+  whole run translated at a draw; Matt: the stutter only at the start.
+  Then (Matt: "do the hash and the conversion on a SPU"; and the BUTTON
+  ICONS style not in game): texture uploads as tasks of the conversions'
+  SPU (`spu_vertices.c`: TEXTURE, HASH; `xbox_texture_layout.c`:
+  `xgpu_texture_rsx_task`); the texture cache's textures upload at a load
+  there without a hash, the others' hash (a new one, 16 lanes of FNV-1a)
+  on the SPU from 256 KB. PC check (spusim, scratchpad): 3,000 textures and
+  300 hashes, 0 apart; 11 of 12 faults found (the 12th changes nothing).
+  The HUD's button prompts (`hud_hires_tags.c`, `hud_hires_button_draw`)
+  take the PS3's icons on the PS3 (XBOX: the map's). `check` passed; PKG of
+  17:58 in `build/ps3_texture/` (the tree of `dfc65142` and this). Not
+  tested on the PS3.
 - 2026-10-24: OpenCE upstream merge 2 (Matt: "Can you do both?": the merge
   and an automatic check). Worktree `../PS3-merge`, branch
   `upstream-merge-2`: `0fbd0a3f` merges `5e27f3a2` (376 commits, network
@@ -69,9 +85,12 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
   chat's messages and the settings record's new bytes are bytes only), and
   the check reports `source/rasterizer` changes (a new `shader_keys.txt`
   sweep). `check` passed; PKG of 14:14 in `../PS3-merge/build/ps3_merge/`.
-  Not tested on the PS3. Merge into `main` waits for the shader session
-  (no merge while its tree is dirty or the sweep runs; this merge changed
-  13 files of `source/rasterizer`: a new sweep). Open: begin game's 16-bit
+  Not tested on the PS3. After the shader pack's commit (`431af528`), main
+  was merged into the branch (`dfc65142`, no conflict) and `main`
+  fast-forwarded to it. `check` passed (pack: 357 pixel, 67 vertex
+  shaders; `.got` 0x87c8); PKG of 17:29 in `../PS3-merge/build/ps3_merge/`.
+  Not tested on the PS3. The merge changed 13 files of `source/rasterizer`:
+  `shader_keys.txt` needs a new sweep. Open: begin game's 16-bit
   time is the long's high half on the PS3 (older too; the join in progress
   worked).
   `port/ps3/xbox/{include/pthread.h,posix_ps3.c,ps3_pthread.c,hud_hires_rsx.c}`

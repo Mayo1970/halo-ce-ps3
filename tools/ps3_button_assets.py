@@ -10,8 +10,9 @@ tools/button_assets.py):
 build: renders port/assets/buttons/ps3/*.png at SCALE times the maps'
     bitmaps (720p draws them at 1.5 times), and ps3_buttons.json. Each menu
     icon has a texture a style: cross for A, circle for B, square for X,
-    triangle for Y. The message icons' sheet (hud_msg_icons_sm) has one for
-    both, the stencils the game tints, its A, B, X and Y sprites only.
+    triangle for Y. The message icons' sheets (the menus' hud_msg_icons_sm, the
+    HUD's combined hud_msg_icons) have one for both, the stencils the game
+    tints, their A, B, X and Y sprites only.
     Needs resvg_py, Pillow, NumPy and SciPy.
 embed: the PNGs as the RSX samples them (A8R8G8B8 words, swizzled, every mip
     level), zlib-compressed, in a C header for port/ps3/xbox/hud_hires_rsx.c.
@@ -41,6 +42,19 @@ PS3_RADIUS = 10.0
 XBOX_RADII = (8.659, 12.932)
 # the PS3 circles sit lower than the Xbox's tilted ovals: up by this (texels) to the key labels' middle
 RAISE = 2.7
+
+# the HUD's message icons (the HUD globals' messaging icons, the menus' are hud_msg_icons_sm): its A, B, X and Y
+# sprites, from bitmap 0 of every Xbox map (its CRC); the places of their ovals measured on its alpha, as
+# hud_msg_icons_sm's give theirs
+PS3_SHEETS = [
+    {"name": "hud_msg_icons__0", "tag": "ui\\hud\\bitmaps\\combined\\hud_msg_icons", "bitmap": 0, "width": 128,
+     "height": 128, "crc": 1457896459, "sprites": [
+         {"sequence": 0, "cell": [48, 72, 72, 101], "svg": "a_butn.svg", "place": [1.0787, 1.051, 1.399]},
+         {"sequence": 1, "cell": [0, 72, 24, 102], "svg": "b_butn.svg", "place": [1.08, 1.134, 1.403]},
+         {"sequence": 2, "cell": [100, 40, 124, 70], "svg": "x_butn.svg", "place": [1.0608, 1.418, 1.39]},
+         {"sequence": 3, "cell": [24, 72, 48, 101], "svg": "y_butn.svg", "place": [1.0489, 1.543, 1.714]},
+     ]},
+]
 
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 ElementTree.register_namespace("", SVG_NAMESPACE)
@@ -89,7 +103,10 @@ def build(arguments) -> None:
 
     ASSETS.mkdir(parents=True, exist_ok=True)
     entries = []
-    for xbox in json.loads(XBOX_LIST.read_text())["assets"]:
+    for xbox in json.loads(XBOX_LIST.read_text())["assets"] + PS3_SHEETS:
+        # (the maps' A, B, X and Y bitmaps and the sheets: not the PC's own HUD buttons, the triggers and the sticks)
+        if "sprites" not in xbox and (xbox.get("svg") not in FACES or not xbox["tag"].startswith("ui\\shell\\")):
+            continue
         width, height = xbox["width"], xbox["height"]
         entry = {key: xbox[key] for key in ("name", "tag", "bitmap", "width", "height", "crc")}
         entry["scale"] = SCALE

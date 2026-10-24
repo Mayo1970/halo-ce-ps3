@@ -174,7 +174,8 @@ they apply from the next frame; B goes back without them.
 The button icons (`xbox/hud_hires_rsx.c`) stand for the menus' button
 bitmaps (`a_butn`, `b_butn`, `x_butn`, `y_butn` and the small A and B) and
 for the A, B, X and Y sprites of the message icons (`hud_msg_icons_sm`, the
-"Press A" icons of the menus' and the HUD's text): CROSS for A, CIRCLE for
+"Press A" icons of the menus' text; `combined\hud_msg_icons`, the HUD's
+prompts, which `hud_hires_button_draw` leaves to them on the PS3): CROSS for A, CIRCLE for
 B, SQUARE for X, TRIANGLE for Y. The message icons are stencils, white with
 the symbol cut out, which the game tints as the Xbox's; both styles share
 them. The other message icons (the triggers, the sticks, the black and

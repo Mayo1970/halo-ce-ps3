@@ -494,6 +494,11 @@ boolean hud_hires_button_draw(struct icon_hud_element_definition const *icon,
 	short i;
 	short style, slot;
 
+#ifdef HALO_PS3
+	/* the PS3's BUTTON ICONS (hud_hires_rsx.c) are the message sheets' stencils, which the game tints: the map's own
+	sprites draw them */
+	return FALSE;
+#endif
 	if (!hud_globals || (!config_boolean("display.high_res_hud") &&
 		(!custom_edition_cache_tags_loaded() ||
 		custom_edition_cache_stock_tag(hud_globals->messaging.messaging_icons.index))))
