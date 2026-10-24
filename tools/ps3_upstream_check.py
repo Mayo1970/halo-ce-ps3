@@ -171,6 +171,9 @@ def main():
     if structs:
         report.append("New or changed structs with pointers (HALO_PTR32 if they mirror the Xbox's 32-bit data):")
         report += [f"  {path}: struct {name}: {', '.join(members)}" for path, name, members in structs]
+    rasterizer = git("diff", "--name-only", base, upstream, "--", "source/rasterizer").stdout.split()
+    if rasterizer:
+        report.append(f"Rasterizer: {len(rasterizer)} files changed: port/ps3/shader_keys.txt needs a new sweep")
     if args.build:
         if names:
             report.append("Build: not done, the merge has conflicts")
