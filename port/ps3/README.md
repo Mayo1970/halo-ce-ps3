@@ -73,7 +73,14 @@ Use a shell that runs `build.sh` (Git Bash on Windows) in the root folder:
 | `./build.sh -j12 game` | Compiles the game's 476 units only |
 | `./build.sh clean` | Deletes `build/ps3` |
 | `tools/ps3_tag_swap_check.sh "<maps folder>"` | Runs the map swap on the PC over each map and BSP of an Xbox `maps` folder |
-| `KEYS=3000 SEED=1 tools/ps3_rsx_shader_check.sh` | Checks the RSX microcode on the PC: the game's 67 vertex shaders and `KEYS` random pixel shaders, word for word against `cgcomp -a`, and their results against the NV2A's |
+| `KEYS=3000 SEED=1 tools/ps3_rsx_shader_check.sh` | Checks the RSX microcode on the PC: the game's 67 vertex shaders and `KEYS` random pixel shaders, word for word against `cgcomp -a`, and their results against the NV2A's; and that a cleaned key gives the same program (`CLEAN_KEYS`) |
+| `python tools/ps3_shader_sweep.py --maps "<maps folder>"` | The shader sweep (Windows' Python, after `python configure.py` and `ninja windows`): the Windows build runs each map without a window, draws each BSP whole and makes every object, effect, decal and weapon, and writes the PS3 pixel shader keys of its draws into `shader_keys.txt` |
+| `SHADER_PACK_CHECK=1 ./build.sh -j12 BUILD=<own folder> pkg` | A build whose PS3 translates the shader pack's keys again at its load and logs the programs that differ |
+
+The build translates `shader_keys.txt` and the game's vertex shaders on the
+PC (`tools/ps3_shader_pack.c`) and links them in: the PS3 puts them in its
+caches and does not translate them at a draw. A key the pack lacks is
+translated at its draw and logged as a `shader_keys.txt` line.
 
 The game units use `include/halo_ps3_prefix.h` (32-bit `long`, `HALO_PTR32`,
 the MSVC keywords) and the GCC equivalents of the Linux build's ABI flags,
