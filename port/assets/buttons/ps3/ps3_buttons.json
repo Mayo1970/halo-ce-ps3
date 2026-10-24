@@ -91,6 +91,20 @@
     "hud_msg_icons_sm__0.png",
     "hud_msg_icons_sm__0.png"
    ]
+  },
+  {
+   "name": "hud_msg_icons__0",
+   "tag": "ui\\hud\\bitmaps\\combined\\hud_msg_icons",
+   "bitmap": 0,
+   "width": 128,
+   "height": 128,
+   "crc": 1457896459,
+   "scale": 4,
+   "sprites": 15,
+   "png": [
+    "hud_msg_icons__0.png",
+    "hud_msg_icons__0.png"
+   ]
   }
  ]
 }

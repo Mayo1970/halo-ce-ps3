@@ -26,6 +26,7 @@ whose guards it sets, so their pthread and OpenGL declarations never load. */
 #undef HALO_LINUX_WINSOCK_NAMES_UNDEFINE
 
 #include "ps3_host.h"
+#include "spu_vertices.h"
 
 /* ---------- logging */
 
@@ -131,5 +132,11 @@ unsigned long xgpu_texture_rsx_pitch(const struct xgpu_texture_description *desc
 unsigned long xgpu_texture_rsx_level_bytes(const struct xgpu_texture_description *description, unsigned long level);
 void xgpu_texture_rsx_convert_level(const struct xgpu_texture_description *description, unsigned long level,
 	const unsigned char *source, const DWORD *palette, void *destination);
+/* the same copy of a face (a linear texture's one level) as an SPU task (spu_vertices.c), its source and output left to
+fill; 0 for what an SPU does not convert (P8's palette, YUV's pairs, a linear row past 16 KB). task_run: on the PPE */
+int xgpu_texture_rsx_task(const struct xgpu_texture_description *description, spu_vertices_texture *task);
+void xgpu_texture_rsx_task_run(const spu_vertices_texture *task);
+/* spu_vertices.h's texture hash, here */
+uint64_t xgpu_texture_hash(const unsigned char *bytes, unsigned long size);
 
 #endif

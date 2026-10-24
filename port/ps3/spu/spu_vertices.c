@@ -436,6 +436,284 @@ static void fragment_task(const spu_vertices_task *task)
 	output_put(fragment->output, bytes);
 }
 
+/* ---------- textures (xbox_texture_layout.c's xgpu_texture_rsx_task_run, bit for bit) */
+
+/* the last of an output buffer's put: its 16-byte part, then its tail of up to 15 bytes in naturally aligned pieces (the
+output is 16-aligned where the buffer starts) */
+static void output_put_exact(uint32_t ea, uint32_t bytes)
+{
+	uint32_t whole = bytes & ~15u, offset = whole, piece;
+
+	if (whole)
+		mfc_put(outputs[output_next], ea, whole, TAG_OUTPUT + output_next, 0, 0);
+	for (piece = 8; piece; piece >>= 1)
+	{
+		if ((bytes - offset) & piece)
+		{
+			mfc_put((unsigned char *)outputs[output_next] + offset, ea + offset, piece, TAG_OUTPUT + output_next, 0, 0);
+			offset += piece;
+		}
+	}
+	task_buffers |= 1 << output_next;
+	last_buffer = output_next;
+	output_next ^= 1;
+}
+
+static inline uint32_t byte_at(const unsigned char *p)
+{
+	return p[0];
+}
+
+static inline uint32_t expand5(uint32_t v) { return (v << 3) | (v >> 2); }
+static inline uint32_t expand6(uint32_t v) { return (v << 2) | (v >> 4); }
+static inline uint32_t expand4(uint32_t v) { return v * 0x11; }
+
+static inline uint32_t argb(uint32_t a, uint32_t r, uint32_t g, uint32_t b)
+{
+	return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+/* convert_texel's word for a texel of the kinds a task takes (no palette, no YUV pairs) */
+static uint32_t texel_argb(uint32_t kind, const unsigned char *s)
+{
+	uint32_t v16 = s[0] | (s[1] << 8);
+	uint32_t v32 = v16 | (s[2] << 16) | ((uint32_t)s[3] << 24);
+
+	switch (kind)
+	{
+	case SPU_TEXEL_A8R8G8B8: return v32;
+	case SPU_TEXEL_X8R8G8B8: return v32 | 0xff000000u;
+	case SPU_TEXEL_R5G6B5: return argb(255, expand5(v16 >> 11), expand6((v16 >> 5) & 0x3f), expand5(v16 & 0x1f));
+	case SPU_TEXEL_A1R5G5B5: return argb((v16 & 0x8000) ? 255 : 0, expand5((v16 >> 10) & 0x1f), expand5((v16 >> 5) & 0x1f), expand5(v16 & 0x1f));
+	case SPU_TEXEL_X1R5G5B5: return argb(255, expand5((v16 >> 10) & 0x1f), expand5((v16 >> 5) & 0x1f), expand5(v16 & 0x1f));
+	case SPU_TEXEL_A4R4G4B4: return argb(expand4(v16 >> 12), expand4((v16 >> 8) & 0xf), expand4((v16 >> 4) & 0xf), expand4(v16 & 0xf));
+	case SPU_TEXEL_L8: return argb(255, s[0], s[0], s[0]);
+	case SPU_TEXEL_AL8: return argb(s[0], s[0], s[0], s[0]);
+	case SPU_TEXEL_A8: return argb(s[0], 255, 255, 255);
+	case SPU_TEXEL_A8L8: return argb(s[1], s[0], s[0], s[0]);
+	case SPU_TEXEL_P8: return argb(255, s[0], s[0], s[0]);
+	case SPU_TEXEL_G8B8: return argb(255, s[0], s[1], 0);
+	case SPU_TEXEL_R8B8: return argb(255, s[1], 0, s[0]);
+	case SPU_TEXEL_R6G5B5: return argb(255, expand6(v16 >> 10), expand5((v16 >> 5) & 0x1f), expand5(v16 & 0x1f));
+	case SPU_TEXEL_L16: return argb(255, s[1], s[1], s[1]);
+	case SPU_TEXEL_V16U16: return argb(255, s[1], s[3], 0);
+	case SPU_TEXEL_A8B8G8R8: return argb(s[3], s[0], s[1], s[2]);
+	case SPU_TEXEL_B8G8R8A8: return argb(s[0], s[1], s[2], s[3]);
+	case SPU_TEXEL_R8G8B8A8: return argb(s[0], s[3], s[2], s[1]);
+	case SPU_TEXEL_R5G5B5A1: return argb((v16 & 1) ? 255 : 0, expand5(v16 >> 11), expand5((v16 >> 6) & 0x1f), expand5((v16 >> 1) & 0x1f));
+	case SPU_TEXEL_R4G4B4A4: return argb(expand4(v16 & 0xf), expand4(v16 >> 12), expand4((v16 >> 8) & 0xf), expand4((v16 >> 4) & 0xf));
+	case SPU_TEXEL_D24S8: return argb(255, s[3], s[3], s[3]);
+	case SPU_TEXEL_D16: return argb(255, s[1], s[1], s[1]);
+	default: return v32;
+	}
+}
+
+/* n units from in to out; in and out 16-aligned, n whole quadwords of input for the vector forms (the rest is never
+read: a buffer's last quadword holds the tail) */
+static void units_convert(const spu_vertices_texture *task, const unsigned char *in, unsigned char *out, uint32_t n)
+{
+	static const vec_uchar16 swap16 = { 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14 };
+	static const vec_uchar16 swap32 = { 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12 };
+	uint32_t bytes = n * task->in_bytes, quads = (bytes + 15) / 16, quad, unit;
+	const vec_uchar16 *source = (const vec_uchar16 *)in;
+	vec_uchar16 *destination = (vec_uchar16 *)out;
+
+	if (task->conversion == SPU_TEXTURE_COPY)
+	{
+		for (quad = 0; quad < quads; quad++)
+			destination[quad] = source[quad];
+		return;
+	}
+	if (task->conversion == SPU_TEXTURE_SWAP16)
+	{
+		for (quad = 0; quad < quads; quad++)
+			destination[quad] = spu_shuffle(source[quad], source[quad], swap16);
+		return;
+	}
+	/* the Xbox's little-endian words as A8R8G8B8 words, alpha one for X8R8G8B8 */
+	if (task->in_bytes == 4 && (task->texel_kind == SPU_TEXEL_A8R8G8B8 || task->texel_kind == SPU_TEXEL_X8R8G8B8))
+	{
+		vec_uint4 alpha = spu_splats(task->texel_kind == SPU_TEXEL_X8R8G8B8 ? 0xff000000u : 0u);
+
+		for (quad = 0; quad < quads; quad++)
+			destination[quad] = (vec_uchar16)spu_or((vec_uint4)spu_shuffle(source[quad], source[quad], swap32), alpha);
+		return;
+	}
+	for (unit = 0; unit < n; unit++)
+		((uint32_t *)out)[unit] = texel_argb(task->texel_kind, in + unit * task->in_bytes);
+}
+
+/* a stream of units in buffers' worth: each fetch runs while the one before converts */
+static void texture_stream(const spu_vertices_texture *task, uint32_t source, uint32_t output, uint32_t units)
+{
+	/* units a pass takes: a whole number of quadwords in and out, both within a buffer */
+	uint32_t per = (FETCH_BYTES & ~15u) / task->in_bytes, out_per = sizeof(outputs[0]) / task->out_bytes;
+	uint32_t first = 0, k = 0;
+	const unsigned char *data;
+
+	if (out_per < per)
+		per = out_per;
+	per &= ~15u;
+	data = fetch_start(k, source, (units < per ? units : per) * task->in_bytes);
+	while (first < units)
+	{
+		uint32_t n = units - first < per ? units - first : per, next_first = first + n;
+		const unsigned char *next = NULL;
+		unsigned char *out = (unsigned char *)output_take();
+
+		if (next_first < units)
+		{
+			next = fetch_start(k ^ 1, source + next_first * task->in_bytes,
+				(units - next_first < per ? units - next_first : per) * task->in_bytes);
+		}
+		echo.input_wait_ticks += timed_wait(1 << (TAG_INPUT + k));
+		units_convert(task, data, out, n);
+		output_put_exact(output + first * task->out_bytes, n * task->out_bytes);
+		data = next;
+		k ^= 1;
+		first = next_first;
+	}
+}
+
+/* a linear level's rows: each row's units, then zero to its pitch, a row a buffer */
+static void texture_rows(const spu_vertices_texture *task)
+{
+	uint32_t row, k = 0, row_bytes = task->units * task->in_bytes, data_bytes = task->units * task->out_bytes;
+	const unsigned char *data = fetch_start(k, task->source, row_bytes);
+
+	for (row = 0; row < task->rows; row++)
+	{
+		const unsigned char *next = NULL;
+		unsigned char *out = (unsigned char *)output_take();
+		uint32_t index;
+
+		if (row + 1 < task->rows)
+			next = fetch_start(k ^ 1, task->source + (row + 1) * task->source_pitch, row_bytes);
+		echo.input_wait_ticks += timed_wait(1 << (TAG_INPUT + k));
+		units_convert(task, data, out, task->units);
+		for (index = data_bytes; index < task->output_pitch; index++)
+			out[index] = 0;
+		output_put(task->output + row * task->output_pitch, task->output_pitch);
+		data = next;
+		k ^= 1;
+	}
+}
+
+static void texture_task(const spu_vertices_task *task)
+{
+	const spu_vertices_texture *texture = (const spu_vertices_texture *)task;
+
+	if (!texture->units || !texture->in_bytes || !texture->out_bytes || (texture->source & 15) || (texture->output & 15))
+		return;
+	if (texture->rows)
+	{
+		if (texture->output_pitch > sizeof(outputs[0]) || (texture->output_pitch & 15) ||
+			texture->units * texture->in_bytes > FETCH_BYTES || texture->units * texture->out_bytes > texture->output_pitch)
+			return;
+		texture_rows(texture);
+		echo.texture_bytes += texture->rows * texture->output_pitch;
+	}
+	else
+	{
+		texture_stream(texture, texture->source, texture->output, texture->units);
+		echo.texture_bytes += texture->units * texture->out_bytes;
+	}
+}
+
+/* x * the FNV prime, each lane: x << 24 plus x * 0x193 from its halves' products (mod 2^32) */
+static inline vec_uint4 times_prime(vec_uint4 x)
+{
+	static const vec_ushort8 low = { 0, 0x193, 0, 0x193, 0, 0x193, 0, 0x193 };
+
+	return spu_add(spu_sl(x, 24), spu_add(spu_mulo((vec_ushort8)x, low), (vec_uint4)spu_mulh((vec_short8)x,
+		(vec_short8)low)));
+}
+
+/* texture_hash: 64 bytes at a time into the 16 lanes, the rest a word and a byte at a time; the result's 16 bytes out */
+static void hash_task(const spu_vertices_task *task)
+{
+	const spu_vertices_texture *hash = (const spu_vertices_texture *)task;
+	uint32_t size = hash->units, per = FETCH_BYTES & ~63u, first = 0, k = 0, index;
+	vec_uint4 lanes[4];
+	uint32_t words[TEXTURE_HASH_LANES];
+	uint64_t result;
+	const unsigned char *data;
+	uint32_t *out;
+
+	if ((hash->source & 15) || (hash->output & 15))
+		return;
+	for (index = 0; index < 4; index++)
+	{
+		vec_uint4 lane = { 4 * index, 4 * index + 1, 4 * index + 2, 4 * index + 3 };
+
+		lanes[index] = spu_xor(spu_splats(TEXTURE_HASH_BASIS), lane);
+	}
+	data = size ? fetch_start(k, hash->source, size < per ? size : per) : NULL;
+	while (first < size)
+	{
+		uint32_t n = size - first < per ? size - first : per, next_first = first + n, groups = n / 64, group;
+		const unsigned char *next = NULL;
+		const vec_uint4 *quads = (const vec_uint4 *)data;
+
+		if (next_first < size)
+			next = fetch_start(k ^ 1, hash->source + next_first, size - next_first < per ? size - next_first : per);
+		echo.input_wait_ticks += timed_wait(1 << (TAG_INPUT + k));
+		for (group = 0; group < groups; group++, quads += 4)
+		{
+			lanes[0] = times_prime(spu_xor(lanes[0], quads[0]));
+			lanes[1] = times_prime(spu_xor(lanes[1], quads[1]));
+			lanes[2] = times_prime(spu_xor(lanes[2], quads[2]));
+			lanes[3] = times_prime(spu_xor(lanes[3], quads[3]));
+		}
+		/* (only the last pass has a part of 64 bytes) */
+		if (n & 63)
+		{
+			uint32_t word, words_left = (n & 63) / 4, byte;
+			const unsigned char *rest = data + groups * 64;
+
+			for (index = 0; index < 4; index++)
+			{
+				words[4 * index] = spu_extract(lanes[index], 0);
+				words[4 * index + 1] = spu_extract(lanes[index], 1);
+				words[4 * index + 2] = spu_extract(lanes[index], 2);
+				words[4 * index + 3] = spu_extract(lanes[index], 3);
+			}
+			for (word = 0; word < words_left; word++)
+			{
+				uint32_t value = byte_at(rest + 4 * word) << 24 | byte_at(rest + 4 * word + 1) << 16 |
+					byte_at(rest + 4 * word + 2) << 8 | byte_at(rest + 4 * word + 3);
+
+				words[word] = (words[word] ^ value) * TEXTURE_HASH_PRIME;
+			}
+			for (byte = words_left * 4; byte < (n & 63); byte++)
+				words[0] = (words[0] ^ byte_at(rest + byte)) * TEXTURE_HASH_PRIME;
+			for (index = 0; index < 4; index++)
+			{
+				vec_uint4 lane = { words[4 * index], words[4 * index + 1], words[4 * index + 2], words[4 * index + 3] };
+
+				lanes[index] = lane;
+			}
+		}
+		data = next;
+		k ^= 1;
+		first = next_first;
+	}
+	for (index = 0; index < 4; index++)
+	{
+		words[4 * index] = spu_extract(lanes[index], 0);
+		words[4 * index + 1] = spu_extract(lanes[index], 1);
+		words[4 * index + 2] = spu_extract(lanes[index], 2);
+		words[4 * index + 3] = spu_extract(lanes[index], 3);
+	}
+	result = texture_hash_finish(words, size);
+	out = (uint32_t *)output_take();
+	out[0] = (uint32_t)(result >> 32);
+	out[1] = (uint32_t)result;
+	out[2] = out[3] = 0;
+	output_put(hash->output, 16);
+	echo.hash_bytes += size;
+}
+
 /* each task's tail goes out behind its output (task_publish), while the next task runs */
 static uint32_t run_tasks(uint32_t tail, uint32_t head)
 {
@@ -462,6 +740,10 @@ static uint32_t run_tasks(uint32_t tail, uint32_t head)
 				indices_task(&tasks[task]);
 			else if (tasks[task].kind == SPU_VERTICES_FRAGMENT)
 				fragment_task(&tasks[task]);
+			else if (tasks[task].kind == SPU_VERTICES_TEXTURE)
+				texture_task(&tasks[task]);
+			else if (tasks[task].kind == SPU_VERTICES_HASH)
+				hash_task(&tasks[task]);
 			echo.busy_ticks += start - spu_read_decrementer();
 			echo.stage = 0;
 			task_publish(++tail);

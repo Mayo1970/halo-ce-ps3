@@ -305,6 +305,8 @@ static struct
 {
 	unsigned long draws, skipped_program, skipped_target, skipped_scratch, skipped_scissor;
 	unsigned long texture_uploads, texture_bytes;
+	/* of those bytes, the SPU's to convert; the bytes of the texture checks the SPU hashed */
+	unsigned long texture_spu_bytes, texture_hashed_spu;
 	/* vertex elements converted into the vertex cache and at draws; copies the cache had no room for */
 	unsigned long cached_elements, converted_elements, cache_refused;
 	/* the elements converted, by type (D3DVSDT_*) */
@@ -909,24 +911,36 @@ static unsigned long texture_bucket_index(DWORD data, DWORD format_word, DWORD s
 	return ((data >> 7) ^ (format_word * 2654435761UL) ^ size_word) % TEXTURE_BUCKET_COUNT;
 }
 
-/* four lanes, so the multiplies overlap on the in-order PPE */
-static __uint64 hash_bytes(const unsigned char *bytes, unsigned long size)
-{
-	__uint64 lanes[4] = { 0xcbf29ce484222325ULL, 0x84222325cbf29ce4ULL, 0x9e3779b97f4a7c15ULL, 0x7f4a7c159e3779b9ULL };
-	unsigned long index, words = size / 8;
-	const __uint64 *data = (const __uint64 *)bytes;
+static BOOL spu_address(const void *address);
 
-	for (index = 0; index + 4 <= words; index += 4)
+/* the bytes from which a texture's hash goes to the SPU: smaller ones are quicker here than a wait for its tasks */
+#define TEXTURE_HASH_SPU_BYTES (256 * 1024)
+
+/* spu_vertices.h's texture hash: an SPU task, waited for, or here */
+static __uint64 texture_content_hash(const unsigned char *source, unsigned long size)
+{
+	static uint32_t result[4] __attribute__((aligned(16)));
+	spu_vertices_task *task = NULL;
+
+	if (size >= TEXTURE_HASH_SPU_BYTES && size < 0x80000000UL && !((uintptr_t)source & 15) && spu_address(source) &&
+		spu_address(result) && (task = ps3_spu_vertices_task()) != NULL)
 	{
-		lanes[0] = (lanes[0] ^ data[index]) * 0x100000001b3ULL;
-		lanes[1] = (lanes[1] ^ data[index + 1]) * 0x100000001b3ULL;
-		lanes[2] = (lanes[2] ^ data[index + 2]) * 0x100000001b3ULL;
-		lanes[3] = (lanes[3] ^ data[index + 3]) * 0x100000001b3ULL;
+		spu_vertices_texture *hash = (spu_vertices_texture *)task;
+
+		memset(hash, 0, sizeof(*hash));
+		hash->kind = SPU_VERTICES_HASH;
+		hash->source = (uint32_t)(uintptr_t)source;
+		hash->output = (uint32_t)(uintptr_t)result;
+		hash->units = (uint32_t)size;
+		ps3_spu_vertices_commit();
+		ps3_spu_vertices_wait();
+		statistics.texture_hashed_spu += size;
+		return (__uint64)result[0] << 32 | result[1];
 	}
-	for (index = index * 8; index < size; index++)
-		lanes[0] = (lanes[0] ^ bytes[index]) * 0x100000001b3ULL;
-	return lanes[0] ^ (lanes[1] * 3) ^ (lanes[2] * 5) ^ (lanes[3] * 7);
+	return xgpu_texture_hash(source, size);
 }
+
+static BOOL spu_address(const void *address);
 
 static void texture_upload(struct texture_entry *entry, const unsigned char *source, const DWORD *palette)
 {
@@ -937,6 +951,7 @@ static void texture_upload(struct texture_entry *entry, const unsigned char *sou
 	unsigned long face_bytes = 0, face, level, offset, remap;
 	unsigned char *memory;
 	uint32_t memory_offset;
+	spu_vertices_texture texture_task;
 
 	for (level = 0; level < levels; level++)
 		face_bytes += xgpu_texture_rsx_level_bytes(description, level);
@@ -952,11 +967,26 @@ static void texture_upload(struct texture_entry *entry, const unsigned char *sou
 	}
 	for (face = 0; face < faces; face++)
 	{
+		const unsigned char *face_source = source + face * source_face;
+		unsigned char *face_memory = memory + face * face_bytes;
+		spu_vertices_task *task = NULL;
+
+		/* an SPU task, which the RSX reads after (ps3_gpu.c waits before each flush); or here */
+		if (!palette && !((uintptr_t)face_source & 15) && spu_address(face_source) && spu_address(face_memory) &&
+			xgpu_texture_rsx_task(description, &texture_task) &&
+			(task = ps3_spu_vertices_task()) != NULL)
+		{
+			*(spu_vertices_texture *)task = texture_task;
+			((spu_vertices_texture *)task)->source = (uint32_t)(uintptr_t)face_source;
+			((spu_vertices_texture *)task)->output = (uint32_t)(uintptr_t)face_memory;
+			ps3_spu_vertices_commit();
+			statistics.texture_spu_bytes += face_bytes;
+			continue;
+		}
 		for (level = 0, offset = 0; level < levels; level++)
 		{
-			xgpu_texture_rsx_convert_level(description, level,
-				source + face * source_face + xgpu_texture_level_offset(description, level), palette,
-				memory + face * face_bytes + offset);
+			xgpu_texture_rsx_convert_level(description, level, face_source + xgpu_texture_level_offset(description, level),
+				palette, face_memory + offset);
 			offset += xgpu_texture_rsx_level_bytes(description, level);
 		}
 	}
@@ -1006,7 +1036,7 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	unsigned long size;
 	__uint64 hash;
 	uint64_t span;
-	BOOL cached;
+	BOOL cached, changed;
 	int style = hud_hires_rsx_style();
 
 	for (entry = *bucket; entry; entry = entry->next)
@@ -1047,12 +1077,22 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	if (cached && entry->memory && entry->checked && !fresh && entry->hires_style == style)
 		return entry;
 	span = ps3_timer_now();
-	hash = hash_bytes(source, size) ^ palette_hash;
+	/* the texture cache's texels change only at its loads there (fresh), which upload without a hash; the others are
+	hashed at each check */
+	if (cached)
+	{
+		changed = !entry->memory || !entry->checked || fresh;
+	}
+	else
+	{
+		hash = texture_content_hash(source, size) ^ palette_hash;
+		changed = !entry->memory || hash != entry->content_hash;
+		entry->content_hash = hash;
+	}
 	span = ps3_timer_add(_ps3_timer_texture_hash, span);
-	if (!entry->memory || hash != entry->content_hash)
+	if (changed)
 	{
 		texture_upload(entry, source, palette);
-		entry->content_hash = hash;
 		entry->hires_style = -2;
 		ps3_timer_add(_ps3_timer_texture_upload, span);
 	}
@@ -2249,6 +2289,19 @@ static void vertices_task_run(const spu_vertices_task *task)
 	else if (task->kind == SPU_VERTICES_FRAGMENT)
 	{
 		ps3_gpu_fragment_task_run(task);
+	}
+	else if (task->kind == SPU_VERTICES_TEXTURE)
+	{
+		xgpu_texture_rsx_task_run((const spu_vertices_texture *)task);
+	}
+	else if (task->kind == SPU_VERTICES_HASH)
+	{
+		const spu_vertices_texture *hash = (const spu_vertices_texture *)task;
+		uint32_t *out = (uint32_t *)(uintptr_t)hash->output;
+		uint64_t result = xgpu_texture_hash((const unsigned char *)(uintptr_t)hash->source, hash->units);
+
+		out[0] = (uint32_t)(result >> 32);
+		out[1] = (uint32_t)result;
 	}
 }
 
@@ -4378,11 +4431,12 @@ static void present_run(void)
 
 		textures_measure(&texture_count, &texture_bytes, &unused_bytes);
 		platform_log("Direct3D: frame %lu: %lu draws; skipped %lu (program), %lu (target), %lu (scratch), "
-			"%lu (viewport); %lu texture uploads, %lu KB; %lu pixel shaders (%lu translated at a draw); %lu textures "
-			"in RSX memory, %lu KB (%lu KB not drawn for %lu frames)", device.frame, statistics.draws,
-			statistics.skipped_program, statistics.skipped_target, statistics.skipped_scratch, statistics.skipped_scissor,
-			statistics.texture_uploads, statistics.texture_bytes / 1024, fragment_program_count,
-			fragment_translated_count, texture_count,
+			"%lu (viewport); %lu texture uploads, %lu KB (%lu KB by the SPU; %lu KB of checks hashed by it); %lu pixel "
+			"shaders (%lu translated at a draw); %lu textures in RSX memory, %lu KB (%lu KB not drawn for %lu frames)",
+			device.frame, statistics.draws, statistics.skipped_program, statistics.skipped_target,
+			statistics.skipped_scratch, statistics.skipped_scissor, statistics.texture_uploads,
+			statistics.texture_bytes / 1024, statistics.texture_spu_bytes / 1024, statistics.texture_hashed_spu / 1024,
+			fragment_program_count, fragment_translated_count, texture_count,
 			texture_bytes / 1024, unused_bytes / 1024, (unsigned long)STATISTICS_FRAMES);
 		platform_log("Direct3D: frame %lu: vertex elements converted: %lu into the cache, %lu at draws; vertex "
 			"cache %lu arrays, %lu of %lu KB, %lu refused", device.frame, statistics.cached_elements,

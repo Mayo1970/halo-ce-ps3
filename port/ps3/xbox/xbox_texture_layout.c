@@ -403,3 +403,118 @@ void xgpu_texture_rsx_convert_level(const struct xgpu_texture_description *descr
 		texels[index] = convert_texel(information.kind, texel, palette, 0, texel);
 	}
 }
+
+/* ---------- the copy as an SPU task (spu_vertices.c does it, task_run here when the SPU is off) */
+
+typedef char texel_kinds_check[(int)_texel_a8r8g8b8 == SPU_TEXEL_A8R8G8B8 && (int)_texel_x8r8g8b8 == SPU_TEXEL_X8R8G8B8 &&
+	(int)_texel_r5g6b5 == SPU_TEXEL_R5G6B5 && (int)_texel_a4r4g4b4 == SPU_TEXEL_A4R4G4B4 && (int)_texel_l8 == SPU_TEXEL_L8 &&
+	(int)_texel_a8l8 == SPU_TEXEL_A8L8 && (int)_texel_p8 == SPU_TEXEL_P8 && (int)_texel_g8b8 == SPU_TEXEL_G8B8 &&
+	(int)_texel_r6g5b5 == SPU_TEXEL_R6G5B5 && (int)_texel_l16 == SPU_TEXEL_L16 && (int)_texel_v16u16 == SPU_TEXEL_V16U16 &&
+	(int)_texel_a8b8g8r8 == SPU_TEXEL_A8B8G8R8 && (int)_texel_r8g8b8a8 == SPU_TEXEL_R8G8B8A8 &&
+	(int)_texel_r4g4b4a4 == SPU_TEXEL_R4G4B4A4 && (int)_texel_yuy2 == SPU_TEXEL_YUY2 && (int)_texel_uyvy == SPU_TEXEL_UYVY &&
+	(int)_texel_d24s8 == SPU_TEXEL_D24S8 && (int)_texel_d16 == SPU_TEXEL_D16 && (int)_texel_dxt5 == SPU_TEXEL_D16 + 3 ? 1 : -1];
+
+/* the most bytes of a linear row's output that the SPU takes at once */
+#define TASK_ROW_BYTES 16384
+
+int xgpu_texture_rsx_task(const struct xgpu_texture_description *description, spu_vertices_texture *task)
+{
+	struct format_information information = format_information(description->format);
+	struct rsx_native native = rsx_native(information.kind);
+	unsigned long level, units = 0;
+
+	memset(task, 0, sizeof(*task));
+	task->kind = SPU_VERTICES_TEXTURE;
+	task->texel_kind = information.kind;
+	if (description->compressed)
+	{
+		/* (the level bytes as they are, a linear one's too) */
+		for (level = 0; level < description->levels; level++)
+			units += level_bytes(description, level);
+		task->conversion = SPU_TEXTURE_COPY;
+		task->in_bytes = task->out_bytes = 1;
+		task->units = (uint32_t)units;
+		return 1;
+	}
+	if (information.kind == _texel_p8 || information.kind == _texel_yuy2 || information.kind == _texel_uyvy)
+		return 0;
+	task->conversion = native.format ? (native.swap ? SPU_TEXTURE_SWAP16 : SPU_TEXTURE_COPY) : SPU_TEXTURE_ARGB;
+	task->in_bytes = native.format && !native.swap ? 1 : information.bytes;
+	task->out_bytes = native.format && !native.swap ? 1 : native.bytes;
+	if (description->linear)
+	{
+		task->rows = (uint32_t)description->height;
+		task->units = (uint32_t)(description->width * information.bytes / task->in_bytes);
+		task->source_pitch = (uint32_t)description->pitch;
+		task->output_pitch = (uint32_t)xgpu_texture_rsx_pitch(description, 0);
+		return task->output_pitch <= TASK_ROW_BYTES && task->units * task->in_bytes <= TASK_ROW_BYTES - 32;
+	}
+	for (level = 0; level < description->levels; level++)
+	{
+		units += level_dimension(description->width, level) * level_dimension(description->height, level) *
+			level_dimension(description->depth, level);
+	}
+	task->units = (uint32_t)(units * information.bytes / task->in_bytes);
+	return 1;
+}
+
+/* a unit's output: the bytes as they are, swapped, or convert_texel's word */
+static void task_unit(const spu_vertices_texture *task, const unsigned char *source, unsigned char *destination)
+{
+	DWORD texel;
+
+	switch (task->conversion)
+	{
+	case SPU_TEXTURE_COPY:
+		destination[0] = source[0];
+		break;
+	case SPU_TEXTURE_SWAP16:
+		destination[0] = source[1];
+		destination[1] = source[0];
+		break;
+	default:
+		texel = convert_texel(task->texel_kind, source, NULL, 0, source);
+		destination[0] = (unsigned char)(texel >> 24);
+		destination[1] = (unsigned char)(texel >> 16);
+		destination[2] = (unsigned char)(texel >> 8);
+		destination[3] = (unsigned char)texel;
+		break;
+	}
+}
+
+void xgpu_texture_rsx_task_run(const spu_vertices_texture *task)
+{
+	const unsigned char *source = (const unsigned char *)(uintptr_t)task->source;
+	unsigned char *output = (unsigned char *)(uintptr_t)task->output;
+	unsigned long rows = task->rows ? task->rows : 1, row, unit;
+
+	for (row = 0; row < rows; row++)
+	{
+		const unsigned char *in = source + row * task->source_pitch;
+		unsigned char *out = output + row * task->output_pitch;
+
+		for (unit = 0; unit < task->units; unit++)
+			task_unit(task, in + unit * task->in_bytes, out + unit * task->out_bytes);
+		if (task->rows)
+			memset(out + task->units * task->out_bytes, 0, task->output_pitch - task->units * task->out_bytes);
+	}
+}
+
+uint64_t xgpu_texture_hash(const unsigned char *bytes, unsigned long size)
+{
+	uint32_t lanes[TEXTURE_HASH_LANES];
+	unsigned long index, words = size / 4;
+
+	for (index = 0; index < TEXTURE_HASH_LANES; index++)
+		lanes[index] = TEXTURE_HASH_BASIS ^ (uint32_t)index;
+	for (index = 0; index < words; index++)
+	{
+		const unsigned char *word = bytes + index * 4;
+
+		lanes[index & 15] = (lanes[index & 15] ^ ((uint32_t)word[0] << 24 | (uint32_t)word[1] << 16 |
+			(uint32_t)word[2] << 8 | word[3])) * TEXTURE_HASH_PRIME;
+	}
+	for (index = words * 4; index < size; index++)
+		lanes[0] = (lanes[0] ^ bytes[index]) * TEXTURE_HASH_PRIME;
+	return texture_hash_finish(lanes, (uint32_t)size);
+}
