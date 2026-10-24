@@ -43,6 +43,10 @@ upstream halo-ce-universal copy of source/rasterizer/xbox/rasterizer_xbox_transp
 #include "rasterizer/xbox/rasterizer_xbox_plasma_energy.h"
 #include "rasterizer/xbox/rasterizer_xbox_water.h"
 #include "rasterizer/xbox/shader_transparent_chicago_preprocessor.h"
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+#include "ps3_vmx.h" /* port: port/ps3/src/ps3_vmx.c */
+#endif
 
 /* ---------- constants */
 
@@ -3530,6 +3534,12 @@ static boolean transparent_model_world_bounds(
 	byte *data = NULL;
 	long i, k, stride;
 	boolean valid = TRUE;
+#ifdef HALO_PS3
+	/* port: the loop's answer in exact VMX (ps3_vmx_model_bounds); one call in 16 also runs the loop, as a check */
+	static unsigned long vmx_calls = 0;
+	boolean vmx_valid = FALSE, vmx_used = FALSE;
+	real vmx_bounds[2][3];
+#endif
 
 	if (!group->shader || !shader_type_is_transparent(group->shader->base.type) ||
 		!shader_type_is_valid_for_model(group->shader->base.type) ||
@@ -3553,6 +3563,24 @@ static boolean transparent_model_world_bounds(
 	{
 		valid = FALSE;
 	}
+#ifdef HALO_PS3
+	else if (ps3_vmx_exact() && stride == (vertices->type == _rasterizer_vertex_type_model_compressed ?
+		sizeof(struct model_vertex_compressed) : sizeof(struct model_vertex_uncompressed)))
+	{
+		vmx_valid = ps3_vmx_model_bounds(data, (uint32_t)vertices->count, (uint32_t)stride,
+			vertices->type == _rasterizer_vertex_type_model_compressed, (float const *)matrices,
+			(uint32_t)group->node_matrix_count, &vmx_bounds[0][0]);
+		vmx_used = TRUE;
+		ps3_timer_counts[_ps3_timer_bounds_vmx]++; /* port: (the timer build) */
+		if (++vmx_calls & 15)
+		{
+			IDirect3DVertexBuffer8_Unlock(vertices->hardware_format);
+			if (vmx_valid)
+				csmemcpy(bounds, vmx_bounds, sizeof(vmx_bounds));
+			return vmx_valid;
+		}
+	}
+#endif
 	for (i = 0; valid && i < vertices->count; ++i)
 	{
 		real_point3d const *point = (real_point3d const *)(data + i * stride);
@@ -3627,6 +3655,15 @@ static boolean transparent_model_world_bounds(
 		}
 	}
 	IDirect3DVertexBuffer8_Unlock(vertices->hardware_format);
+#ifdef HALO_PS3
+	/* port: (the check: the loop's answer is taken) */
+	if (vmx_used)
+	{
+		ps3_timer_counts[_ps3_timer_bounds_checked]++;
+		if (vmx_valid != valid || (valid && memcmp(vmx_bounds, bounds, sizeof(vmx_bounds))))
+			ps3_timer_counts[_ps3_timer_bounds_apart]++;
+	}
+#endif
 	return valid;
 }
 

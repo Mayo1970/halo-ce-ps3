@@ -220,6 +220,39 @@ static int elapsed(unsigned long since, unsigned long time)
 	return (unsigned int)(p2p_now() - since) >= (unsigned int)time;
 }
 
+#ifdef HALO_PS3
+/* port: the browser's listings by what became of them, logged each LOBBY_LOG_INTERVAL ms while browsing (the PS3 showed
+no game where the PC showed them) */
+#define LOBBY_LOG_INTERVAL 5000
+
+static struct
+{
+	unsigned long heard, retained, repeated, queue_full, unreadable, newer, other_version, key, out_of_time;
+	unsigned long out_of_time_retained, signature, taken;
+	int last_version;
+	long last_difference;
+	unsigned long logged_time;
+} lobby_log;
+
+static void lobby_log_report(void)
+{
+	int ready = 0, carrying = 0, index, games = 0;
+
+	for (index = 0; index < MAXIMUM_GAMES; index++)
+		games += lobby.games[index].used;
+	p2p_signal_lobby_brokers(&ready, &carrying);
+	platform_log("Internet play: the server browser: brokers %d ready (%d carry it); listings heard %lu (%lu the "
+		"brokers' kept copies), again %lu, the queue full %lu; unreadable %lu, newer %lu, other version %lu (last %d), "
+		"wrong key %lu, out of time %lu (%lu kept copies; last %ld s from this clock), bad signature %lu, taken %lu; "
+		"games %d", ready, carrying, lobby_log.heard, lobby_log.retained, lobby_log.repeated, lobby_log.queue_full,
+		lobby_log.unreadable, lobby_log.newer, lobby_log.other_version, lobby_log.last_version, lobby_log.key,
+		lobby_log.out_of_time, lobby_log.out_of_time_retained, lobby_log.last_difference, lobby_log.signature,
+		lobby_log.taken, games);
+	memset(&lobby_log, 0, sizeof(lobby_log));
+	lobby_log.logged_time = p2p_now();
+}
+#endif
+
 /* printable ASCII, as the menus' font has it (others: '?'), cut to size */
 static void sanitize(char *destination, int size, const char *source, int source_size)
 {
@@ -571,20 +604,37 @@ void p2p_lobby_slot_heard(const char *hash_text, const unsigned char *payload, i
 	/* (an emptied slot is no news: a wipe is not a delete) */
 	if (!lobby.browsing || size < MINIMUM_LISTING_SIZE || size > MAXIMUM_LISTING_SIZE)
 		return;
+#ifdef HALO_PS3
+	lobby_log.heard++; /* port: (lobby_log) */
+	lobby_log.retained += retained != 0;
+#endif
 	/* the same listing again: heard, no work */
 	game = find_game(key_hash);
 	if (game && game->payload_size == size && !memcmp(game->payload, payload, (size_t)size))
 	{
 		game->heard_time = p2p_now();
+#ifdef HALO_PS3
+		lobby_log.repeated++; /* port: (lobby_log) */
+#endif
 		return;
 	}
 	for (index = 0; index < lobby.queue_count; index++)
 	{
 		if (lobby.queue[index].size == size && !memcmp(lobby.queue[index].payload, payload, (size_t)size))
+		{
+#ifdef HALO_PS3
+			lobby_log.repeated++; /* port: (lobby_log) */
+#endif
 			return;
+		}
 	}
 	if (lobby.queue_count == MAXIMUM_QUEUED)
+	{
+#ifdef HALO_PS3
+		lobby_log.queue_full++; /* port: (lobby_log) */
+#endif
 		return;
+	}
 	queued = &lobby.queue[lobby.queue_count++];
 	memcpy(queued->key_hash, key_hash, P2P_KEY_HASH_SIZE);
 	memcpy(queued->payload, payload, (size_t)size);
@@ -754,13 +804,36 @@ static void update_browsing(void)
 			listing.version > HALO_PORT_NETWORK_VERSION && !(listing.flags & _listing_closed))
 		{
 			newer_heard(queued.key_hash);
+#ifdef HALO_PS3
+			lobby_log.newer++; /* port: (lobby_log) */
+#endif
 			continue;
 		}
+#ifdef HALO_PS3
+		/* port: the same tests in the same order, one at a time, each counted (lobby_log) */
+		if (!listing_read(queued.payload, queued.size, &listing))
+		{
+			lobby_log.unreadable++;
+			continue;
+		}
+		if (listing.version != HALO_PORT_NETWORK_VERSION)
+		{
+			lobby_log.other_version++;
+			lobby_log.last_version = listing.version;
+			continue;
+		}
+		if (!signing_key_hash(listing.key, key_hash) || memcmp(key_hash, queued.key_hash, P2P_KEY_HASH_SIZE))
+		{
+			lobby_log.key++;
+			continue;
+		}
+#else
 		if (!listing_read(queued.payload, queued.size, &listing) || listing.version != HALO_PORT_NETWORK_VERSION ||
 			!signing_key_hash(listing.key, key_hash) || memcmp(key_hash, queued.key_hash, P2P_KEY_HASH_SIZE))
 		{
 			continue;
 		}
+#endif
 		/* a slot's retained copy: only one of about now (a host that died
 		left it, and nothing cleared it); a live one: not one long gone,
 		published again by someone who kept it */
@@ -769,12 +842,26 @@ static void update_browsing(void)
 			long window = queued.retained ? RETAINED_WINDOW : LIVE_WINDOW;
 
 			if (difference > window || difference < -window)
+			{
+#ifdef HALO_PS3
+				lobby_log.out_of_time++; /* port: (lobby_log) */
+				lobby_log.out_of_time_retained += queued.retained != 0;
+				lobby_log.last_difference = difference;
+#endif
 				continue;
+			}
 		}
 		/* (the work, without the lock: the game's threads need not wait) */
 		pthread_mutex_unlock(&p2p_lock);
 		good = listing_signed(queued.payload, &listing);
 		pthread_mutex_lock(&p2p_lock);
+#ifdef HALO_PS3
+		/* port: (lobby_log) */
+		if (good)
+			lobby_log.taken++;
+		else
+			lobby_log.signature++;
+#endif
 		if (good && lobby.browsing)
 			listing_take(&queued, &listing);
 	}
@@ -789,6 +876,10 @@ static void update_browsing(void)
 	}
 	if (lobby.browsing)
 		update_probes();
+#ifdef HALO_PS3
+	if (lobby.browsing && elapsed(lobby_log.logged_time, LOBBY_LOG_INTERVAL))
+		lobby_log_report(); /* port: (lobby_log) */
+#endif
 }
 
 void p2p_lobby_probed(const unsigned char *identifier, int ping)
@@ -919,6 +1010,15 @@ void p2p_lobby_browse(int on)
 	on = on && config_boolean("network.public_lobby") ? 1 : 0;
 	if (on != lobby.browsing)
 	{
+#ifdef HALO_PS3
+		/* port: (lobby_log: the counts of the browser's last seconds, or from its opening) */
+		if (lobby.browsing)
+			lobby_log_report();
+		memset(&lobby_log, 0, sizeof(lobby_log));
+		lobby_log.logged_time = p2p_now();
+		platform_log("Internet play: the server browser %s; this machine's clock %lu", on ? "opened" : "closed",
+			(unsigned long)time(NULL));
+#endif
 		lobby.browsing = on;
 		if (!on)
 		{

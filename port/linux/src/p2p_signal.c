@@ -1963,6 +1963,24 @@ int p2p_signal_connected(void)
 	return 0;
 }
 
+#ifdef HALO_PS3
+/* port: the brokers ready, and of them those that carry the server browser (p2p_lobby.c's lobby_log) */
+void p2p_signal_lobby_brokers(int *ready, int *carrying)
+{
+	int index;
+
+	*ready = *carrying = 0;
+	for (index = 0; index < signalling.broker_count; index++)
+	{
+		if (signalling.brokers[index].state == _broker_ready)
+		{
+			(*ready)++;
+			*carrying += broker_carries_lobby(&signalling.brokers[index]);
+		}
+	}
+}
+#endif
+
 void p2p_signal_reconnect(void)
 {
 	int index;

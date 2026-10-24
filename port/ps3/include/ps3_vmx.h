@@ -15,6 +15,10 @@ uint32_t ps3_vmx_segment_misses_spheres(const float *const *spheres, uint32_t co
 /* matrix4x3_multiply (matrix_math.c) on real_matrix4x3s (scale, then forward, left, up, position): any 4-byte
 alignment, result may be a or b */
 void ps3_vmx_matrix4x3_multiply(const float *a, const float *b, float *result);
+/* transparent_model_world_bounds' loop: count model vertices (32 bytes compressed, else 68) skinned by up to 64
+real_matrix4x3s; 1 with bounds (low x, y, z, high x, y, z) if every vertex is valid, else 0 */
+int ps3_vmx_model_bounds(const unsigned char *vertices, uint32_t count, uint32_t stride, int compressed,
+	const float *matrices, uint32_t matrix_count, float *bounds);
 
 /* memcpy, memset to 0 and a test for all zeroes, for large buffers: the source's lines touched ahead, a destination
 line written whole zeroed in the cache first (not read); fastest with both 128-byte aligned, any alignment works */

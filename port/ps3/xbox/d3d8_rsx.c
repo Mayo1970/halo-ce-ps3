@@ -237,6 +237,7 @@ enum
 	_record_draw,
 	_record_draw_indexed,
 	_record_immediate,
+	_record_elements,
 	_record_timestamp,
 	_record_draw_stamps,
 	_record_present
@@ -1767,6 +1768,7 @@ static unsigned long vertex_type_bytes(unsigned long type)
 	case D3DVSDT_PBYTE3: return 3;
 	case D3DVSDT_PBYTE4: return 4;
 	case D3DVSDT_FLOAT2H: return 12;
+	case SPU_VERTICES_TEXCOORD_WORD: return 4;
 	default: return 0;
 	}
 }
@@ -2161,6 +2163,11 @@ static void vertex_element_convert(unsigned char type, const unsigned char *sour
 		/* fall through */
 	case D3DVSDT_PBYTE1:
 		x = byte_floats[source[0]];
+		break;
+	case SPU_VERTICES_TEXCOORD_WORD:
+		/* the word's low half, then its high (big-endian: bytes 2 and 3, then 0 and 1) */
+		x = vertex_short(source + 2) / 32767.0f;
+		y = vertex_short(source) / 32767.0f;
 		break;
 	default:
 		break;
@@ -2751,8 +2758,28 @@ struct record_clear
 	uint32_t pad;
 };
 
+#define RECORD_ELEMENTS 4
+
+/* vertices the game's thread wrote into the record, after this: each element's from there plus its offset, a vertex
+every stride bytes (d3d8_draw_decals_begin) */
+struct record_elements
+{
+	uint32_t primitive;
+	uint32_t count;
+	uint32_t draw;
+	uint32_t element_count;
+	struct
+	{
+		uint32_t reg;
+		uint32_t type;
+		uint32_t offset;
+		uint32_t stride;
+	} elements[RECORD_ELEMENTS];
+};
+
 typedef char record_size_check[sizeof(struct record_draw) % 16 == 0 && sizeof(struct record_stream) == 16 &&
-	sizeof(struct record_immediate) == 16 && sizeof(struct record_clear) == 16 ? 1 : -1];
+	sizeof(struct record_immediate) == 16 && sizeof(struct record_clear) == 16 &&
+	sizeof(struct record_elements) % 16 == 0 ? 1 : -1];
 
 /* ---------- draws, as the Direct3D thread runs their records */
 
@@ -2900,6 +2927,68 @@ static void immediate_run(const struct record_immediate *immediate)
 	for (index = 0; index < reg_count; index++)
 		ps3_gpu_set_attribute((uint32_t)regs[index], offset + (uint32_t)(index * 16), (uint32_t)(reg_count * 16), 4);
 	ps3_gpu_draw(primitive_type((D3DPRIMITIVETYPE)immediate->primitive), 0, (uint32_t)count);
+	statistics.draws++;
+	draw_stamp();
+}
+
+/* the elements the program reads converted into the scratch (an SPU task, as setup_vertices'), the others its
+registers' values */
+static void elements_run(const struct record_elements *record)
+{
+	const struct rsx_vertex_program *program;
+	const unsigned char *data = (const unsigned char *)(record + 1);
+	struct vertex_input inputs[RECORD_ELEMENTS];
+	unsigned long count = record->count, slot_count = 0, index, slot, stride;
+	DWORD placed = 0;
+	uint32_t offset = 0;
+	uint64_t span;
+	float *out = NULL;
+
+	if (!count || !(program = prepare_draw()))
+		return;
+	span = ps3_timer_now();
+	for (index = 0; index < record->element_count && index < RECORD_ELEMENTS; index++)
+	{
+		unsigned long reg = record->elements[index].reg;
+
+		if (reg >= VERTEX_ATTRIBUTE_COUNT || !(program->input_mask & (1u << reg)) || (placed & (1u << reg)))
+			continue;
+		placed |= 1u << reg;
+		inputs[slot_count].base = data + record->elements[index].offset;
+		inputs[slot_count].stride = record->elements[index].stride;
+		inputs[slot_count].type = (unsigned char)record->elements[index].type;
+		inputs[slot_count].bytes = (unsigned char)vertex_type_bytes(record->elements[index].type);
+		inputs[slot_count].reg = (unsigned char)reg;
+		slot_count++;
+	}
+	stride = slot_count * 16;
+	if (slot_count)
+	{
+		out = ps3_gpu_scratch((uint32_t)(count * stride), 16, &offset);
+		if (!out)
+		{
+			statistics.skipped_scratch++;
+			return;
+		}
+		vertices_convert(inputs, slot_count, count, out);
+		statistics.converted_elements += count * slot_count;
+	}
+	for (slot = 0; slot < slot_count; slot++)
+		ps3_gpu_set_attribute(inputs[slot].reg, offset + (uint32_t)(slot * 16), (uint32_t)stride, 4);
+	for (index = 0; index < VERTEX_ATTRIBUTE_COUNT; index++)
+	{
+		if (placed & (1u << index))
+			continue;
+		if (!(program->input_mask & (1u << index)))
+			ps3_gpu_set_attribute((uint32_t)index, 0, 0, 0);
+		else if (!attribute_constant(index, device.attributes[index]))
+		{
+			statistics.skipped_scratch++;
+			return;
+		}
+	}
+	ps3_timer_add(_ps3_timer_draw_vertices, span);
+	ps3_gpu_draw(primitive_type((D3DPRIMITIVETYPE)record->primitive), 0, (uint32_t)count);
 	statistics.draws++;
 	draw_stamp();
 }
@@ -3427,37 +3516,87 @@ void WINAPI D3DDevice_End(void)
 	front_call_end(_ps3_timer_front_draws);
 }
 
-/* an immediate-mode draw of vertices already made: 4 floats for each register of layout, in the registers' order;
-the record and the registers after it are Begin's, the SetVertexData calls' and End's */
-void d3d8_draw_immediate(D3DPRIMITIVETYPE primitive_type_value, DWORD layout, const float *vertices, DWORD count)
+/* the elements record the game's thread is writing (elements_begin to elements_end) */
+static struct record_elements *front_elements;
+
+/* a draw of count vertices that the caller writes at the place given, before elements_end: elements (each its register,
+type, offset in the data and stride) over bytes of data; NULL: no draw */
+static void *elements_begin(D3DPRIMITIVETYPE primitive_type_value, const uint32_t (*elements)[4],
+	unsigned long element_count, unsigned long count, unsigned long bytes)
 {
-	struct record_immediate *immediate;
-	unsigned long reg, slot = 0, floats;
+	struct record_elements *record;
+	unsigned long index;
 	DWORD number;
 
+	front_elements = NULL;
+	if (!count || !element_count || element_count > RECORD_ELEMENTS)
+		return NULL;
 	front_call_begin();
-	if (count && layout)
+	number = draw_prologue();
+	record = record_begin(_record_elements, sizeof(*record) + bytes, 0, 0);
+	if (record)
 	{
-		immediate_layout_set(layout);
-		floats = front.immediate_floats;
-		for (reg = 0; reg < VERTEX_ATTRIBUTE_COUNT; reg++)
+		memset(record, 0, sizeof(*record));
+		record->primitive = primitive_type_value;
+		record->count = (uint32_t)count;
+		record->draw = number;
+		record->element_count = (uint32_t)element_count;
+		for (index = 0; index < element_count; index++)
 		{
-			if (layout & (1u << reg))
-				memcpy(front.attributes[reg], vertices + (count - 1) * floats + 4 * slot++, sizeof(front.attributes[0]));
+			record->elements[index].reg = elements[index][0];
+			record->elements[index].type = elements[index][1];
+			record->elements[index].offset = elements[index][2];
+			record->elements[index].stride = elements[index][3];
 		}
-		number = draw_prologue();
-		immediate = record_begin(_record_immediate, sizeof(*immediate) + count * floats * sizeof(float), 0, 0);
-		if (immediate)
-		{
-			immediate->primitive = primitive_type_value;
-			immediate->count = count;
-			immediate->written = layout;
-			immediate->draw = number;
-			memcpy(immediate + 1, vertices, count * floats * sizeof(float));
-			record_commit();
-		}
+		front_elements = record;
 	}
 	front_call_end(_ps3_timer_front_draws);
+	return record ? record + 1 : NULL;
+}
+
+/* the record to the Direct3D thread; the registers keep the last vertex's values, as Begin, SetVertexData and End
+leave them (the next draw's prologue records them) */
+static void elements_end(void)
+{
+	struct record_elements *record = front_elements;
+	const unsigned char *data;
+	unsigned long index;
+
+	if (!record)
+		return;
+	front_call_begin();
+	data = (const unsigned char *)(record + 1);
+	for (index = 0; index < record->element_count; index++)
+	{
+		if (record->elements[index].reg < VERTEX_ATTRIBUTE_COUNT)
+			vertex_element_convert((unsigned char)record->elements[index].type, data + record->elements[index].offset +
+				(record->count - 1) * record->elements[index].stride, front.attributes[record->elements[index].reg]);
+	}
+	front_elements = NULL;
+	record_commit();
+	front_call_end(_ps3_timer_front_draws);
+}
+
+/* rasterizer_xbox_decals.c: a draw of count decal vertices written into its record: each one's decal_vertex (its
+position's 3 floats, its coordinates' word), then each one's colour's 4 bytes (SetVertexData4ub's); NULL: no draw */
+void *d3d8_draw_decals_begin(DWORD count)
+{
+	uint32_t elements[3][4] =
+	{
+		{ 0, D3DVSDT_FLOAT3, 0, 16 },
+		{ 4, SPU_VERTICES_TEXCOORD_WORD, 12, 16 },
+		{ 9, D3DVSDT_PBYTE4, 0, 4 },
+	};
+
+	elements[2][2] = (uint32_t)count * 16;
+	ps3_timer_counts[_ps3_timer_decal_draws]++;
+	ps3_timer_counts[_ps3_timer_decal_vertices] += count;
+	return elements_begin(D3DPT_QUADLIST, (const uint32_t (*)[4])elements, 3, count, (unsigned long)count * 20);
+}
+
+void d3d8_draw_decals_end(void)
+{
+	elements_end();
 }
 
 static void set_attribute(INT reg, float a, float b, float c, float d)
@@ -3627,6 +3766,9 @@ static void record_execute(const struct record *record)
 	case _record_immediate:
 		immediate_run(payload);
 		break;
+	case _record_elements:
+		elements_run(payload);
+		break;
 	case _record_timestamp:
 		ps3_gpu_timestamp((int)record->a);
 		draw_stamps_split((int)record->a);
@@ -3650,6 +3792,8 @@ static DWORD record_draw_number(const struct record *record)
 		return ((const struct record_draw *)(record + 1))->draw;
 	if (record->type == _record_immediate)
 		return ((const struct record_immediate *)(record + 1))->draw;
+	if (record->type == _record_elements)
+		return ((const struct record_elements *)(record + 1))->draw;
 	return 0;
 }
 

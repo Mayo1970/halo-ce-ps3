@@ -38,6 +38,9 @@ the game thread's Direct3D draws and constants so far (d3d8_rsx.c); its time, an
 #define PS3_MODEL_ADD(timed, timer, span, d3d) ((void)((timed) ? (ps3_timers[(timer)] += ps3_timer_now() - (span), \
 	ps3_render_d3d[(timer)] += PS3_MODEL_D3D() - (d3d)) : 0), PS3_MODEL_SPAN((span), (d3d)))
 #define PS3_MODEL_COUNT(timed, timer, count) ((void)((timed) ? (ps3_timer_counts[(timer)] += (uint32_t)(count)) : 0))
+/* port: a shadow's model, and whether its node matrices were kept (model_kept_node_matrices) */
+#define PS3_SHADOW_KEPT_COUNT(flags, kept) ((void)(TEST_FLAG((flags), _render_model_shadow_bit) ? \
+	(ps3_timer_counts[_ps3_timer_shadow_models]++, ps3_timer_counts[_ps3_timer_shadow_models_kept] += (kept) != 0) : 0))
 #else
 #define PS3_MODEL_SPAN(span, d3d) ((void)0)
 #define PS3_MODEL_ADD(timed, timer, span, d3d) ((void)0)
@@ -222,7 +225,102 @@ static char default_render_model_region_permutation_indices[MAXIMUM_REGIONS_PER_
 
 static struct profile_section render_model_section = { "render_model", NONE, TRUE };
 
+#ifdef HALO_PS3
+/* port: the relative node matrices that the objects' draws made in this window (render.scene_index), kept for their
+shadows' draws (render_object_shadows: the same object, model and node matrices), which then multiply nothing again */
+enum
+{
+	MODEL_KEPT_NODE_MATRICES = 1024,
+	MODEL_KEPT_NODE_ENTRIES = 128,
+	MODEL_KEPT_NODE_PROBES = 8
+};
+
+static struct
+{
+	long scene_index;
+	long used;
+	struct model_kept_nodes_entry
+	{
+		long unique_identifier;
+		long model_index;
+		real_matrix4x3 const *node_matrices;
+		long node_count;
+		long scene_index;
+		real_matrix4x3 *matrices;
+	} entries[MODEL_KEPT_NODE_ENTRIES];
+	real_matrix4x3 matrices[MODEL_KEPT_NODE_MATRICES];
+} model_kept_nodes;
+#endif
+
 /* ---------- private code */
+
+#ifdef HALO_PS3
+/* port: a shadow's draw: the matrices its object's draw kept (*kept TRUE), else storage. An object's draw: room in the
+window's matrices, kept for its shadow, else storage (the first person and the sky are not kept: their buffers vary) */
+static real_matrix4x3 *model_kept_node_matrices(
+	long model_index,
+	real_matrix4x3 const *node_matrices,
+	short node_count,
+	long unique_identifier,
+	unsigned long flags,
+	real_matrix4x3 *storage,
+	boolean *kept)
+{
+	struct model_kept_nodes_entry *entry = NULL;
+	unsigned long slot = ((unsigned long)unique_identifier * 2654435761u) >> 25;
+	short probe;
+
+	*kept = FALSE;
+	if (model_kept_nodes.scene_index != render.scene_index)
+	{
+		model_kept_nodes.scene_index = render.scene_index;
+		model_kept_nodes.used = 0;
+	}
+	if (unique_identifier == NONE || !node_matrices ||
+		(!TEST_FLAG(flags, _render_model_shadow_bit) &&
+		(TEST_FLAG(flags, _render_model_immediate_bit) || TEST_FLAG(flags, _render_model_first_person_bit))))
+	{
+		return storage;
+	}
+	/* (an entry of an older window is free; none is freed in a window, so a free one ends a search) */
+	for (probe = 0; probe < MODEL_KEPT_NODE_PROBES; probe++)
+	{
+		entry = &model_kept_nodes.entries[(slot + probe) % MODEL_KEPT_NODE_ENTRIES];
+		if (entry->scene_index != render.scene_index ||
+			(entry->unique_identifier == unique_identifier && entry->model_index == model_index &&
+			entry->node_matrices == node_matrices && entry->node_count == node_count))
+		{
+			break;
+		}
+	}
+	if (probe == MODEL_KEPT_NODE_PROBES)
+	{
+		return storage;
+	}
+	if (TEST_FLAG(flags, _render_model_shadow_bit))
+	{
+		if (entry->scene_index == render.scene_index)
+		{
+			*kept = TRUE;
+			return entry->matrices;
+		}
+		return storage;
+	}
+	if (model_kept_nodes.used + node_count > MODEL_KEPT_NODE_MATRICES)
+	{
+		return storage;
+	}
+	entry->unique_identifier = unique_identifier;
+	entry->model_index = model_index;
+	entry->node_matrices = node_matrices;
+	entry->node_count = node_count;
+	entry->scene_index = render.scene_index;
+	entry->matrices = &model_kept_nodes.matrices[model_kept_nodes.used];
+	model_kept_nodes.used += node_count;
+
+	return entry->matrices;
+}
+#endif
 
 static void render_model_parts(
 	struct model const *model,
@@ -972,7 +1070,14 @@ void render_model(
 	if (level_of_detail_pixels*halo_model_detail_scale(FALSE)>=model->detail_cutoff_pixels[0] ||
 		TEST_FLAG(flags, _render_model_shadow_bit))
 	{
+#ifdef HALO_PS3
+		/* port: the window's kept matrices (model_kept_node_matrices), else this storage */
+		real_matrix4x3 relative_node_matrix_storage[MAXIMUM_NODES_PER_MODEL];
+		real_matrix4x3 *relative_node_matrices;
+		boolean relative_node_matrices_kept;
+#else
 		real_matrix4x3 relative_node_matrices[MAXIMUM_NODES_PER_MODEL];
+#endif
 		struct rasterizer_model_begin_parameters model_parameters;
 		short geometry_detail_level_index;
 		short node_index;
@@ -1014,8 +1119,16 @@ void render_model(
 			centroid = &node_matrices->position;
 		}
 
+#ifdef HALO_PS3
+		relative_node_matrices = model_kept_node_matrices(model_index, node_matrices, node_count, unique_identifier, flags,
+			relative_node_matrix_storage, &relative_node_matrices_kept);
+		PS3_SHADOW_KEPT_COUNT(flags, relative_node_matrices_kept); /* port: (the timer build) */
+#endif
 		if (node_matrices)
 		{
+#ifdef HALO_PS3
+			if (!relative_node_matrices_kept)
+#endif
 			for (node_index = 0; node_index<node_count; node_index++)
 			{
 				struct model_node *node = TAG_BLOCK_GET_ELEMENT(&model->nodes, node_index, struct model_node);

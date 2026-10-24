@@ -53,6 +53,66 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-24: Matt: "Work on decals, shadows and transparent sort", and
+  for the server browser (no game on the PS3, the PC shows them all, it
+  worked before this session): "Add a lobby log". Built: a decal layer's
+  decals in one order over all its clusters (fewer batches; the sort of
+  the upstream's commuting runs, now over the clusters' bounds); the
+  shadows' part-setup skip taken out (it never applied), their kept node
+  matrices in 128 entries by a hash of the object; the transparent sort's
+  model bounds in exact VMX (`ps3_vmx_model_bounds`, one call in 16 checked
+  by the loop); the browser's log every 5 s (`p2p_lobby.c`). PC check of
+  the VMX bounds: 600,000 calls, 0 apart, 14 faults found. `check`
+  passed. PKG of 20:44 in `build/ps3_frame/`. Not tested on the PS3. See
+  the Log.
+- 2026-10-24: Matt: "Work on 1-5" (the candidates below). Items 1 and 5
+  run in the game ticks (the rule: no simulation on an SPU), and item 1
+  gains nothing on an SPU (each object's matrices are read at once by its
+  children, lights and postprocess; a job's round trip is 3 to 5 us, the
+  PPE's matrices 2 us an object). Matt chose "Skip 1 and 5". Items 2 to 4,
+  each with the same picture: 2, each generic shader's definition kept from
+  its first draw; 3, the decals' vertices into the record as they are (16
+  bytes and a colour word a vertex, not 48 bytes of floats made and copied
+  again), converted by the conversions' SPU bit for bit; 4, a shadow takes
+  its object's relative node matrices from the objects' draw, and a shadow
+  model's part like the one before only draws. PC check of the SPU's new
+  element: 4.4 M checks, 0 apart, 6 faults found. `check` passed. PKG of
+  19:19 in `build/ps3_frame/` (the tree of `a39bb37c` and this change
+  only). Not tested on the PS3. See the Log.
+- Handoff (2026-10-24, end of the session; Matt: "Save it somewhere. I'll
+  make a new session to take on it."): the next work is the frame rate in
+  heavy combat. Committed: everything up to `a39bb37c` ("More
+  optimization": the textures on the SPU, the HUD prompts' PS3 stencils).
+  The 18:16 PKG (`build/ps3_texture/`, the HUD's stencils) is not tested on
+  the PS3. Our listener (`udp_listen.py`, PID 32408) may still hold UDP
+  18194: check its owner before the next boot.
+  - The evidence: the 17:58 run on b40 (log `ps3log_texture.txt` in session
+    `376960d9`'s scratchpad, not to be used by later sessions: the numbers
+    are here). Play windows: 60.0 fps on median, 8 of 44 under 56 fps
+    (median 51.7). The slowest (18:10:05, 51.9 fps, 19.3 ms a frame): game
+    ticks 6.2 + render 12.5 ms a frame, the flip wait 0.0: the game thread
+    sets the rate; the RSX 12.8 ms a frame, the Direct3D thread busy 10.2.
+  - Its game thread: objects update 5.7 ms a tick (units 2.4, of them the
+    bipeds' moving 0.95; node matrices 1.65, 794 nodes a tick; lights 0.5;
+    values 0.4); AI 1.8 ms a tick (perception 0.7, decisions 0.5); render:
+    effects 2.6 (transparent 1.7, particles 0.75), objects 2.4 (models 1.5),
+    diffuse 1.9 (decals 1.4, of which their Direct3D calls 0.7), lights 1.6
+    (the objects' shadows 1.0), specular 1.5, interface 1.3 ms a frame.
+  - The candidates, the largest gain first (proposed, none chosen): 1, the
+    node matrices on an SPU (pure matrix maths, as the game SPU's shadow and
+    weather jobs; up to 1.6 ms a tick); 2, the transparent generic shaders'
+    set-up kept per shader tag (`shader_transparent_generic_create` runs at
+    each draw; only the fog stage changes per draw; up to 1.7 ms a frame);
+    3, the decals' vertices straight into the vertex arena or by the SPU
+    (0.7 ms of their 1.4); 4, the objects' shadows' model draws (1.0 ms);
+    5, the AI's perception rays (0.7 ms a tick, harder). 1 and 2 together:
+    about 2.5 to 3 ms of the slowest windows' 19 ms (about 56 to 60 fps).
+  - Also open: the stutter at the level's start (no per-frame spike log
+    yet: STUTTER_FINDINGS.md's "spike log"); c40's first frames fail
+    `structures.c` line 135 (`radius>=0.f`, an object's shadow) in the
+    checked Windows build, and the PS3 build checks assertions too (not
+    seen on the PS3 yet); the shader keys after a rasterizer change: run
+    `tools/ps3_shader_sweep.py` again (port/ps3/README.md).
 - 2026-10-24: the shader pack on hardware (b40, PKG of 17:12 in
   `build/ps3_shader_check/`): `0 programs differ`, 1 pixel shader of the
   whole run translated at a draw; Matt: the stutter only at the start.
@@ -697,7 +757,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20; on hardware 2026-10-22 the kept boxes crashed the game thread twice (step 627, the transparent sort; cause not found): taken out (Matt: option 2), then a clean run (the weather in the snow 1.27 to 0.86 ms a frame); the stream buffers' blocks (no heap fragments: 22.3 MB free at the end, before 19.3), the sphere query on the kept blocks (13.3 to 10.3 us a call; the same answer: PC check), `render_model_parts` and the shadows timed inside: run on hardware 2026-10-22 (SUCCESS); the SPU candidates written down (the Log); the game thread's jobs on a third SPU (the checkpoint's copies, the shadows' surfaces, the weather, the particles' rays; PC check on the 23 maps): built 2026-10-22, run on hardware 2026-10-22 (the checkpoint 12.9-15.1 to 3.1 ms; the shadows' surfaces 103 to 4.7 us a shadow; the weather 1.2 to 0.05 ms a frame; the particles 3.8 to 2.9 us each); the pixel shaders' copies on the conversions' SPU and the particles' rays taken a frame late: built 2026-10-22 |
-| G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0); file reads in 128 KB calls (the BSP switch's stutter), the decals' batch in one call, the shadows' sort and triangles on the render SPU: built 2026-10-22 |
+| G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0); file reads in 128 KB calls (the BSP switch's stutter), the decals' batch in one call, the shadows' sort and triangles on the render SPU: built 2026-10-22; the handoff's items 2 to 4 (the generic shaders' definitions kept, the decals' vertices converted by the SPU, the shadows' kept node matrices and parts; Matt skipped 1 and 5): built 2026-10-24, run on hardware 2026-10-24 (the generic definitions all kept; the shadow models 78 to 57 us; the parts' setup never kept); the decals of a layer in one order over its clusters, the shadows' kept node matrices by hash, the transparent sort's model bounds in exact VMX, the server browser's log: built 2026-10-24, run on hardware 2026-10-24 (59.4 / 54.9 fps on median; the browser works: 28 to 34 games; the shadows and the sort no faster) |
 
 ## G9 analysis (2026-10-22)
 
@@ -4327,3 +4387,197 @@ then `./build.sh pkg LOG_IP=<address>`.
   translated at their first draw (on the Direct3D thread), 72 textures
   uploaded (1.8 MB), the ticks 4 to 8 ms each (the AI's combat start). The
   300-frame windows do not show one long frame.
+- 2026-10-24: The handoff's candidates (Matt: "Work on 1-5"). 1 (the node
+  matrices) and 5 (the AI's perception rays) are the simulation, which the
+  rule keeps off the SPUs (its float results differ). 1 also gains nothing
+  there: `object_update` reads an object's matrices right after
+  `object_compute_node_matrices` (its children, `object_connect_lights`,
+  the postprocess, the elevator's riders), so the PPE waits for each job,
+  and a job's round trip (3 to 5 us) is longer than the PPE's matrices (2
+  us an object). 5 needs an exact SPU copy of `collision_test_vector`
+  (structure and models) and the props' loop in two passes. Matt chose
+  "Skip 1 and 5". Items 2 to 4, each exact (the same picture):
+  - 2, `shader_transparent_generic_preprocessor.c`: the definition
+    `shader_transparent_generic_create` makes is kept by the shader's
+    address (256 entries, 8 probes), flushed when
+    `scenario_structure_bsp_generation` changes (a map's end, a BSP
+    switch); a shader that fails is made, and said, again each draw as
+    before. Read in the code: the create is about 1 to 3 us of a generic
+    group's 30 (5 to 10 groups a frame), so the gain is small. `[time]
+    transparent geometry` adds the definitions kept and made a frame.
+  - 3, the decals (`rasterizer_xbox_decals.c`, `d3d8_rsx.c`,
+    `spu/spu_vertices.c`): each batch draw (up to 4,096 vertices, the same
+    splits) copies each decal's 16-byte `decal_vertex` as it is, then a
+    colour word a vertex, into its record (`d3d8_draw_decals_begin` and
+    `_end`, a new `_record_elements`: elements of a register, a type, an
+    offset and a stride). Before: 48 bytes of floats a vertex made on the
+    game thread (two int-to-float conversions and divisions a vertex),
+    then copied into the record. The Direct3D thread converts them by an
+    SPU CONVERT task (`elements_run`, as `setup_vertices`): position
+    FLOAT3, the coordinates a new type `SPU_VERTICES_TEXCOORD_WORD` (the
+    word's low then high half over 32767, unclamped: -32768 gives
+    -1.0000305 as before), the colour PBYTE4; the PPE's fallback in
+    `vertex_element_convert`. The registers keep the last vertex's values
+    (the next draw's prologue records them). `d3d8_draw_immediate` is gone
+    (no caller). `[time] lights and diffuse passes` adds the decals'
+    batches and vertices a frame.
+  - 4, the objects' shadows: `models.c` (`model_kept_node_matrices`): the
+    objects' draws make their relative node matrices in a window's room
+    (1,024 matrices, 64 entries by object index; `render.scene_index`
+    starts it again), not on the stack; a shadow's `render_model` of the
+    same object, model, node matrices and node count takes them (no
+    multiply); the first person and the sky are not kept (their buffers
+    are reused). `rasterizer_xbox_shadows.c`: a shadow model's part of the
+    same shader, bitmap and vertex type as the part before goes to its
+    draw at once (its states, texture, vertex shader and constants are set;
+    nothing draws between the parts, `render_model_parts`; the texture
+    animation is tables of the frame's time); a shadow's or a model's
+    begin starts it again. `[time] objects' shadows` adds the shadows'
+    models (node matrices kept) and parts (setup kept) a frame.
+  - PC check (scratchpad; flycastPS3's `spusim.c`; the image built with its
+    symbols, its `.text` the PKG's): CONVERT tasks of the decals' three
+    elements (the record's layout) against the old batch's floats and the
+    fallback's: every 16-bit value in each half (the other half a
+    permutation), all colour bytes, counts 1 to 4,096 (the passes' edges)
+    at each 4-byte offset, specials: 4,409,920 checks, 0 apart; about 64
+    SPU cycles a vertex. Faults, each found: the halves swapped (366,496
+    apart), the NORMSHORT clamp (214), w from the value (183,480), the
+    exponent off by one (366,696), no sign extension (183,389), the type
+    not converted (366,696). Items 2 and 4: read in the code.
+  - Comments over 2 lines shortened: `spu_vertices.h` (1). Warnings
+    (`-Wall`) in the changed files: none in the new code. `check`: 0
+    `r2off`, `.got` 0x87d0. PKG of 19:19 in `build/ps3_frame/` (the tree of
+    `a39bb37c` and this change only). Not tested on the PS3. UDP 18194:
+    the old session's listener (PID 32408, `376960d9`) stopped at Matt's
+    "Start the listener. And re-boot it."; ours runs (`udplog.py`).
+- 2026-10-24: The 19:19 PKG on hardware (b40; Matt: "Done."; no fault
+  reported): `[ps3] exit 0`, the four SPU groups down, no `SPU off`, no
+  draw skipped, the lowest free main memory 18.7 MB. Medians of 39 play
+  windows / the 7 under 56 fps:
+  - The frame 59.4 / 53.5 fps, ticks 3.2 / 4.6 ms a frame, render 8.1 /
+    8.4. The two slowest (48.0, 48.2 fps): ticks 6.8 (0.62 a frame, 11.0
+    ms each: objects 5.8 (units 2.2, node matrices 1.7), AI 2.4
+    (perception 0.8, decisions 0.9)), render 13.1 (objects 3.55 (models
+    2.5), effects 2.55 (transparent 1.96: the sort's models' order 0.57,
+    effects 0.47 for 31 groups), lights 1.6 (shadows 1.1), specular 1.6,
+    interface 1.4, diffuse 1.0 (decals 0.52)).
+  - 2, the generic definitions: 15.4 / 13.4 kept a frame, 0 made after the
+    first draws; the generic groups 20 us each (median of the windows; the
+    2026-10-19 run 31 to 33, other play).
+  - 3, the decals: their cost follows the batches, not the vertices (a fit
+    over 30 windows: 7.4 us a batch and 0.066 us a vertex; their Direct3D
+    4.4 us a batch, 0.003 a vertex); the heaviest window 1.30 ms (Direct3D
+    0.58) for 129 batches and 4,931 vertices; about 40 vertices a batch
+    (a batch ends at each bitmap or blend change).
+  - 4, the shadows: a shadow's model 57 / 53 us (78 on 2026-10-22); node
+    matrices kept for 5.0 of 5.3 / 4.6 of 6.5 shadow models a frame (the
+    64 entries by object index collide); the parts' setup kept for 0 of
+    13.9 / 15.3 parts (no part is like the one before it). The shadows 0.56
+    / 0.79 ms a frame (160 / 176 us a shadow; 214 in the 17:18 run).
+  - Matt saw no server in the browser (version 36 or 37?). The tree is at
+    network version 38, OpenCE build-268 (`5e27f3a2`, upstream `main`, the
+    newest release; fetched again: nothing newer; `testing` is 38 too).
+    `p2p_lobby.c` lists only its own version, counts newer ones and drops
+    older ones silently: hosts of build-266 (version 36, 2026-10-23) do
+    not show on a 38 machine.
+  - Matt: the browser worked before this session, and the PC shows all
+    the servers: not the version. Matt chose "Add a lobby log".
+- 2026-10-24: Matt: "Work on decals, shadows and transparent sort." Built:
+  - The decals (`rasterizer_xbox_decals.c`): a cluster's
+    `_rasterizer_decals_draw` gathers its decals of the layer after those
+    of the clusters before (`rasterizer_decals_gather`);
+    `_rasterizer_decals_end` draws them all (`_rasterizer_decals_draw(NONE)`)
+    with the commuting runs sorted once (`rasterizer_decals_sort_runs`), so
+    a bitmap's decals of all the clusters share a batch (the 19:19 run: 7.4
+    us a batch, about 40 vertices a batch). The order changes only as the
+    upstream's sort in a cluster changes it (a3277d94: a run of multiply,
+    add, min, max and reverse subtract decals, no depth writes), now also
+    over a cluster's bounds; as in a cluster, two overlapping decals of
+    different functions in one run (a multiply and an add) can change
+    places. The alpha-tested layer has no run: its order is as before.
+    Nothing draws between the clusters' calls (`render.c`), and a decal's
+    vertices stay in its block (`lruv_block_get_address`).
+  - The shadows: the part-setup skip out (0 of 13.9 parts kept in the 19:19
+    run; `rasterizer_xbox_shadows.c` as committed, its counters gone). The
+    kept node matrices (`models.c`): 128 entries, the slot a hash of the
+    object (`unique_identifier * 2654435761 >> 25`), 8 probes; an entry of
+    an older window is free, so a free one ends a search.
+  - The transparent sort's models' order: `ps3_vmx_model_bounds`
+    (`ps3_vmx.c`) is the loop of `transparent_model_world_bounds` in exact
+    VMX (Java mode; each product a `vec_madd` with -0; the adds of
+    `matrix4x3_transform_point` and of the weights in the loop's order;
+    its tests; MIN's and MAX's ties), for the compressed (32 bytes) and
+    uncompressed (68) model vertices, up to 64 matrices. One call in 16
+    also runs the loop, whose answer is then taken: `[time] transparent
+    geometry` adds the bounds a frame by VMX, those checked and those apart.
+  - PC check (scratchpad `boundscheck`: `ps3_vmx.c`'s text extracted, the
+    VMX emulated a lane at a time, `fmaf` for `vec_madd`, the PS3's
+    big-endian images; against the loop transcribed): 600,000 calls (60.3
+    M vertices, 86% valid; 30% of the calls with one defect at one
+    vertex: a special position, past 1e6, a compressed node byte not a
+    multiple of 3, a node past the matrices, a negative node, a node's high
+    byte, a negative weight (also one just under 0 with the other 1), the
+    weights' sum off and at its 1e-5 edge, a special matrix value,
+    denormals; +0 and -0 ties): 0 apart. Faults, each found: the
+    transform's adds in another order, no scale, the weight over 32768,
+    MIN's compare reversed, lane 3 unmasked, no test of the node byte, `>`
+    for `>=` in the node test, the weighted add fused, no test of a weight
+    under 0, no test of the sum, no test of the range, the node's low byte
+    only, MIN's and MAX's +0/-0 ties the other way; a control (a bigger
+    matrix table) 0 apart.
+  - The server browser's log (`p2p_lobby.c`, `p2p_signal.c`, PS3 only):
+    at the browser's opening and close (with this machine's clock), and
+    every 5 s while it is open: the brokers ready and those that carry the
+    browser, the listings heard (and the brokers' kept copies), heard
+    again, the queue full, unreadable, newer, of another version (the
+    last), a wrong key, out of time (kept copies; the last difference from
+    this clock), a bad signature, taken, and the games listed. The tests
+    are the same, in the same order (one at a time, to count them).
+  - Warnings (`-Wall`) in the changed files: none in the new code. Comments
+    over 2 lines: none. `check`: 0 `r2off`, `.got` 0x8808. PKG of 20:44 in
+    `build/ps3_frame/` (the tree of `a39bb37c` and this session's changes
+    only). Not tested on the PS3. UDP 18194: our listener (`udplog.py`,
+    PID 32396).
+- 2026-10-24: The 20:44 PKG on hardware (b40; Matt: "Done. The internet is
+  now working as intended and it's fetching the servers. The run was
+  smoother, but still not 60-ish."): `[ps3] exit 0`, the four SPU groups
+  down, no `SPU off`, no draw skipped, the lowest free main memory 17.7
+  MB. Medians of 54 play windows / the 6 under 56 fps (the 19:19 run: 39 /
+  7):
+  - The frame 59.4 / 54.9 fps (59.4 / 53.5), ticks 3.4 / 5.35 ms a frame
+    (9.9 ms a tick: objects 5.5 (units 1.9, node matrices 1.7, lights 0.5,
+    values 0.4), AI 2.0 (perception 0.8, decisions 0.7), interpolation
+    0.9), render 8.1 / 11.4 (objects 2.6 (models 1.7), lights 1.7 (shadows
+    1.0), effects 1.7 (transparent 1.2), specular 1.45, interface 1.15,
+    diffuse 0.95 (decals 0.55)); the RSX 10.6 / 13.1 ms a frame; the
+    Direct3D thread busy 16.4 / 13.3 ms a frame, of it the flip's wait
+    8.75 / 2.7 (its draws' state 4.5 / 6.2: textures 1.4 / 2.0, the
+    fragment programs' constants ("colours") 1.1 / 1.6).
+  - The slowest window (40.2 fps, the last before the end): 81 models a
+    frame (render objects 6.7 ms: models 5.6, of them the model shaders'
+    138 draws 2.7 (20 us each, Direct3D 6.8); the objects' widgets 1.2),
+    vehicles 1.7 ms a tick, collision 2.5 ms a frame, the RSX 16.5 (objects
+    5.0). The 50.8 fps window: a BSP switch (`cache001.map`: 5,386 KB read
+    in 575 ms, 9.4 MB/s; the level's other reads 36 to 38 MB/s; the swap 58
+    ms).
+  - The decals: at equal vertices about 20% fewer batches (1,000 to 2,000
+    vertices a frame: 68.5 to 56.9 batches; 3,000 to 6,000: 98.2 to 76.8;
+    the windows differ: other play); a fit over 40 windows: 6.7 us a batch
+    and 0.084 us a vertex (7.4 and 0.066 before).
+  - The shadows: the node matrices kept for all the shadow models (6.0 of
+    6.0 / 9.35 of 9.35; before 5.0 of 5.3 / 4.6 of 6.5), but a shadow
+    model costs the same (37 / 39 us a model; 36 / 37 before: the
+    multiplies saved are small). A shadow 191 / 200 us (170 / 176 before;
+    more surfaces a shadow: 170 / 145, before 108 / 147).
+  - The transparent sort: 58,920 VMX bounds, 3,693 of them also by the
+    loop: 0 apart. The models' order costs the same where it runs (36
+    windows: 0.09 ms a frame, 4.5 us a group; before 27 windows, 0.09 ms,
+    4.3 us): the bounds are not its cost (4.4 calls a frame).
+  - The server browser's log: 4 brokers ready, all carry it. At the first
+    opening, in 5 s: 1,602 listings heard (1,383 the brokers' kept copies),
+    104 again, 693 dropped by the full queue, 729 of other versions (11 to
+    26), 4 newer, 44 out of time (kept copies, the last -648 s), 28 taken:
+    28 games; at the second opening 34. The PS3's clock is about 10.7 min
+    ahead (the PC's time and the log's), so a fresh kept copy looks over
+    10 min old (`RETAINED_WINDOW` 600 s) and its game shows only when its
+    host publishes again.

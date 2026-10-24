@@ -46,6 +46,8 @@ in a ring of tasks. The SPU, the host layer (ps3_spu.c), ps3_gpu.c and d3d8_rsx.
 #define SPU_VERTICES_PBYTE2 0x24
 #define SPU_VERTICES_PBYTE3 0x34
 #define SPU_VERTICES_PBYTE4 0x44
+/* not the Xbox's: a native 32-bit word, its low 16 bits then its high 16, each over 32767 unclamped (the decals') */
+#define SPU_VERTICES_TEXCOORD_WORD 0x2E
 
 /* an element: where vertex 0 of the task has it, and its size (the DMA reads no further) */
 typedef struct
@@ -97,9 +99,8 @@ enum
 	SPU_TEXEL_R4G4B4A4, SPU_TEXEL_YUY2, SPU_TEXEL_UYVY, SPU_TEXEL_D24S8, SPU_TEXEL_D16,
 };
 
-/* TEXTURE, in a task's place (d3d8_rsx.c's texture_upload): units (bytes for COPY) of in_bytes from source to out_bytes
-in output; a swizzled face's levels one stream (rows 0), a linear level's rows each from source_pitch into output_pitch,
-the rest of it zero. Source and output 16-aligned. HASH: texture_hash's of units bytes at source, into output's 16 */
+/* TEXTURE (texture_upload): units (COPY: bytes) of in_bytes at source to out_bytes at output; swizzled levels one stream
+(rows 0), linear rows source_pitch to output_pitch, the rest zero; 16-aligned. HASH: texture_hash of units bytes, 16 out */
 typedef struct
 {
 	uint16_t kind;

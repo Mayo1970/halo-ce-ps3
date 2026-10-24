@@ -239,6 +239,9 @@ enum
 	_ps3_timer_lights_decals,
 	_ps3_timer_diffuse_structure,
 	_ps3_timer_diffuse_decals,
+	/* counts: the decals' batched draws and their vertices (d3d8_rsx.c's d3d8_draw_decals_begin) */
+	_ps3_timer_decal_draws,
+	_ps3_timer_decal_vertices,
 	/* the objects' shadows (render_objects.c): the pass's begin and end, the objects' checks and lighting (the objects),
 	a shadow's begin (the calls), its model (the shadows), volume, structure, end; the structure's parts below */
 	_ps3_timer_shadow_pass,
@@ -252,6 +255,9 @@ enum
 	_ps3_timer_shadow_surfaces,
 	_ps3_timer_shadow_triangles,
 	_ps3_timer_shadow_draws,
+	/* counts: the shadows' models, those whose node matrices the objects' draws kept (models.c) */
+	_ps3_timer_shadow_models,
+	_ps3_timer_shadow_models_kept,
 	/* the render's effects pass (render.c) */
 	_ps3_timer_effects_weather,
 	_ps3_timer_effects_particles,
@@ -282,6 +288,14 @@ enum
 	_ps3_timer_transparent_meter,
 	_ps3_timer_transparent_plasma,
 	_ps3_timer_transparent_other,
+	/* counts: the generic shaders' definitions kept from a draw before, and made (shader_transparent_generic_create) */
+	_ps3_timer_generic_kept,
+	_ps3_timer_generic_made,
+	/* counts: the models' bounds of the sort's model order by VMX, of them checked by the scalar loop, and found apart
+	(rasterizer_xbox_transparent_geometry.c) */
+	_ps3_timer_bounds_vmx,
+	_ps3_timer_bounds_checked,
+	_ps3_timer_bounds_apart,
 	/* sound_render's steps (sound_manager.c), game_sound_update's (game_sound.c), the waits for the mixer's lock */
 	_ps3_timer_sound_listener,
 	_ps3_timer_sound_looping,

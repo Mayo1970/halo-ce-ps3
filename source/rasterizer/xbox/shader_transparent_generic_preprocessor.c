@@ -11,6 +11,10 @@ SHADER_TRANSPARENT_GENERIC_PREPROCESSOR.C
 #include "shaders/shader_definitions.h"
 #include "tag_files/tag_groups.h"
 #include "rasterizer/xbox/rasterizer_xbox_pixel_shader.h"
+#ifdef HALO_PS3
+#include "scenario/scenario.h" /* port: scenario_structure_bsp_generation */
+#include "ps3_timers.h"
+#endif
 
 /* ---------- constants */
 
@@ -236,7 +240,52 @@ static const long shader_stage_alpha_output_mappings[NUMBER_OF_SHADER_TRANSPAREN
 	0x00, 0x30, 0x10, 0x20, 0x08, 0x18
 };
 
+#ifdef HALO_PS3
+/* port: each shader's definition, made at its first draw and kept until the map or its bsp changes (the tag data
+stays): the PS3 made it again at every draw */
+enum
+{
+	SHADER_GENERIC_CACHE_ENTRIES = 256,
+	SHADER_GENERIC_CACHE_PROBES = 8
+};
+
+static struct shader_generic_cache_entry
+{
+	struct shader const *shader;
+	struct pixel_shader_definition definition;
+} shader_generic_cache[SHADER_GENERIC_CACHE_ENTRIES];
+static unsigned long shader_generic_cache_generation;
+#endif
+
 /* ---------- private code */
+
+#ifdef HALO_PS3
+/* port: the shader's entry, else the free entry it takes, else NULL (its probes are full) */
+static struct shader_generic_cache_entry *shader_generic_cache_find(
+	struct shader const *shader)
+{
+	unsigned long index = (((unsigned long)(uintptr_t)shader >> 2) * 2654435761u) >> 24;
+	short probe;
+
+	if (shader_generic_cache_generation != scenario_structure_bsp_generation)
+	{
+		csmemset(shader_generic_cache, 0, sizeof(shader_generic_cache));
+		shader_generic_cache_generation = scenario_structure_bsp_generation;
+	}
+	for (probe = 0; probe < SHADER_GENERIC_CACHE_PROBES; probe++)
+	{
+		struct shader_generic_cache_entry *entry =
+			&shader_generic_cache[(index + probe) % SHADER_GENERIC_CACHE_ENTRIES];
+
+		if (entry->shader == shader || !entry->shader)
+		{
+			return entry;
+		}
+	}
+
+	return NULL;
+}
+#endif
 
 /* port: a map's generic shader with a stage field past the tables, or more
 stages than the combiners hold; said once */
@@ -493,10 +542,25 @@ boolean shader_transparent_generic_create(
 	short map_index;
 	short stage_index;
 	short stage_count;
+#ifdef HALO_PS3
+	struct shader_generic_cache_entry *cache_entry;
+#endif
 
 #line 388 "c:\\halo\\SOURCE\\rasterizer\\xbox\\shader_transparent_generic_preprocessor.c"
 	match_assert(__FILE__, __LINE__, shader);
 	match_assert(__FILE__, __LINE__, pixel_shader);
+
+#ifdef HALO_PS3
+	/* port: the definition kept from the shader's first draw (a shader that fails is made, and said, each time) */
+	cache_entry = shader_generic_cache_find(shader);
+	if (cache_entry && cache_entry->shader == shader)
+	{
+		*pixel_shader = cache_entry->definition;
+		ps3_timer_counts[_ps3_timer_generic_kept]++; /* port: (the timer build) */
+		return TRUE;
+	}
+	ps3_timer_counts[_ps3_timer_generic_made]++; /* port: (the timer build) */
+#endif
 
 	generic = (struct shader_transparent_generic_definition *)shader_get_and_verify_type(shader, _shader_type_transparent_generic);
 
@@ -602,6 +666,14 @@ boolean shader_transparent_generic_create(
 
 	pixel_shader->final_combiner_inputs_abcd = 12;
 	pixel_shader->final_combiner_inputs_efg = 0x1c00;
+
+#ifdef HALO_PS3
+	if (result && cache_entry)
+	{
+		cache_entry->shader = shader;
+		cache_entry->definition = *pixel_shader;
+	}
+#endif
 
 	return result;
 }
