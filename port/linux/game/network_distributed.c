@@ -4549,9 +4549,14 @@ static void distributed_message_entries_byte_swap(
 	case _distributed_message_map_share_progress:
 		map_share_byte_swap(type, entries, end);
 		break;
+	case _distributed_message_aim_assist_policy:
+	case _distributed_message_shield_effects:
+		/* (the policy or effects, and a reserved word) */
+		distributed_swap_take(&entries, end, sizeof(word), 2);
+		break;
 	}
 	/* (the others have none: no entries, a text (notice, identity), or bytes (skip vote, votekick and its
-	status)) */
+	status, the text chat's lines and settings)) */
 }
 
 void network_distributed_byte_swap(

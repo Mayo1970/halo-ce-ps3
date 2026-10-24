@@ -27,6 +27,7 @@ request #420 by arisson2001rojas-design.
 #include "game/game_engine.h"
 #include "game/players.h"
 #include "math/real_math.h"
+#include "memory/byte_swapping.h"
 #include "memory/data.h"
 #include "networking/network_game_globals.h"
 #include "networking/network_game_manager.h"
@@ -951,6 +952,30 @@ long infection_write_network_state(
 	csmemcpy(buffer, &infection.state, sizeof(infection.state));
 	return sizeof(infection.state);
 }
+
+#ifdef __BIG_ENDIAN__
+/* port: the state in the PC builds' order (their memory's, which they send), and back */
+void infection_network_state_byte_swap(
+	byte *buffer,
+	long size)
+{
+	struct distributed_infection_state *state = (struct distributed_infection_state *)buffer;
+	short index;
+
+	if (size != (long)sizeof(*state))
+		return;
+	BYTE_SWAP_FIELD(state->game_number);
+	BYTE_SWAP_FIELD(state->revision);
+	BYTE_SWAP_FIELD(state->phase);
+	BYTE_SWAP_FIELD(state->phase_tick);
+	BYTE_SWAP_FIELD(state->winner);
+	for (index = 0; index < HALO_PORT_MAXIMUM_NETWORK_PLAYERS; index++)
+	{
+		BYTE_SWAP_FIELD(state->players[index].identity);
+		BYTE_SWAP_FIELD(state->players[index].score);
+	}
+}
+#endif
 
 boolean infection_read_network_state(
 	byte const *buffer,

@@ -35,5 +35,8 @@ long infection_remaining_ticks(void);
 /* the state the host sends its clients (game_engine_write_network_state) */
 long infection_write_network_state(byte *buffer, long size);
 boolean infection_read_network_state(byte const *buffer, long size, boolean first);
+#ifdef __BIG_ENDIAN__
+void infection_network_state_byte_swap(byte *buffer, long size);
+#endif
 
 #endif

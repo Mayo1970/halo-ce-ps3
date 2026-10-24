@@ -9172,7 +9172,13 @@ void game_engine_network_state_byte_swap(
 	switch (game_engine_get_type())
 	{
 	case game_engine_ctf: game_engine_ctf_network_state_byte_swap(buffer, size); break;
-	case game_engine_slayer: game_engine_slayer_network_state_byte_swap(buffer, size); break;
+	/* port: (Infection's own state: infection.c) */
+	case game_engine_slayer:
+		if (infection_enabled())
+			infection_network_state_byte_swap(buffer, size);
+		else
+			game_engine_slayer_network_state_byte_swap(buffer, size);
+		break;
 	case game_engine_oddball: game_engine_oddball_network_state_byte_swap(buffer, size); break;
 	case game_engine_king: game_engine_king_network_state_byte_swap(buffer, size); break;
 	case game_engine_race: game_engine_race_network_state_byte_swap(buffer, size); break;
