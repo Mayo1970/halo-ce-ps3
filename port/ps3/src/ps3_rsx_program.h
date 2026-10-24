@@ -269,11 +269,37 @@ struct rsx_fragment_program
 	} uniforms[RSX_FP_MAXIMUM_UNIFORMS];
 };
 
+/* clears the fields the translation does not read: one key for each program */
+void rsx_fragment_key_clean(struct rsx_fragment_key *key);
+/* the key as one line of hex (the pack's key list, the log): 39 words, then 15 bytes; parse gives 0 on success */
+#define RSX_FRAGMENT_KEY_TEXT 400
+void rsx_fragment_key_text(const struct rsx_fragment_key *key, char text[RSX_FRAGMENT_KEY_TEXT]);
+int rsx_fragment_key_parse(const char *text, struct rsx_fragment_key *key);
 int rsx_fragment_program_translate(const struct rsx_fragment_key *key, struct rsx_fragment_program *program);
 void rsx_fragment_program_free(struct rsx_fragment_program *program);
 int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 	struct rsx_instruction *instructions, uint32_t maximum, uint32_t *count);
 /* writes a uniform's value into a copy of the microcode */
 void rsx_fragment_program_set_uniform(uint32_t *microcode, uint32_t word, const float value[4]);
+
+/* ---------- the shader pack: the programs the build translated (tools/ps3_shader_pack.c), never freed */
+
+struct rsx_packed_fragment
+{
+	struct rsx_fragment_key key;
+	struct rsx_fragment_program program;
+};
+
+struct rsx_packed_vertex
+{
+	const uint32_t *nv2a;
+	uint32_t nv2a_count;
+	struct rsx_vertex_program program;
+};
+
+extern const struct rsx_packed_fragment rsx_packed_fragments[];
+extern const uint32_t rsx_packed_fragment_count;
+extern const struct rsx_packed_vertex rsx_packed_vertices[];
+extern const uint32_t rsx_packed_vertex_count;
 
 #endif
