@@ -18,6 +18,7 @@ the Direct3D thread's conversions (spu_vertices.c) and the game thread's jobs (s
 extern const u8 spu_mixer_elf[];
 extern const u8 spu_vertices_elf[];
 extern const u8 spu_game_elf[];
+extern const u8 spu_direct3d_elf[];
 
 /* a job longer than this has a dead SPU; a wait on the queue ends after 1 ms to look at the echo, in case the event
 was lost */
@@ -559,8 +560,8 @@ static void vertices_stop(void)
 	ps3_log_printf("[spu] vertices down\n");
 }
 
-/* ---------- the game thread's jobs (spu_game.c): two SPUs with the same program, each a ring: the game's (the
-checkpoint's copies, the particles' rays) and the render's (the shadows, weather, lights, visibility, sprites, contrails) */
+/* ---------- the game thread's jobs (spu_game.c): two SPUs with one program, each a ring: the game's (the checkpoint's
+copies, the particles' update) and the render's (shadows, weather, lights, visibility, sprites, contrails) */
 
 #define GAME_SPUS 2
 
@@ -593,7 +594,7 @@ static const int game_wait_timers[SPU_GAME_KINDS] =
 	_ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_copy_wait,
 	_ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_shadow_wait, _ps3_timer_spu_game_weather_wait,
 	_ps3_timer_spu_game_particles_wait, _ps3_timer_spu_game_lights_wait, _ps3_timer_spu_game_visibility_wait,
-	_ps3_timer_spu_game_sprites_wait, _ps3_timer_spu_game_contrails_wait,
+	_ps3_timer_spu_game_sprites_wait, _ps3_timer_spu_game_contrails_wait, _ps3_timer_spu_game_interpolation_wait,
 };
 
 static void game_group_stop(struct game_spu *g, int terminate)
@@ -862,10 +863,181 @@ static void game_stop(struct game_spu *g)
 	ps3_log_printf("[spu] %s down\n", g->name);
 }
 
+/* ---------- the Direct3D thread's work (spu_direct3d.c): the records, the draw state and the RSX commands */
+
+#define DIRECT3D_QUEUE_SIZE 32
+
+static spu_d3d_bell d3d_bell;
+static spu_d3d_echo d3d_echo;
+static spu_d3d_setup d3d_setup;
+static sysSpuImage d3d_image;
+static sys_spu_group_t d3d_group;
+static sys_spu_thread_t d3d_thread;
+/* the service thread's queue and the game thread's */
+static sys_event_queue_t d3d_queues[2];
+static int d3d_queues_created, d3d_group_running;
+static volatile int d3d_up;
+
+static void direct3d_group_stop(int terminate)
+{
+	u32 cause, status;
+
+	if (__sync_val_compare_and_swap(&d3d_group_running, 1, 0) != 1)
+		return;
+	if (terminate)
+		sysSpuThreadGroupTerminate(d3d_group, 0);
+	sysSpuThreadGroupJoin(d3d_group, &cause, &status);
+	sysSpuThreadDisconnectEvent(d3d_thread, SPU_THREAD_EVENT_USER, SPU_D3D_SERVICE_PORT);
+	sysSpuThreadDisconnectEvent(d3d_thread, SPU_THREAD_EVENT_USER, SPU_D3D_GAME_PORT);
+	sysSpuThreadGroupDestroy(d3d_group);
+	sysSpuImageClose(&d3d_image);
+}
+
+int ps3_spu_direct3d_start(const spu_d3d_setup *setup)
+{
+	sys_event_queue_attr_t queue_attributes;
+	sysSpuThreadGroupAttribute group_attributes;
+	sysSpuThreadAttribute thread_attributes;
+	sysSpuThreadArgument arguments;
+	uint64_t start;
+	s32 result;
+	int index;
+
+	if (d3d_up)
+		return 1;
+	spus_initialize();
+	memset(&d3d_bell, 0, sizeof(d3d_bell));
+	memset(&d3d_echo, 0, sizeof(d3d_echo));
+	d3d_setup = *setup;
+	for (index = 0; index < 2 && !d3d_queues_created; index++)
+	{
+		memset(&queue_attributes, 0, sizeof(queue_attributes));
+		queue_attributes.attr_protocol = SYS_EVENT_QUEUE_FIFO;
+		queue_attributes.type = SYS_EVENT_QUEUE_PPU;
+		memcpy(queue_attributes.name, index ? "d3dgame" : "d3dserv", 8);
+		result = sysEventQueueCreate(&d3d_queues[index], &queue_attributes, SYS_EVENT_QUEUE_KEY_LOCAL,
+			DIRECT3D_QUEUE_SIZE);
+		if (result != 0)
+		{
+			ps3_log_printf("[spu] direct3d: sysEventQueueCreate = 0x%08x\n", (unsigned)result);
+			return 0;
+		}
+		if (index)
+			d3d_queues_created = 1;
+	}
+	result = sysSpuImageImport(&d3d_image, spu_direct3d_elf, SPU_IMAGE_PROTECT);
+	if (result != 0)
+	{
+		ps3_log_printf("[spu] direct3d: sysSpuImageImport = 0x%08x\n", (unsigned)result);
+		return 0;
+	}
+	sysSpuThreadGroupAttributeInitialize(group_attributes);
+	sysSpuThreadGroupAttributeName(group_attributes, "halo_direct3d");
+	result = sysSpuThreadGroupCreate(&d3d_group, 1, 100, &group_attributes);
+	if (result != 0)
+	{
+		ps3_log_printf("[spu] direct3d: sysSpuThreadGroupCreate = 0x%08x\n", (unsigned)result);
+		sysSpuImageClose(&d3d_image);
+		return 0;
+	}
+	sysSpuThreadAttributeInitialize(thread_attributes);
+	sysSpuThreadAttributeName(thread_attributes, "spu_direct3d");
+	sysSpuThreadArgumentInitialize(arguments);
+	arguments.arg0 = (u64)(uintptr_t)&d3d_bell;
+	arguments.arg1 = (u64)(uintptr_t)&d3d_echo;
+	arguments.arg2 = (u64)(uintptr_t)&d3d_setup;
+	result = sysSpuThreadInitialize(&d3d_thread, d3d_group, 0, &d3d_image, &thread_attributes, &arguments);
+	if (result == 0)
+		result = sysSpuThreadConnectEvent(d3d_thread, d3d_queues[0], SPU_THREAD_EVENT_USER, SPU_D3D_SERVICE_PORT);
+	if (result == 0)
+		result = sysSpuThreadConnectEvent(d3d_thread, d3d_queues[1], SPU_THREAD_EVENT_USER, SPU_D3D_GAME_PORT);
+	if (result == 0)
+		result = sysSpuThreadGroupStart(d3d_group);
+	if (result != 0)
+	{
+		ps3_log_printf("[spu] direct3d: the SPU thread's start = 0x%08x\n", (unsigned)result);
+		sysSpuThreadGroupDestroy(d3d_group);
+		sysSpuImageClose(&d3d_image);
+		return 0;
+	}
+	d3d_group_running = 1;
+	start = ps3_timer_now();
+	while (d3d_echo.state != SPU_D3D_RUNNING &&
+		ps3_timer_now() - start < ticks_from_microseconds(JOB_TIMEOUT_MICROSECONDS))
+		sysUsleep(100);
+	if (d3d_echo.state != SPU_D3D_RUNNING)
+	{
+		ps3_log_printf("[spu] direct3d: the SPU thread did not report in 100 ms\n");
+		direct3d_group_stop(1);
+		return 0;
+	}
+	d3d_up = 1;
+	ps3_log_printf("[spu] direct3d up: the echo at %08x in its LS\n", (unsigned)d3d_echo.ls_address);
+	return 1;
+}
+
+spu_d3d_bell *ps3_spu_direct3d_bell(void)
+{
+	return &d3d_bell;
+}
+
+const volatile spu_d3d_echo *ps3_spu_direct3d_echo(void)
+{
+	return &d3d_echo;
+}
+
+int ps3_spu_direct3d_wait(int queue, uint32_t timeout_microseconds)
+{
+	sys_event_t event;
+
+	return sysEventQueueReceive(d3d_queues[queue ? 1 : 0], &event, timeout_microseconds) == 0;
+}
+
+void ps3_spu_direct3d_drain(int queue)
+{
+	sysEventQueueDrain(d3d_queues[queue ? 1 : 0]);
+}
+
+/* the SPU's own echo from its LS (the copy in main memory is stale while it hangs) */
+void ps3_spu_direct3d_report(const char *reason)
+{
+	spu_d3d_echo copy;
+	u64 *words = (u64 *)&copy;
+	uint32_t index;
+	s32 result = 0;
+
+	memset(&copy, 0, sizeof(copy));
+	for (index = 0; index < sizeof(copy) / 8 && result == 0 && d3d_group_running; index++)
+		result = sysSpuThreadReadLocalStorage(d3d_thread, d3d_echo.ls_address + index * 8, &words[index], 8);
+	ps3_log_printf("[spu] direct3d: %s (the SPU's own echo: %llu run, request %u, %u chunks, record %u, stage %u, "
+		"read 0x%08x)\n", reason, (unsigned long long)copy.consumed, (unsigned)copy.request, (unsigned)copy.chunks,
+		(unsigned)copy.record_type, (unsigned)copy.stage, (unsigned)result);
+}
+
+void ps3_spu_direct3d_stop(void)
+{
+	uint64_t start;
+
+	if (!d3d_group_running)
+		return;
+	d3d_up = 0;
+	__asm__ volatile("lwsync" ::: "memory");
+	d3d_bell.quit = 1;
+	start = ps3_timer_now();
+	while (d3d_echo.state != SPU_D3D_EXITED &&
+		ps3_timer_now() - start < ticks_from_microseconds(JOB_TIMEOUT_MICROSECONDS))
+		sysUsleep(1000);
+	if (d3d_echo.state != SPU_D3D_EXITED)
+		ps3_log_printf("[spu] direct3d: the SPU thread did not end in 100 ms; its group is terminated\n");
+	direct3d_group_stop(d3d_echo.state != SPU_D3D_EXITED);
+	ps3_log_printf("[spu] direct3d down\n");
+}
+
 void ps3_spu_stop(void)
 {
 	mixer_stop();
 	vertices_stop();
 	game_stop(&game_spus[0]);
 	game_stop(&game_spus[1]);
+	ps3_spu_direct3d_stop();
 }

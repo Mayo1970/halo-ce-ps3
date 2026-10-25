@@ -32,6 +32,7 @@ Resources: d3d8_resources.c. The game's thread records calls; the PPE's other th
 
 /* GCM's values (gcm_sys.h cannot be included with the game's 32-bit long) */
 #define GCM_NEVER 0x0200
+#define GCM_GREATER 0x0204
 #define GCM_COLOR_MASK_B 0x00000001
 #define GCM_COLOR_MASK_G 0x00000100
 #define GCM_COLOR_MASK_R 0x00010000
@@ -251,7 +252,14 @@ enum
 	_record_elements,
 	_record_timestamp,
 	_record_draw_stamps,
-	_record_present
+	_record_present,
+	/* the Direct3D SPU's only (spu_direct3d.h) */
+	_record_screen,
+	_record_tag_cache,
+	_record_label,
+	/* (both's) */
+	_record_particles,
+	_record_light_bounds
 };
 
 /* the timer build's records by type (_ps3_timer_record_wrap on) */
@@ -310,6 +318,49 @@ static struct
 	unsigned long large_bytes;
 } ring;
 
+/* the Direct3D thread's work on an SPU (spu_direct3d.c, the service thread below): its state */
+static spu_d3d_request spu_request_block;
+static spu_d3d_response spu_response_block;
+static spu_d3d_statistics spu_statistics_block;
+static spu_d3d_initial spu_initial;
+static spu_d3d_chunk spu_chunk_list[SPU_D3D_CHUNK_LIST] __attribute__((aligned(128)));
+static int32_t spu_fragment_buckets[SPU_D3D_FRAGMENT_BUCKETS] __attribute__((aligned(128)));
+
+static struct
+{
+	BOOL on;
+	spu_d3d_bell *bell;
+	const volatile spu_d3d_echo *echo;
+	spu_d3d_setup setup;
+	/* the chunks called, the request answered */
+	uint32_t called;
+	uint32_t answered;
+	spu_d3d_texture *textures;
+	spu_d3d_array *arrays;
+	spu_d3d_index_array *index_arrays;
+	spu_d3d_fragment *fragments;
+	uint32_t fragment_count;
+	uint32_t fragment_capacity;
+	volatile int stop;
+	volatile int stopped;
+	/* the command buffer's context: the service thread's, the game thread's while the SPU is idle */
+	struct ps3_host_lock *gpu_lock;
+	/* the targets its requests made, for render_targets_evict */
+	struct
+	{
+		void *memory;
+		uint32_t bytes;
+	} targets[2 * SPU_D3D_TARGETS];
+	uint32_t target_count;
+	/* the SPU's timers and counts at the timers' last log */
+	uint64_t timers[SPU_D3D_TIMERS];
+	uint32_t counts[SPU_D3D_TIMERS];
+} spu;
+
+static void spu_wait(uint64_t position);
+static void spu_chunks_wait(void);
+static BOOL spu_direct3d_start(void);
+
 static void *record_begin(uint32_t type, unsigned long payload_bytes, uint32_t a, uint32_t b);
 static void record_commit(void);
 static void direct3d_publish(void);
@@ -339,8 +390,9 @@ static float dword_to_float(DWORD value)
 	return u.f;
 }
 
-/* b / 255 for each byte (Direct3D_CreateDevice): an int-to-float conversion goes through memory on the PPE */
-static float byte_floats[256];
+/* b / 255 for each byte (Direct3D_CreateDevice): an int-to-float conversion goes through memory on the PPE; 16-aligned
+for the Direct3D SPU's DMA */
+static float byte_floats[256] __attribute__((aligned(16)));
 
 static void color_to_vec4(D3DCOLOR color, float *out)
 {
@@ -359,6 +411,8 @@ static unsigned long screen_read_at = (unsigned long)-1;
 static long ui_offset;
 
 static void render_targets_evict(void);
+static BOOL particles_targets(void);
+static void particles_targets_free(void);
 
 static void screen_mode_choose(long *width, float scale[2])
 {
@@ -428,6 +482,7 @@ long halo_screen_commit(void)
 	{
 		/* the surfaces and the targets change under the Direct3D thread's frames */
 		direct3d_drain();
+		spu_chunks_wait();
 		platform_log("screen: %ldx%d drawn at %.0fx%.0f", width, SCREEN_HEIGHT, width * scale[0],
 			SCREEN_HEIGHT * scale[1]);
 		screen_width = width;
@@ -441,6 +496,8 @@ long halo_screen_commit(void)
 		}
 		/* (the targets of the old size, which nothing finds now) */
 		render_targets_evict();
+		if (config_boolean("display.half_resolution_particles"))
+			particles_targets();
 	}
 	return screen_width;
 }
@@ -806,6 +863,29 @@ static void render_targets_evict(void)
 {
 	unsigned long index;
 
+	if (spu.on)
+	{
+		spu_d3d_record_screen *screen;
+
+		/* (the SPU idle: the game thread has the command buffer) */
+		ps3_host_lock_enter(spu.gpu_lock);
+		for (index = 0; index < spu.target_count; index++)
+			ps3_gpu_target_free(spu.targets[index].memory, spu.targets[index].bytes);
+		spu.target_count = 0;
+		particles_targets_free();
+		ps3_host_lock_leave(spu.gpu_lock);
+		screen = record_begin(_record_screen, sizeof(*screen), 0, 0);
+		if (screen)
+		{
+			screen->width = (uint32_t)screen_width;
+			screen->scale[0] = screen_scale[0];
+			screen->scale[1] = screen_scale[1];
+			screen->pad = 0;
+			record_commit();
+		}
+		return;
+	}
+
 	for (index = 0; index < RENDER_TARGET_BUCKET_COUNT; index++)
 	{
 		while (render_target_buckets[index])
@@ -817,6 +897,7 @@ static void render_targets_evict(void)
 			free(target);
 		}
 	}
+	particles_targets_free();
 	render_target_generation++;
 	texture_epoch++;
 }
@@ -833,6 +914,26 @@ static struct render_target *render_target_find(DWORD data)
 	}
 	return best;
 }
+
+/* the half resolution particles (display.half_resolution_particles; rasterizer_transparent_geometry.c's): the effects
+in front of every other transparent surface drawn into targets of half the frame's size, then blended over it */
+static struct
+{
+	/* the game's thread's: the half targets' memory, made at the first use, freed with the screen's targets */
+	void *color_memory, *depth_memory;
+	uint32_t color_bytes, depth_bytes;
+	spu_d3d_record_particles targets;
+	/* the Direct3D thread's: on between the records, with the frame's targets it began on; bound, the last bind's */
+	BOOL on, bound;
+	spu_d3d_record_particles half;
+	struct render_target *main_color, *main_depth;
+} particles;
+
+/* the targets the last bind_targets found */
+static struct
+{
+	struct render_target *color, *depth;
+} targets_bound;
 
 /* the RSX surface for the current targets; FALSE if there is nothing to draw into. The lookups are kept while the
 surfaces' words stay: every draw binds. */
@@ -882,6 +983,27 @@ bind:
 		color->last_rendered = device.frame + 1;
 		texture_epoch++;
 	}
+	targets_bound.color = color;
+	targets_bound.depth = depth;
+	particles.bound = particles.on && color == particles.main_color && depth == particles.main_depth;
+	if (particles.bound)
+	{
+		/* the frame's units over the half target's pixels */
+		surface.color_offset = particles.half.color_offset;
+		surface.color_pitch = particles.half.color_pitch;
+		surface.depth_offset = particles.half.depth_offset;
+		surface.depth_pitch = particles.half.depth_pitch;
+		surface.width = (uint16_t)particles.half.width;
+		surface.height = (uint16_t)particles.half.height;
+		ps3_gpu_set_surface(&surface);
+		device.target_width = color->units_width;
+		device.target_height = color->units_height;
+		device.target_scale[0] = color->scale[0] * 0.5f;
+		device.target_scale[1] = color->scale[1] * 0.5f;
+		device.target_pixel_width = particles.half.width;
+		device.target_pixel_height = particles.half.height;
+		return TRUE;
+	}
 	surface.color_offset = color->offset;
 	surface.color_pitch = color->pitch;
 	surface.depth_offset = depth->offset;
@@ -896,6 +1018,274 @@ bind:
 	device.target_pixel_width = color->width;
 	device.target_pixel_height = color->height;
 	return TRUE;
+}
+
+/* the game's thread: the half targets for the screen's size, made with the device and again with the screen's (before
+the screen's targets: their memory the same whichever thread draws); FALSE without them */
+static BOOL particles_targets(void)
+{
+	uint32_t width = ((uint32_t)scaled_pixel((float)halo_screen_width(), screen_scale[0]) + 1) / 2;
+	uint32_t height = ((uint32_t)scaled_pixel((float)SCREEN_HEIGHT, screen_scale[1]) + 1) / 2;
+	spu_d3d_record_particles *targets = &particles.targets;
+
+	if (particles.color_memory)
+		return targets->width == width && targets->height == height;
+	memset(targets, 0, sizeof(*targets));
+	particles.color_memory = ps3_gpu_target_allocate(width, height, 0, 1, 0, &targets->color_offset,
+		&targets->color_pitch, &particles.color_bytes);
+	particles.depth_memory = ps3_gpu_target_allocate(width, height, 1, 1, 0, &targets->depth_offset,
+		&targets->depth_pitch, &particles.depth_bytes);
+	if (!particles.color_memory || !particles.depth_memory)
+	{
+		platform_log("Direct3D: no RSX memory for the half resolution particles' %ux%u targets", (unsigned)width,
+			(unsigned)height);
+		particles_targets_free();
+		return FALSE;
+	}
+	targets->width = width;
+	targets->height = height;
+	platform_log("Direct3D: the half resolution particles' targets: %ux%u", (unsigned)width, (unsigned)height);
+	return TRUE;
+}
+
+static void particles_targets_free(void)
+{
+	if (particles.color_memory)
+		ps3_gpu_target_free(particles.color_memory, particles.color_bytes);
+	if (particles.depth_memory)
+		ps3_gpu_target_free(particles.depth_memory, particles.depth_bytes);
+	particles.color_memory = particles.depth_memory = NULL;
+}
+
+/* rasterizer_transparent_geometry.c: the draws from 1 to 0 into the half targets, then blended over the frame's;
+FALSE when they cannot be (the draws go to the frame's) */
+int d3d8_particles_half(int on)
+{
+	spu_d3d_record_particles *payload;
+
+	if (!on)
+	{
+		record_begin(_record_particles, 0, 0, 0);
+		record_commit();
+		return TRUE;
+	}
+	if (!device.gpu_ready || !particles_targets())
+		return FALSE;
+	payload = record_begin(_record_particles, sizeof(*payload), 1, 0);
+	if (!payload)
+		return FALSE;
+	*payload = particles.targets;
+	record_commit();
+	return TRUE;
+}
+
+/* the Direct3D thread: the half targets bound, their colour cleared to the frame seen whole (transmittance 1), their
+depth the frame's; nothing when the frame's targets are not the screen's */
+static void particles_begin(const spu_d3d_record_particles *half)
+{
+	struct ps3_gpu_surface surface;
+	BOOL has_depth;
+
+	if (particles.on || !bind_targets(&has_depth) || !has_depth ||
+		(targets_bound.color->width + 1) / 2 != half->width || (targets_bound.color->height + 1) / 2 != half->height)
+		return;
+	particles.on = TRUE;
+	particles.half = *half;
+	particles.main_color = targets_bound.color;
+	particles.main_depth = targets_bound.depth;
+	surface.color_offset = half->color_offset;
+	surface.color_pitch = half->color_pitch;
+	surface.depth_offset = half->depth_offset;
+	surface.depth_pitch = half->depth_pitch;
+	surface.width = (uint16_t)half->width;
+	surface.height = (uint16_t)half->height;
+	ps3_gpu_set_surface(&surface);
+	ps3_gpu_clear(0xf2, 0xff000000u, 0, 0, 0, half->width, half->height);
+	ps3_gpu_particles_depth(particles.main_depth->offset, particles.main_depth->pitch, particles.main_depth->width,
+		particles.main_depth->height);
+}
+
+/* the half target's colour over the frame's: theirs plus the frame's times the transmittance */
+static void particles_end(void)
+{
+	struct ps3_gpu_surface surface;
+
+	if (!particles.on)
+		return;
+	particles.on = FALSE;
+	particles.bound = FALSE;
+	surface.color_offset = particles.main_color->offset;
+	surface.color_pitch = particles.main_color->pitch;
+	surface.depth_offset = particles.main_depth->offset;
+	surface.depth_pitch = particles.main_depth->pitch;
+	surface.width = (uint16_t)particles.main_color->width;
+	surface.height = (uint16_t)particles.main_color->height;
+	ps3_gpu_set_surface(&surface);
+	ps3_gpu_particles_composite(particles.half.color_offset, particles.half.color_pitch, particles.half.width,
+		particles.half.height);
+}
+
+/* a draw into the half target: the colour blended as into the frame's, the alpha (the transmittance) times the
+frame's factor; no stencil, which the half target does not have */
+static void particles_state(struct ps3_gpu_state *state)
+{
+	state->color_mask |= GCM_COLOR_MASK_A;
+	state->stencil_function = 0;
+	state->stencil_write_mask = 0;
+	if (!state->blend)
+	{
+		state->blend = 1;
+		state->blend_source = D3DBLEND_ONE;
+		state->blend_destination = D3DBLEND_ZERO;
+		state->blend_equation = GCM_FUNC_ADD;
+	}
+	state->blend_source_alpha = D3DBLEND_ZERO;
+	state->blend_destination_alpha = state->blend_destination;
+}
+
+/* ---------- the lights' bounds (rasterizer_xbox_environment.c's diffuse lights): a light's draws give 0 outside its
+distance attenuation's box, so a scissor and the depth bounds test leave those pixels out */
+
+/* 0: the lights' draws over their whole surfaces */
+#define RSX_LIGHT_BOUNDS 1
+
+static struct
+{
+	/* the game's thread's: rasterizer_set_frustum_z's world to clip columns (c[-96] to c[-93]); a record on */
+	double columns[4][4];
+	BOOL recorded;
+	/* the Direct3D thread's */
+	BOOL on;
+	spu_d3d_record_light_bounds bounds;
+} light_bounds;
+
+void d3d8_light_bounds_transform(const float *columns)
+{
+	int index;
+
+	for (index = 0; index < 16; index++)
+		light_bounds.columns[index / 4][index % 4] = columns[index];
+}
+
+/* the box's clip space bounds from its corners, the box grown by 1/64 and 1/1024 of a unit for the texel coordinates'
+rounding, the depth by 2^-12 for the vertices'; with a corner not in front, any x and y */
+static void light_bounds_find(const float *center, float half_size, spu_d3d_record_light_bounds *bounds)
+{
+	double half = half_size * (1.0 + 1.0 / 64.0) + 1.0 / 1024.0, clip[8][4];
+	double x0 = 1.0, y0 = 1.0, x1 = -1.0, y1 = -1.0, z0 = 1.0, z1 = 0.0;
+	int corner, column, behind = 0;
+
+	for (corner = 0; corner < 8; corner++)
+	{
+		double x = center[0] + ((corner & 1) ? half : -half), y = center[1] + ((corner & 2) ? half : -half);
+		double z = center[2] + ((corner & 4) ? half : -half);
+
+		for (column = 0; column < 4; column++)
+			clip[corner][column] = x * light_bounds.columns[column][0] + y * light_bounds.columns[column][1] +
+				z * light_bounds.columns[column][2] + light_bounds.columns[column][3];
+		if (clip[corner][3] <= 0.0)
+		{
+			behind++;
+			continue;
+		}
+		{
+			double px = clip[corner][0] / clip[corner][3], py = clip[corner][1] / clip[corner][3];
+			double pz = clip[corner][2] / clip[corner][3];
+
+			x0 = px < x0 ? px : x0;
+			x1 = px > x1 ? px : x1;
+			y0 = py < y0 ? py : y0;
+			y1 = py > y1 ? py : y1;
+			z0 = pz < z0 ? pz : z0;
+			z1 = pz > z1 ? pz : z1;
+		}
+	}
+	if (behind)
+	{
+		x0 = y0 = -2.0;
+		x1 = y1 = 2.0;
+		z0 = -1.0;
+		/* the depth's largest is a front corner's when it falls toward the eye's plane: each edge's crossing below 0 */
+		for (corner = 0; corner < 8 && behind < 8; corner++)
+		{
+			int axis;
+
+			for (axis = 1; axis < 8; axis <<= 1)
+			{
+				const double *a = clip[corner], *b = clip[corner | axis];
+
+				if ((corner & axis) || (a[3] > 0.0) == (b[3] > 0.0))
+					continue;
+				if (a[2] + (b[2] - a[2]) * (a[3] / (a[3] - b[3])) >= 0.0)
+					z1 = 2.0;
+			}
+		}
+		if (behind == 8)
+			x0 = 1.0, x1 = -1.0;
+	}
+	/* (past the viewport's edges, also moved in by ui_offset, -2 and 2 cover them: the scissor cuts the rest) */
+	bounds->x0 = (float)(x0 < -2.0 ? -2.0 : x0 > 2.0 ? 2.0 : x0);
+	bounds->y0 = (float)(y0 < -2.0 ? -2.0 : y0 > 2.0 ? 2.0 : y0);
+	bounds->x1 = (float)(x1 < -2.0 ? -2.0 : x1 > 2.0 ? 2.0 : x1);
+	bounds->y1 = (float)(y1 < -2.0 ? -2.0 : y1 > 2.0 ? 2.0 : y1);
+	z0 -= 1.0 / 4096.0;
+	z1 += 1.0 / 4096.0;
+	bounds->z0 = (float)(z0 < 0.0 ? 0.0 : z0 > 1.0 ? 1.0 : z0);
+	bounds->z1 = (float)(z1 < 0.0 ? 0.0 : z1 > 1.0 ? 1.0 : z1);
+	bounds->pad[0] = bounds->pad[1] = 0;
+}
+
+/* the draws after it light only the box center +- half_size; center NULL: their whole surfaces again */
+void d3d8_light_bounds(const float *center, float half_size)
+{
+	spu_d3d_record_light_bounds *payload;
+
+	if (!center || !RSX_LIGHT_BOUNDS)
+	{
+		if (light_bounds.recorded)
+		{
+			record_begin(_record_light_bounds, 0, 0, 0);
+			record_commit();
+			light_bounds.recorded = FALSE;
+		}
+		return;
+	}
+	payload = record_begin(_record_light_bounds, sizeof(*payload), 1, 0);
+	if (!payload)
+		return;
+	light_bounds_find(center, half_size, payload);
+	record_commit();
+	light_bounds.recorded = TRUE;
+}
+
+/* the pixel a coordinate falls in, as scaled_pixel's */
+static long light_bounds_pixel(float value)
+{
+	long pixel = (long)value;
+
+	if ((float)pixel > value)
+		pixel--;
+	return pixel;
+}
+
+/* the box's pixels and 2 more each side (rounding) inside the scissor; the screen's y grows down from y1 */
+static void light_bounds_scissor(long *left, long *top, long *right, long *bottom)
+{
+	const spu_d3d_record_light_bounds *b = &light_bounds.bounds;
+	float offset_x = device.viewport_offset[0] + (float)ui_offset + 0.5f, offset_y = device.viewport_offset[1] + 0.5f;
+	long x0 = light_bounds_pixel((b->x0 * device.viewport_scale[0] + offset_x) * device.target_scale[0]) - 2;
+	long x1 = light_bounds_pixel((b->x1 * device.viewport_scale[0] + offset_x) * device.target_scale[0]) + 3;
+	long y0 = light_bounds_pixel((b->y1 * device.viewport_scale[1] + offset_y) * device.target_scale[1]) - 2;
+	long y1 = light_bounds_pixel((b->y0 * device.viewport_scale[1] + offset_y) * device.target_scale[1]) + 3;
+
+	if (x0 > *left)
+		*left = x0;
+	if (x1 < *right)
+		*right = x1;
+	if (y0 > *top)
+		*top = y0;
+	if (y1 < *bottom)
+		*bottom = y1;
 }
 
 /* ---------- textures: RSX copies, converted again when their texels change */
@@ -930,6 +1320,8 @@ int hud_hires_rsx_style(void);
 int hud_hires_rsx_override(const unsigned char *texels, unsigned long width, unsigned long height,
 	unsigned long level0_size, struct ps3_gpu_texture *gpu);
 int hud_hires_rsx_placeholder(DWORD data, struct ps3_gpu_texture *gpu);
+int hud_hires_rsx_asset_texture(long asset, int style, struct ps3_gpu_texture *gpu);
+void hud_hires_rsx_placeholders(unsigned int words[8][2]);
 
 static struct texture_entry *texture_buckets[TEXTURE_BUCKET_COUNT];
 static unsigned long texture_frame = 1;
@@ -1472,11 +1864,13 @@ struct fragment_entry
 	struct rsx_fragment_key key;
 	struct rsx_fragment_program program;
 	BOOL translated;
-	/* (the timer build) its key for the stamped draws; its last stamped draw's specular split and textures */
+	/* (the timer build) its key for the stamped draws; its last stamped draws' parts (specular, effects), textures */
 	uint16_t stamp_key;
-	uint8_t stamp_part;
+	uint8_t stamp_parts[2];
 	uint8_t stamp_texture_mask;
 	struct ps3_gpu_texture stamp_textures[TEXTURE_STAGES];
+	/* its index in the Direct3D SPU's table, -1 none */
+	int32_t spu_index;
 };
 
 #define FRAGMENT_BUCKETS 1024
@@ -1518,6 +1912,8 @@ static BOOL fragment_key_same(const struct rsx_fragment_key *a, const struct rsx
 	return TRUE;
 }
 
+static void spu_fragment_add(struct fragment_entry *entry);
+
 static void fragment_entry_add(struct fragment_entry *entry)
 {
 	struct fragment_entry **bucket = &fragment_buckets[entry->hash % FRAGMENT_BUCKETS];
@@ -1525,6 +1921,7 @@ static void fragment_entry_add(struct fragment_entry *entry)
 	fragment_program_count++;
 	entry->stamp_key = (uint16_t)(fragment_program_count < PS3_DRAW_STAMP_KEYS ? fragment_program_count :
 		PS3_DRAW_STAMP_KEYS - 1);
+	spu_fragment_add(entry);
 	entry->next = *bucket;
 	/* (the game thread's shaders_log walks the buckets: the entry whole before it is seen) */
 	__sync_synchronize();
@@ -1633,17 +2030,17 @@ static const struct rsx_fragment_program *fragment_program_get(const struct rsx_
 	return entry->translated ? &entry->program : NULL;
 }
 
-/* (the timer build) a draw's RSX time stamped by its pixel shader while a span is on (ps3_timers_draw_stamps) */
+/* (the timer build) a stamped frame's draw: its RSX time by its pixel shader and part (ps3_timers_draw_stamps) */
 static void draw_stamp(void)
 {
 	struct fragment_entry *entry = fragment_last;
 
-	if (draw_stamps_part < 0 || !entry)
+	if (draw_stamps_part < 0 || !entry ||
+		!ps3_gpu_draw_stamp((uint16_t)(entry->stamp_key | draw_stamps_part << PS3_DRAW_STAMP_PART_SHIFT)))
 		return;
-	entry->stamp_part = (uint8_t)draw_stamps_part;
+	entry->stamp_parts[draw_stamps_part > _ps3_stamp_specular_fog] = (uint8_t)draw_stamps_part;
 	entry->stamp_texture_mask = bound_texture_mask;
 	memcpy(entry->stamp_textures, bound_textures, sizeof(bound_textures));
-	ps3_gpu_draw_stamp(entry->stamp_key);
 }
 
 /* the specular split the next draws are in: the first from the span's start, the next after each split */
@@ -1653,68 +2050,160 @@ static void draw_stamps_split(int part)
 		draw_stamps_part = part - _ps3_timer_specular_lights + 1;
 }
 
-/* ps3_timers.h: the stamped pixel shaders by their RSX time, most first, each with its program and last textures */
+/* the part the next draws are in (-1 none): a span starts where they were in none */
+static void draw_stamps_set(int part)
+{
+	int was = draw_stamps_part;
+
+	draw_stamps_part = part;
+	if (part < 0 || was < 0)
+		ps3_gpu_draw_stamps(part >= 0);
+}
+
+/* ps3_timers.h's stamp parts */
+static const char *const stamp_part_names[] =
+{
+	"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog", "the rest",
+	"weather", "particles", "particle systems", "contrails", "other effect shaders", "model", "generic", "chicago",
+	"water", "glass", "meter", "plasma", "other shaders", "decals", "detail objects",
+};
+
+typedef char stamp_names_check[sizeof(stamp_part_names) / sizeof(stamp_part_names[0]) == _ps3_stamp_count &&
+	offsetof(struct fragment_entry, stamp_texture_mask) == offsetof(struct fragment_entry, stamp_parts) + 2 &&
+	PS3_DRAW_STAMP_KEYS <= 1 << PS3_DRAW_STAMP_PART_SHIFT && _ps3_stamp_count < 0xffff >> PS3_DRAW_STAMP_PART_SHIFT ?
+	1 : -1];
+
+/* ps3_timers.h: the stamped pixel shaders of the specular part, then of the effects pass, by their RSX time, most
+first, each with its program and last textures */
 static void shaders_log(void)
 {
-	static const char *const part_names[] =
-	{
-		"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog",
-	};
+	static const char *const list_names[] = { "specular part", "effects pass" };
 	struct fragment_entry *top[SHADERS_LOGGED], *entry;
-	unsigned long bucket, count = 0, index;
+	unsigned long bucket, count, index, list;
 	double frames = ps3_draw_stamp_frames;
 
 	if (!ps3_draw_stamp_frames)
 		return;
-	for (bucket = 0; bucket < FRAGMENT_BUCKETS; bucket++)
+	for (list = 0; list < 2; list++)
 	{
-		for (entry = fragment_buckets[bucket]; entry; entry = entry->next)
-		{
-			uint64_t time = ps3_draw_stamp_nanoseconds[entry->stamp_key];
+		const uint64_t *times = ps3_draw_stamp_nanoseconds[list];
 
-			if (!ps3_draw_stamp_draws[entry->stamp_key] ||
-				(count == SHADERS_LOGGED && ps3_draw_stamp_nanoseconds[top[count - 1]->stamp_key] >= time))
+		count = 0;
+		for (bucket = 0; bucket < FRAGMENT_BUCKETS; bucket++)
+		{
+			for (entry = fragment_buckets[bucket]; entry; entry = entry->next)
 			{
-				continue;
+				uint64_t time = times[entry->stamp_key];
+
+				if (!ps3_draw_stamp_draws[list][entry->stamp_key] ||
+					(count == SHADERS_LOGGED && times[top[count - 1]->stamp_key] >= time))
+				{
+					continue;
+				}
+				index = count < SHADERS_LOGGED ? count++ : SHADERS_LOGGED - 1;
+				for (; index > 0 && times[top[index - 1]->stamp_key] < time; index--)
+					top[index] = top[index - 1];
+				top[index] = entry;
 			}
-			index = count < SHADERS_LOGGED ? count++ : SHADERS_LOGGED - 1;
-			for (; index > 0 && ps3_draw_stamp_nanoseconds[top[index - 1]->stamp_key] < time; index--)
-				top[index] = top[index - 1];
-			top[index] = entry;
 		}
-	}
-	ps3_log_printf("[time] specular part's pixel shaders on the RSX, ms a stamped frame (%u frames stamped, %u draws "
-		"past their stamps)\n", (unsigned)ps3_draw_stamp_frames, (unsigned)ps3_draw_stamp_dropped);
-	for (index = 0; index < count; index++)
-	{
-		char textures[256];
-		unsigned long length = 0;
-		int stage;
-
-		entry = top[index];
-		textures[0] = 0;
-		for (stage = 0; stage < TEXTURE_STAGES && length < sizeof(textures); stage++)
+		ps3_log_printf("[time] %s's pixel shaders on the RSX, ms a stamped frame (%u frames stamped, %u draws past "
+			"their stamps)\n", list_names[list], (unsigned)ps3_draw_stamp_frames, (unsigned)ps3_draw_stamp_dropped);
+		for (index = 0; index < count; index++)
 		{
-			const struct ps3_gpu_texture *texture = &entry->stamp_textures[stage];
+			char textures[256];
+			unsigned long length = 0;
+			int stage;
 
-			if (!(entry->stamp_texture_mask & (1 << stage)))
-				continue;
-			length += (unsigned long)snprintf(textures + length, sizeof(textures) - length,
-				"%s %d %s %ux%u format %02x, %u levels, filters %u/%u, anisotropy %u", length ? ";" : "", stage,
-				texture->cube ? "cube" : texture->dimension == GCM_TEXTURE_DIMS_3D ? "3D" : "2D",
-				(unsigned)texture->width, (unsigned)texture->height, (unsigned)texture->format,
-				(unsigned)texture->levels, (unsigned)texture->minify, (unsigned)texture->magnify,
-				(unsigned)texture->anisotropy);
+			entry = top[index];
+			textures[0] = 0;
+			for (stage = 0; stage < TEXTURE_STAGES && length < sizeof(textures); stage++)
+			{
+				const struct ps3_gpu_texture *texture = &entry->stamp_textures[stage];
+
+				if (!(entry->stamp_texture_mask & (1 << stage)))
+					continue;
+				length += (unsigned long)snprintf(textures + length, sizeof(textures) - length,
+					"%s %d %s %ux%u format %02x, %u levels, filters %u/%u, anisotropy %u", length ? ";" : "", stage,
+					texture->cube ? "cube" : texture->dimension == GCM_TEXTURE_DIMS_3D ? "3D" : "2D",
+					(unsigned)texture->width, (unsigned)texture->height, (unsigned)texture->format,
+					(unsigned)texture->levels, (unsigned)texture->minify, (unsigned)texture->magnify,
+					(unsigned)texture->anisotropy);
+			}
+			/* (a slot is 16 bytes: an instruction, or the inline constant after one) */
+			ps3_log_printf("[time] pixel shader %u (%s): %.2f ms, %.1f draws; %u slots, %u registers, %u "
+				"combiners, texture modes %05x; textures:%s\n", (unsigned)entry->stamp_key,
+				entry->stamp_parts[list] < _ps3_stamp_count ? stamp_part_names[entry->stamp_parts[list]] : "?",
+				times[entry->stamp_key] / frames * 1.0e-6, ps3_draw_stamp_draws[list][entry->stamp_key] / frames,
+				(unsigned)(entry->program.word_count / 4), (unsigned)entry->program.register_count,
+				(unsigned)(entry->key.combiner_count & 0xff), (unsigned)entry->key.texture_modes,
+				length ? textures : " none");
 		}
-		/* (a slot is 16 bytes: an instruction, or the inline constant after one) */
-		ps3_log_printf("[time] pixel shader %u (%s): %.2f ms, %.1f draws; %u slots, %u registers, %u "
-			"combiners, texture modes %05x; textures:%s\n", (unsigned)entry->stamp_key,
-			entry->stamp_part < sizeof(part_names) / sizeof(part_names[0]) ? part_names[entry->stamp_part] : "?",
-			ps3_draw_stamp_nanoseconds[entry->stamp_key] / frames * 1.0e-6,
-			ps3_draw_stamp_draws[entry->stamp_key] / frames, (unsigned)(entry->program.word_count / 4),
-			(unsigned)entry->program.register_count, (unsigned)(entry->key.combiner_count & 0xff),
-			(unsigned)entry->key.texture_modes, length ? textures : " none");
 	}
+}
+
+static DWORD blend_equation(DWORD operation);
+
+/* the fragments the draw's blend leaves the target unchanged by (8-bit), when it writes no depth or stencil: a kill
+mode (rsx_fragment_key's), 0 none */
+static uint8_t unchanged_fragments(void)
+{
+	DWORD *rs = render_state;
+	DWORD write = rs[D3DRS_COLORWRITEENABLE], source = rs[D3DRS_SRCBLEND], destination = rs[D3DRS_DESTBLEND];
+	DWORD equation = blend_equation(rs[D3DRS_BLENDOP]);
+	unsigned channels = ((write & D3DCOLORWRITEENABLE_RED) ? 1u : 0u) |
+		((write & D3DCOLORWRITEENABLE_GREEN) ? 2u : 0u) | ((write & D3DCOLORWRITEENABLE_BLUE) ? 4u : 0u) |
+		((write & D3DCOLORWRITEENABLE_ALPHA) ? 8u : 0u);
+
+	if (!rs[D3DRS_ALPHABLENDENABLE] || !channels || (rs[D3DRS_ZENABLE] && rs[D3DRS_ZWRITEENABLE]))
+		return 0;
+	if (rs[D3DRS_STENCILENABLE] && (rs[D3DRS_STENCILWRITEMASK] & 0xff) && (rs[D3DRS_STENCILFAIL] != D3DSTENCILOP_KEEP ||
+		rs[D3DRS_STENCILZFAIL] != D3DSTENCILOP_KEEP || rs[D3DRS_STENCILPASS] != D3DSTENCILOP_KEEP))
+		return 0;
+	/* alpha 0 adds nothing; one more, the colour of the premultiplied blend */
+	if (equation == GCM_FUNC_ADD && source == D3DBLEND_SRCALPHA &&
+		(destination == D3DBLEND_INVSRCALPHA || destination == D3DBLEND_ONE))
+		return RSX_KILL_ZERO | 8u << 4;
+	if (equation == GCM_FUNC_ADD && source == D3DBLEND_ONE && destination == D3DBLEND_INVSRCALPHA)
+		return (uint8_t)(RSX_KILL_ZERO | (channels | 8u) << 4);
+	if (source == D3DBLEND_ONE && destination == D3DBLEND_ONE)
+	{
+		if (equation == GCM_FUNC_ADD || equation == GCM_FUNC_REVERSE_SUBTRACT || equation == GCM_FUNC_MAX)
+			return (uint8_t)(RSX_KILL_ZERO | channels << 4);
+		if (equation == GCM_FUNC_MIN)
+			return (uint8_t)(RSX_KILL_ONE | channels << 4);
+	}
+	/* the multiply: 1 keeps the target */
+	if (equation == GCM_FUNC_ADD && source == D3DBLEND_DESTCOLOR && destination == D3DBLEND_ZERO)
+		return (uint8_t)(RSX_KILL_ONE | channels << 4);
+	return 0;
+}
+
+/* unchanged_fragments' alpha 0: the alpha test kills it (apply_raster_state) when the draw has none of its own */
+#define KILL_ALPHA_ZERO (RSX_KILL_ZERO | 8u << 4)
+
+/* whether the draw's own alpha test fails this alpha (0 to 255): GCM's functions 0x200 to 0x207 are bits for less,
+equal and greater */
+static int alpha_test_removes(unsigned alpha)
+{
+	DWORD *rs = render_state;
+	DWORD function = (rs[D3DRS_ALPHAFUNC] ? rs[D3DRS_ALPHAFUNC] : GCM_NEVER) - GCM_NEVER;
+	unsigned reference = rs[D3DRS_ALPHAREF] & 0xff;
+
+	if (!rs[D3DRS_ALPHATESTENABLE] || function > 7)
+		return 0;
+	return !(function & (alpha < reference ? 1u : alpha == reference ? 2u : 4u));
+}
+
+static uint8_t fragment_kill_mode(void)
+{
+	uint8_t mode = unchanged_fragments();
+
+	if (mode == KILL_ALPHA_ZERO && !render_state[D3DRS_ALPHATESTENABLE])
+		return 0;
+	/* the KIL's fragments all have its alpha: when the draw's own alpha test removes that, the KIL only costs */
+	if ((mode & (8u << 4)) && alpha_test_removes((mode & 3) == RSX_KILL_ONE ? 255 : 0))
+		return 0;
+	return mode;
 }
 
 static void fragment_key_build(struct rsx_fragment_key *key)
@@ -1743,6 +2232,7 @@ static void fragment_key_build(struct rsx_fragment_key *key)
 	}
 	key->fog_enable = rs[D3DRS_FOGENABLE] != 0;
 	key->fog_table_mode = (unsigned char)rs[D3DRS_FOGTABLEMODE];
+	key->kill_mode = fragment_kill_mode();
 }
 
 #define TEXTURE_STATE(stage, type) (D3DRS_MAX + (stage) * D3DTSS_MAX + (type))
@@ -1763,6 +2253,20 @@ static const uint8_t state_parts[D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX] =
 	[D3DRS_FOGENABLE] = CHANGED_FRAGMENT_KEY,
 	[D3DRS_FOGTABLEMODE] = CHANGED_FRAGMENT_KEY,
 	[D3DRS_PSTEXTUREMODES] = CHANGED_TEXTURE_MODES | CHANGED_FRAGMENT_KEY,
+	/* fragment_kill_mode's */
+	[D3DRS_ALPHATESTENABLE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_ALPHABLENDENABLE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_SRCBLEND] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_DESTBLEND] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_BLENDOP] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_COLORWRITEENABLE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_ZENABLE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_ZWRITEENABLE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_STENCILENABLE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_STENCILWRITEMASK] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_STENCILFAIL] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_STENCILZFAIL] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_STENCILPASS] = CHANGED_FRAGMENT_KEY,
 	STAGE_STATE_PARTS(0), STAGE_STATE_PARTS(1), STAGE_STATE_PARTS(2), STAGE_STATE_PARTS(3),
 };
 
@@ -1794,7 +2298,6 @@ static const struct rsx_fragment_program *fragment_program_find(const struct tex
 	fragment_key_build(&key);
 	memcpy(key.sampler_type, samplers->types, sizeof(key.sampler_type));
 	key.texture_scaled = samplers->scaled;
-	key.padding = 0;
 	*span = ps3_timer_add(_ps3_timer_draw_key, *span);
 	rsx_fragment_key_clean(&key);
 	program = fragment_program_get(&key);
@@ -1936,6 +2439,8 @@ static BOOL apply_raster_state(BOOL has_depth)
 	long left, top, right, bottom;
 
 	viewport_scissor(&left, &top, &right, &bottom);
+	if (light_bounds.on)
+		light_bounds_scissor(&left, &top, &right, &bottom);
 	if (left >= right || top >= bottom)
 		return FALSE;
 
@@ -1957,13 +2462,19 @@ static BOOL apply_raster_state(BOOL has_depth)
 	state.stencil_depth_fail = rs[D3DRS_STENCILZFAIL];
 	state.stencil_pass = rs[D3DRS_STENCILPASS];
 	state.blend = rs[D3DRS_ALPHABLENDENABLE] != 0;
-	state.blend_source = rs[D3DRS_SRCBLEND];
-	state.blend_destination = rs[D3DRS_DESTBLEND];
+	state.blend_source = state.blend_source_alpha = rs[D3DRS_SRCBLEND];
+	state.blend_destination = state.blend_destination_alpha = rs[D3DRS_DESTBLEND];
 	state.blend_equation = blend_equation(rs[D3DRS_BLENDOP]);
 	state.blend_color = rs[D3DRS_BLENDCOLOR];
 	if (rs[D3DRS_ALPHATESTENABLE])
 		state.alpha_function = rs[D3DRS_ALPHAFUNC] ? rs[D3DRS_ALPHAFUNC] : GCM_NEVER;
 	state.alpha_reference = rs[D3DRS_ALPHAREF] & 0xff;
+	/* alpha 0 leaves the target unchanged: without the draw's own alpha test, one kills it (fragment_kill_mode) */
+	if (!rs[D3DRS_ALPHATESTENABLE] && unchanged_fragments() == KILL_ALPHA_ZERO)
+	{
+		state.alpha_function = GCM_GREATER;
+		state.alpha_reference = 0;
+	}
 	/* the picture is not mirrored (rows from the top, as ps3gl's), so the RSX's winding is Direct3D's */
 	state.front_face = rs[D3DRS_FRONTFACE] == D3DFRONT_CCW ? GCM_FRONTFACE_CCW : GCM_FRONTFACE_CW;
 	if (rs[D3DRS_CULLMODE] != D3DCULL_NONE)
@@ -1980,6 +2491,17 @@ static BOOL apply_raster_state(BOOL has_depth)
 	state.scissor_height = (uint16_t)(bottom - top);
 	state.depth_minimum = device.viewport.MinZ;
 	state.depth_maximum = device.viewport.MaxZ;
+	if (light_bounds.on && depth_test)
+	{
+		/* (the stored depths of the viewport's range) */
+		float range = device.viewport.MaxZ - device.viewport.MinZ;
+
+		state.depth_bounds = 1;
+		state.depth_bounds_minimum = device.viewport.MinZ + light_bounds.bounds.z0 * range;
+		state.depth_bounds_maximum = device.viewport.MinZ + light_bounds.bounds.z1 * range;
+	}
+	if (particles.bound)
+		particles_state(&state);
 	ps3_gpu_set_state(&state);
 	return TRUE;
 }
@@ -2630,8 +3152,8 @@ static unsigned long vertex_cache_bucket_index(const unsigned char *source, unsi
 		VERTEX_CACHE_BUCKET_COUNT);
 }
 
-/* bytes of the arena, in order; it has no frees: a load empties it */
-static float *vertex_arena_allocate(unsigned long bytes, uint32_t *offset)
+/* the arena's RSX block, once */
+static void vertex_arena_reserve(void)
 {
 	if (!vertex_arena.memory && !vertex_arena.failed)
 	{
@@ -2641,6 +3163,12 @@ static float *vertex_arena_allocate(unsigned long bytes, uint32_t *offset)
 		platform_log("Direct3D: vertex cache of %lu MB%s", (unsigned long)(VERTEX_ARENA_BYTES >> 20),
 			vertex_arena.failed ? ": no RSX memory, vertices are converted at each draw" : "");
 	}
+}
+
+/* bytes of the arena, in order; it has no frees: a load empties it */
+static float *vertex_arena_allocate(unsigned long bytes, uint32_t *offset)
+{
+	vertex_arena_reserve();
 	bytes = (bytes + 127) & ~127UL;
 	if (!vertex_arena.memory || bytes > VERTEX_ARENA_BYTES - vertex_arena.used)
 		return NULL;
@@ -2664,6 +3192,25 @@ void d3d8_tag_cache_loaded(void const *address, unsigned long size)
 
 	/* the caches are the Direct3D thread's: it waits idle meanwhile */
 	direct3d_drain();
+	if (spu.on)
+	{
+		spu_d3d_record_tag_cache *span;
+
+		/* (the SPU empties its caches and waits for the RSX before the arena is used again) */
+		if (!static_vertices_end || begin < static_vertices_begin)
+			static_vertices_begin = begin;
+		if (end > static_vertices_end)
+			static_vertices_end = end;
+		span = record_begin(_record_tag_cache, sizeof(*span), 0, 0);
+		if (span)
+		{
+			span->begin = (uint32_t)(uintptr_t)begin;
+			span->end = (uint32_t)(uintptr_t)end;
+			span->pad[0] = span->pad[1] = 0;
+			record_commit();
+		}
+		return;
+	}
 	for (index = 0; index < VERTEX_CACHE_BUCKET_COUNT; index++)
 	{
 		while (vertex_cache_buckets[index])
@@ -4045,11 +4592,21 @@ static void record_execute(const struct record *record)
 		draw_stamps_split((int)record->a);
 		break;
 	case _record_draw_stamps:
-		draw_stamps_part = record->a ? 0 : -1;
-		ps3_gpu_draw_stamps((int)record->a);
+		draw_stamps_set((int)record->a - 1);
 		break;
 	case _record_present:
 		present_run();
+		break;
+	case _record_particles:
+		if (record->a)
+			particles_begin(payload);
+		else
+			particles_end();
+		break;
+	case _record_light_bounds:
+		light_bounds.on = record->a != 0;
+		if (light_bounds.on)
+			light_bounds.bounds = *(const spu_d3d_record_light_bounds *)payload;
 		break;
 	default:
 		break;
@@ -4192,6 +4749,12 @@ static void direct3d_publish(void)
 	__asm__ volatile("lwsync" : : : "memory");
 	ring.published = ring.written;
 	__sync_synchronize();
+	if (spu.on)
+	{
+		/* (its store ends the SPU's reservation of the bell's line) */
+		spu.bell->published = ring.published;
+		return;
+	}
 	if (ring.consumer_sleeping)
 	{
 		ps3_host_lock_enter(ring.lock);
@@ -4200,15 +4763,23 @@ static void direct3d_publish(void)
 	}
 }
 
+/* the records run so far, their room given back */
+static uint64_t ring_consumed(void)
+{
+	return spu.on ? spu.echo->consumed : ring.consumed;
+}
+
 /* until the Direct3D thread has run the records before this position (published ones) */
 static void direct3d_wait(uint64_t position)
 {
 	uint64_t span;
 
-	if (!ring.running || (int64_t)(ring.consumed - position) >= 0)
+	if (!ring.running || (int64_t)(ring_consumed() - position) >= 0)
 		return;
 	span = ps3_timer_now();
-	while ((int64_t)(ring.consumed - position) < 0 && !ring.stopped)
+	if (spu.on)
+		spu_wait(position);
+	while (!spu.on && (int64_t)(ring.consumed - position) < 0 && !ring.stopped)
 	{
 		ps3_host_lock_enter(ring.lock);
 		ring.producers_waiting++;
@@ -4234,7 +4805,7 @@ static void direct3d_drain(void)
 /* room for bytes more in the ring */
 static void ring_room(unsigned long bytes)
 {
-	if (ring.written + bytes - ring.consumed <= RING_BYTES)
+	if (ring.written + bytes - ring_consumed() <= RING_BYTES)
 		return;
 	direct3d_publish();
 	direct3d_wait(ring.written + bytes - RING_BYTES);
@@ -4245,7 +4816,7 @@ its start, which hold no record, within the room given back */
 static void ring_lines_zero(unsigned long bytes)
 {
 	uint64_t line = (ring.written + RING_LINE - 1) & ~(uint64_t)(RING_LINE - 1);
-	uint64_t end = ring.written + bytes, room = ring.consumed + RING_BYTES - RING_LINE + 1;
+	uint64_t end = ring.written + bytes, room = ring_consumed() + RING_BYTES - RING_LINE + 1;
 
 	if (room < end)
 		end = room;
@@ -4258,7 +4829,13 @@ static void *record_begin(uint32_t type, unsigned long payload_bytes, uint32_t a
 	unsigned long bytes = (sizeof(struct record) + payload_bytes + 15) & ~15UL;
 	struct record *record;
 
-	if (ring.running && !ring.dead && bytes <= RECORD_LARGEST)
+	/* (the SPU has the state: a large record waits for the room, one past half the ring is dropped) */
+	if (spu.on && bytes > RING_BYTES / 2)
+	{
+		platform_log("Direct3D: a record of %lu KB dropped", bytes / 1024);
+		return NULL;
+	}
+	if (ring.running && !ring.dead && (bytes <= RECORD_LARGEST || spu.on))
 	{
 		unsigned long offset = (unsigned long)(ring.written % RING_BYTES);
 
@@ -4340,6 +4917,14 @@ static void direct3d_start(void)
 	}
 	ring.producer = ps3_host_thread_id();
 	ring.running = TRUE;
+	/* the records' work on an SPU, else on the PPE's other thread */
+	if (spu_direct3d_start())
+	{
+		platform_log("Direct3D: the records run on an SPU (%lu pixel shaders in its table)",
+			(unsigned long)spu.fragment_count);
+		ps3_gpu_set_stop_hook(direct3d_stop);
+		return;
+	}
 	/* above the game's threads, as the vertical blank's: it sleeps while it has no records */
 	if (ps3_host_thread_create(direct3d_thread, NULL, 0x100000, PS3_HOST_PRIORITY_NORMAL - 1, "direct3d") != 0)
 	{
@@ -4360,6 +4945,15 @@ static void direct3d_stop(void)
 	if (ps3_host_thread_id() == ring.producer)
 		direct3d_publish();
 	ring.dead = TRUE;
+	if (spu.on)
+	{
+		spu.stop = 1;
+		ps3_spu_direct3d_stop();
+		start = ps3_host_microseconds();
+		while (!spu.stopped && ps3_host_microseconds() - start < 3000000)
+			ps3_host_sleep_microseconds(1000);
+		return;
+	}
 	if (ps3_host_thread_id() == ring.consumer)
 		return;
 	ring.stop = 1;
@@ -4375,10 +4969,10 @@ static void direct3d_stop(void)
 /* a resource's last draw not done yet (a texture's Lock: draw_prologue), else any record not done */
 static BOOL resource_pending(const DWORD *fields)
 {
-	if (!ring.running || ring.dead || ring.consumed == ring.written)
+	if (!ring.running || ring.dead || ring_consumed() == ring.written)
 		return FALSE;
 	if ((fields[0] & D3DCOMMON_TYPE_MASK) == D3DCOMMON_TYPE_TEXTURE)
-		return fields[2] && (int32_t)(fields[2] - ring.completed_draws) > 0;
+		return fields[2] && (int32_t)(fields[2] - (spu.on ? spu.echo->completed_draws : ring.completed_draws)) > 0;
 	return TRUE;
 }
 
@@ -4399,7 +4993,9 @@ void d3d8_resource_wait(D3DResource *resource)
 		return;
 	if (ps3_host_thread_id() == ring.producer)
 		direct3d_publish();
-	while (resource_pending(fields) && !ring.stopped)
+	while (spu.on && resource_pending(fields) && !spu.stopped)
+		ps3_host_sleep_microseconds(20);
+	while (!spu.on && resource_pending(fields) && !ring.stopped)
 	{
 		ps3_host_lock_enter(ring.lock);
 		ring.producers_waiting++;
@@ -4422,13 +5018,570 @@ uint64_t ps3_timers_rsx_wait(int part)
 	return ps3_timer_now();
 }
 
-/* ps3_timers.h: the draws from here stamped or not, in the records' order */
-void ps3_timers_draw_stamps(int on)
+/* ps3_timers.h: the draws from here stamped in a part or not (-1), in the records' order */
+void ps3_timers_draw_stamps(int part)
 {
+	ps3_draw_stamps_part = part;
 	if (device.created)
 	{
-		record_begin(_record_draw_stamps, 0, on ? 1u : 0u, 0);
+		record_begin(_record_draw_stamps, 0, (uint32_t)(part + 1), 0);
 		record_commit();
+	}
+}
+
+/* ---------- the Direct3D thread's work on an SPU (spu_direct3d.c): the service thread calls its chunks of commands
+and answers its requests (memory, translations, the flip) */
+
+typedef char spu_records_check[(int)_record_present == (int)_spu_d3d_record_present &&
+	(int)_record_screen == (int)_spu_d3d_record_screen && (int)_record_tag_cache == (int)_spu_d3d_record_tag_cache &&
+	(int)_record_label == (int)_spu_d3d_record_label && (int)_record_particles == (int)_spu_d3d_record_particles &&
+	(int)_record_light_bounds == (int)_spu_d3d_record_light_bounds &&
+	sizeof(struct record) == sizeof(spu_d3d_record) && sizeof(struct record_draw) == sizeof(spu_d3d_record_draw) &&
+	sizeof(struct record_elements) == sizeof(spu_d3d_record_elements) &&
+	sizeof(struct stage_texture) == sizeof(spu_d3d_stage_texture) &&
+	sizeof(struct surface_words) == sizeof(spu_d3d_surface_words) && sizeof(D3DVIEWPORT8) == sizeof(spu_d3d_viewport) &&
+	sizeof(struct ps3_gpu_texture) == 40 && sizeof(struct rsx_fragment_key) == SPU_D3D_KEY_WORDS * 4 ? 1 : -1];
+typedef char spu_shader_check[offsetof(struct vertex_shader_object, elements) == SPU_D3D_SHADER_ELEMENTS &&
+	offsetof(struct vertex_shader_object, element_count) == SPU_D3D_SHADER_ELEMENT_COUNT &&
+	offsetof(struct vertex_shader_object, program) == SPU_D3D_SHADER_PROGRAM &&
+	offsetof(struct vertex_shader_object, translated) == SPU_D3D_SHADER_TRANSLATED &&
+	offsetof(struct vertex_shader_object, untranslatable) == SPU_D3D_SHADER_UNTRANSLATABLE &&
+	sizeof(struct vertex_shader_object) <= SPU_D3D_SHADER_BYTES && sizeof(struct vertex_element) == 6 ? 1 : -1];
+/* spu_direct3d.c's copies of the XDK's values and of ps3_timers.h's */
+typedef char spu_values_check[D3DRS_PSTEXTUREMODES == 116 && D3DRS_FOGCOLOR == 118 && D3DRS_FILLMODE == 119 &&
+	D3DRS_ZENABLE == 123 && D3DRS_CULLMODE == 127 && D3DRS_POLYGONOFFSETZSLOPESCALE == 77 &&
+	D3DRS_SOLIDOFFSETENABLE == 81 && D3DRS_BLENDCOLOR == 75 && D3DRS_STENCILWRITEMASK == 73 && D3DRS_ZFUNC == 57 &&
+	D3DTSS_BORDERCOLOR == 29 && D3DTSS_BUMPENVMAT10 == 25 && D3DTSS_BUMPENVMAT11 == 24 && D3DTSS_ALPHAKILL == 21 &&
+	D3DTSS_MIPMAPLODBIAS == 16 && D3DTSS_MAX == 32 && D3DRS_MAX == 144 && D3DBLENDOP_REVSUBTRACTSIGNED == 61445 &&
+	D3DFRONT_CCW == 2305 && D3DTALPHAKILL_ENABLE == 4 && D3DTEXF_ANISOTROPIC == 3 && D3DTADDRESS_CLAMPTOEDGE == 5 &&
+	D3DBLEND_ZERO == 0 && D3DBLEND_ONE == 1 && D3DBLEND_SRCALPHA == 770 && D3DBLEND_INVSRCALPHA == 771 &&
+	D3DBLEND_DESTCOLOR == 774 && D3DSTENCILOP_KEEP == 7680 && D3DRS_ALPHABLENDENABLE == 59 && D3DRS_SRCBLEND == 62 &&
+	D3DRS_DESTBLEND == 63 && D3DRS_ZWRITEENABLE == 64 && D3DRS_COLORWRITEENABLE == 67 && D3DRS_STENCILZFAIL == 68 &&
+	D3DRS_STENCILPASS == 69 && D3DRS_BLENDOP == 74 && D3DRS_STENCILENABLE == 124 && D3DRS_STENCILFAIL == 125 &&
+	D3DRS_ALPHATESTENABLE == 60 &&
+	_ps3_timer_record_present - _ps3_timer_thread_busy == _spu_d3d_timer_record_present &&
+	_ps3_timer_draw_constants - _ps3_timer_thread_busy == _spu_d3d_timer_draw_constants &&
+	_ps3_timer_present == SPU_D3D_TIMER_PRESENT && _ps3_timer_specular_lights == SPU_D3D_TIMER_SPECULAR_LIGHTS &&
+	_ps3_timer_specular_fog == SPU_D3D_TIMER_SPECULAR_FOG && _ps3_stamp_specular_fog == SPU_D3D_STAMP_SPECULAR_FOG &&
+	PS3_DRAW_STAMP_PART_SHIFT == SPU_D3D_STAMP_PART_SHIFT ? 1 : -1];
+
+/* the label the start's test of the chunks writes */
+#define SPU_TEST_LABEL 72
+#define SPU_TEST_VALUE 0x5ca1ab1eu
+#define SPU_CHUNKS_BYTES (6UL * 1024 * 1024)
+/* the pack's pixel shaders and the ones translated at a draw */
+#define SPU_FRAGMENTS_SPARE 512
+
+
+/* (fragment_entry_add) the entry in the SPU's table, first in its bucket */
+static void spu_fragment_add(struct fragment_entry *entry)
+{
+	spu_d3d_fragment *out;
+	uint32_t index, bucket;
+
+	entry->spu_index = -1;
+	if (!spu.fragments || spu.fragment_count == spu.fragment_capacity)
+		return;
+	index = spu.fragment_count;
+	out = &spu.fragments[index];
+	memset(out, 0, sizeof(*out));
+	memcpy(out->key, &entry->key, sizeof(out->key));
+	out->hash = entry->hash;
+	bucket = entry->hash % SPU_D3D_FRAGMENT_BUCKETS;
+	out->next = spu_fragment_buckets[bucket];
+	out->stamp_key = entry->stamp_key;
+	out->translated = entry->translated != 0;
+	out->microcode = (uint32_t)(uintptr_t)entry->program.microcode;
+	out->word_count = entry->program.word_count;
+	out->control = entry->program.control;
+	out->register_count = entry->program.register_count;
+	out->texcoord_mask = entry->program.texcoord_mask;
+	out->uniform_count = entry->program.uniform_count;
+	for (index = 0; index < entry->program.uniform_count && index < 32; index++)
+		out->uniforms[index] = (uint32_t)entry->program.uniforms[index].word << 8 | entry->program.uniforms[index].uniform;
+	out->ppe_entry = (uint32_t)(uintptr_t)entry;
+	__sync_synchronize();
+	spu_fragment_buckets[bucket] = (int32_t)spu.fragment_count;
+	entry->spu_index = (int32_t)spu.fragment_count++;
+}
+
+/* the palette's 256 entries as ARGB (palette_load's), from its data */
+static void spu_palette_entries(DWORD data, DWORD *entries)
+{
+	const DWORD *words = (const DWORD *)PLATFORM_PHYSICAL_TO_VIRTUAL(data);
+	int index;
+
+	for (index = 0; index < 256; index++)
+		entries[index] = __builtin_bswap32(words[index]);
+}
+
+/* texture_check's PPE part for the SPU's entry: the upload (texture_upload), the button icons' texture for it */
+static void spu_texture_request(const uint32_t *words, spu_d3d_response *answer)
+{
+	uint32_t index = words[0];
+	BOOL changed = words[1] != 0;
+	DWORD palette_data = words[2], palette[256];
+	int style = (int)words[3];
+	uint32_t written = ps3_gpu_textures_written_count();
+	unsigned long epoch = texture_epoch;
+	spu_d3d_texture *spu_entry;
+	struct texture_entry entry;
+	const unsigned char *source;
+
+	if (index >= SPU_D3D_TEXTURES)
+		return;
+	spu_entry = &spu.textures[index];
+	source = (const unsigned char *)(uintptr_t)spu_entry->source;
+	memset(&entry, 0, sizeof(entry));
+	entry.data = spu_entry->data;
+	entry.format_word = spu_entry->format_word;
+	entry.size_word = spu_entry->size_word;
+	xgpu_texture_describe(entry.format_word, entry.size_word, &entry.description);
+	entry.memory = (void *)(uintptr_t)spu_entry->memory;
+	entry.bytes = spu_entry->bytes;
+	if (palette_data)
+		spu_palette_entries(palette_data, palette);
+	if (changed && source)
+	{
+		uint64_t span = ps3_timer_now();
+
+		texture_upload(&entry, source, palette_data ? palette : NULL);
+		/* (the SPU's texels before its commands sample them) */
+		ps3_spu_vertices_wait();
+		spu_entry->memory = (uint32_t)(uintptr_t)entry.memory;
+		spu_entry->bytes = (uint32_t)entry.bytes;
+		memcpy(spu_entry->gpu, &entry.gpu, sizeof(spu_entry->gpu));
+		spu_entry->hires_style = -2;
+		ps3_timer_add(_ps3_timer_texture_upload, span);
+	}
+	if (spu_entry->memory && spu_entry->hires_style != style)
+	{
+		const struct xgpu_texture_description *description = &entry.description;
+		struct ps3_gpu_texture hires_gpu;
+
+		memcpy(&hires_gpu, spu_entry->hires_gpu, sizeof(hires_gpu));
+		spu_entry->hires_style = (int8_t)style;
+		spu_entry->hires = !palette_data && spu_entry->hires_candidate && source &&
+			hud_hires_rsx_override(source, description->width, description->height, description->levels > 1 ?
+			xgpu_texture_level_offset(description, 1) : xgpu_texture_face_size(description), &hires_gpu);
+		memcpy(spu_entry->hires_gpu, &hires_gpu, sizeof(hires_gpu));
+	}
+	/* (an upload moved texture_epoch; texels written, as ps3_gpu.c's texture cache flag) */
+	answer->words[0] = texture_epoch != epoch;
+	answer->words[1] = ps3_gpu_textures_written_count() != written;
+	answer->status = 1;
+}
+
+/* render_target_lookup's allocation */
+static void spu_target_request(const uint32_t *words, spu_d3d_response *answer)
+{
+	uint32_t zcull_before[4], zcull_after[4], offset, pitch, bytes;
+	void *memory;
+
+	ps3_gpu_zcull_state(zcull_before);
+	memory = ps3_gpu_target_allocate(words[1], words[2], words[3] != 0, words[4] != 0, words[5] != 0, &offset, &pitch,
+		&bytes);
+	if (!memory || spu.target_count == sizeof(spu.targets) / sizeof(spu.targets[0]))
+	{
+		if (memory)
+			ps3_gpu_target_free(memory, bytes);
+		platform_log("Direct3D: no RSX memory for a %lux%lu target", (unsigned long)words[1], (unsigned long)words[2]);
+		return;
+	}
+	spu.targets[spu.target_count].memory = memory;
+	spu.targets[spu.target_count++].bytes = bytes;
+	ps3_gpu_zcull_state(zcull_after);
+	answer->status = 1;
+	answer->words[0] = offset;
+	answer->words[1] = pitch;
+	answer->words[2] = (uint32_t)(uintptr_t)memory;
+	memcpy(&answer->words[3], zcull_after, sizeof(zcull_after));
+	/* (a new ZCull surface's data is not good until its first full clear) */
+	answer->words[7] = zcull_after[0] && (!zcull_before[0] || zcull_after[1] != zcull_before[1]);
+}
+
+/* fragment_program_get's lookup and translation of a cleaned key: the SPU table's index, -1 none */
+static void spu_fragment_request(const uint32_t *words, spu_d3d_response *answer)
+{
+	struct rsx_fragment_key key;
+	struct fragment_entry *entry;
+	DWORD hash;
+
+	memcpy(&key, words, sizeof(key));
+	if (!fragment_pack_loaded)
+		fragment_pack_load();
+	hash = hash_words(&key, sizeof(key));
+	for (entry = fragment_buckets[hash % FRAGMENT_BUCKETS]; entry; entry = entry->next)
+	{
+		if (entry->hash == hash && fragment_key_same(&entry->key, &key))
+			break;
+	}
+	if (!entry)
+	{
+		char text[RSX_FRAGMENT_KEY_TEXT];
+
+		entry = calloc(1, sizeof(*entry));
+		if (!entry)
+		{
+			answer->words[0] = (uint32_t)-1;
+			return;
+		}
+		entry->hash = hash;
+		entry->key = key;
+		entry->translated = rsx_fragment_program_translate(&key, &entry->program) == 0;
+		fragment_translated_count++;
+		rsx_fragment_key_text(&key, text);
+		if (!entry->translated)
+			platform_log("Direct3D: cannot translate a pixel shader: %s", text);
+		else
+			platform_log("Direct3D: pixel shader %lu not in the pack, translated (%lu words): %s",
+				fragment_translated_count, (unsigned long)entry->program.word_count, text);
+		fragment_entry_add(entry);
+	}
+	answer->words[0] = (uint32_t)entry->spu_index;
+	answer->status = entry->spu_index >= 0;
+}
+
+/* ps3_gpu_present's end: its log, the flip and the next frame */
+static void spu_present_end(const uint32_t *words, spu_d3d_response *answer)
+{
+	struct ps3_gpu_frame_spu frame;
+	unsigned int placeholders[8][2];
+	int index;
+
+	ps3_draw_stamp_dropped += words[2];
+	if (words[1])
+		ps3_gpu_log_spu(&spu_statistics_block);
+	memset(&frame, 0, sizeof(frame));
+	ps3_gpu_present_end_spu(&frame);
+	answer->words[0] = frame.index;
+	answer->words[1] = frame.finished;
+	answer->words[2] = frame.programs_reset;
+	answer->words[3] = frame.stamps_read;
+	answer->words[4] = (uint32_t)hud_hires_rsx_style();
+	hud_hires_rsx_placeholders(placeholders);
+	for (index = 0; index < 8; index++)
+	{
+		answer->words[5 + 2 * index] = placeholders[index][0];
+		answer->words[6 + 2 * index] = placeholders[index][1];
+	}
+	answer->status = 1;
+}
+
+/* present_run's lines every STATISTICS_FRAMES frames, from the SPU's statistics */
+static void spu_log(void)
+{
+	const spu_d3d_statistics *s = &spu_statistics_block;
+	struct ps3_spu_vertices_statistics vertices;
+	unsigned long frame_number = s->frame, frames = frame_number == 1 ? 1 : STATISTICS_FRAMES, type;
+	char types[512];
+	size_t used = 0;
+
+	platform_log("Direct3D: frame %lu: %lu draws; skipped %lu (program), %lu (target), %lu (scratch), "
+		"%lu (viewport); %lu texture uploads, %lu KB (%lu KB by the SPU; %lu KB of checks hashed by it); %lu pixel "
+		"shaders (%lu translated at a draw); %lu textures in RSX memory, %lu KB (%lu KB not drawn for %lu frames)",
+		frame_number, (unsigned long)s->draws, (unsigned long)s->skipped_program, (unsigned long)s->skipped_target,
+		(unsigned long)s->skipped_scratch, (unsigned long)s->skipped_scissor, statistics.texture_uploads,
+		statistics.texture_bytes / 1024, statistics.texture_spu_bytes / 1024, (unsigned long)s->texture_hashed / 1024,
+		fragment_program_count, fragment_translated_count, (unsigned long)s->textures,
+		(unsigned long)s->texture_bytes / 1024, (unsigned long)s->texture_unused_bytes / 1024,
+		(unsigned long)STATISTICS_FRAMES);
+	platform_log("Direct3D: frame %lu: vertex elements converted: %lu into the cache, %lu at draws; vertex "
+		"cache %lu arrays, %lu of %lu KB, %lu refused", frame_number, (unsigned long)s->cached_elements,
+		(unsigned long)s->converted_elements, (unsigned long)s->arrays, (unsigned long)s->arena_used / 1024,
+		(unsigned long)(VERTEX_ARENA_BYTES / 1024), (unsigned long)s->cache_refused);
+	ps3_spu_vertices_statistics(&vertices);
+	platform_log("Direct3D: frame %lu: the Direct3D SPU: %lu chunks, %lu KB of commands, %lu requests (%lu us a "
+		"frame waiting for them); the conversions' SPU %s: %lu tasks, %lu us a frame", frame_number,
+		(unsigned long)s->chunks, (unsigned long)s->chunk_bytes / 1024, (unsigned long)s->requests,
+		(unsigned long)(s->request_ticks / 80 / frames), vertices.up ? "on" : "off", (unsigned long)vertices.tasks,
+		(unsigned long)(vertices.busy_microseconds / frames));
+	for (type = 0; type < SPU_D3D_TYPE_ELEMENTS && used < sizeof(types) - 32; type++)
+	{
+		if (s->type_elements[type])
+			used += (size_t)snprintf(types + used, sizeof(types) - used, "%s0x%02lx %lu", used ? ", " : "", type,
+				(unsigned long)s->type_elements[type]);
+	}
+	platform_log("Direct3D: frame %lu: the elements converted by type: %s", frame_number, used ? types : "none");
+	statistics.texture_uploads = statistics.texture_bytes = statistics.texture_spu_bytes = 0;
+}
+
+static void spu_request_answer(const spu_d3d_request *request, spu_d3d_response *answer)
+{
+	const uint32_t *words = request->words;
+	uint32_t index;
+
+	memset(answer, 0, sizeof(*answer));
+	switch (request->kind)
+	{
+	case _spu_d3d_request_vertex_program:
+	{
+		struct vertex_shader_object *object = (struct vertex_shader_object *)(uintptr_t)words[0];
+
+		if (object && object->signature == VERTEX_SHADER_SIGNATURE)
+			answer->status = vertex_program_get(object) != NULL;
+		break;
+	}
+	case _spu_d3d_request_fragment_program:
+		spu_fragment_request(words, answer);
+		break;
+	case _spu_d3d_request_target:
+		spu_target_request(words, answer);
+		break;
+	case _spu_d3d_request_texture:
+		spu_texture_request(words, answer);
+		break;
+	case _spu_d3d_request_placeholder:
+	{
+		struct ps3_gpu_texture gpu;
+		uint32_t written = ps3_gpu_textures_written_count();
+
+		memset(&gpu, 0, sizeof(gpu));
+		answer->status = hud_hires_rsx_asset_texture((long)words[0], (int)words[1], &gpu);
+		memcpy(answer->words, &gpu, sizeof(gpu));
+		answer->words[10] = ps3_gpu_textures_written_count() != written;
+		break;
+	}
+	case _spu_d3d_request_wait_idle:
+		ps3_gpu_wait_idle();
+		answer->status = 1;
+		break;
+	case _spu_d3d_request_present_begin:
+		ps3_gpu_present_begin_spu(answer->words);
+		answer->status = 1;
+		break;
+	case _spu_d3d_request_present_end:
+		spu_present_end(words, answer);
+		break;
+	case _spu_d3d_request_free:
+		for (index = 0; index < words[SPU_D3D_REQUEST_WORDS - 1] && index < SPU_D3D_REQUEST_WORDS / 2; index++)
+			ps3_gpu_memory_free((void *)(uintptr_t)words[2 * index], words[2 * index + 1], _ps3_gpu_memory_texture);
+		answer->status = 1;
+		break;
+	case _spu_d3d_request_arena:
+		vertex_arena_reserve();
+		answer->words[0] = (uint32_t)(uintptr_t)vertex_arena.memory;
+		answer->words[1] = vertex_arena.offset;
+		answer->words[2] = vertex_arena.memory ? (uint32_t)VERTEX_ARENA_BYTES : 0;
+		answer->status = 1;
+		break;
+	case _spu_d3d_request_log:
+		spu_log();
+		answer->status = 1;
+		break;
+	default:
+		break;
+	}
+}
+
+/* the SPU's chunks called as they come, its requests answered */
+static void spu_service_thread(void *unused)
+{
+	uint32_t offsets[SPU_D3D_CHUNK_LIST];
+
+	(void)unused;
+	while (!spu.stop)
+	{
+		uint32_t request, head, count = 0;
+
+		ps3_spu_direct3d_wait(0, 1000);
+		if (spu.stop)
+			break;
+		ps3_host_lock_enter(spu.gpu_lock);
+		/* (the request before the chunks: those published before it are in this count) */
+		request = spu.echo->request;
+		__asm__ volatile("lwsync" : : : "memory");
+		head = spu.echo->chunks;
+		__asm__ volatile("lwsync" : : : "memory");
+		while (spu.called != head && count < SPU_D3D_CHUNK_LIST)
+			offsets[count++] = spu_chunk_list[spu.called++ & (SPU_D3D_CHUNK_LIST - 1)].offset;
+		if (count)
+		{
+			ps3_gpu_call_chunks(offsets, count);
+			spu.bell->called = spu.called;
+		}
+		if (request != spu.answered && spu_request_block.number == request)
+		{
+			spu_request_answer(&spu_request_block, &spu_response_block);
+			spu_response_block.number = request;
+			spu.answered = request;
+			__asm__ volatile("lwsync" : : : "memory");
+			spu.bell->response = request;
+		}
+		ps3_host_lock_leave(spu.gpu_lock);
+	}
+	spu.stopped = 1;
+	__sync_synchronize();
+}
+
+/* the records run up to position (published ones), the SPU's echo waited for */
+static void spu_wait(uint64_t position)
+{
+	uint32_t spins = 0;
+
+	while ((int64_t)(spu.echo->consumed - position) < 0 && !spu.stopped)
+	{
+		/* (db16cyc a while: the SPU's records take microseconds) */
+		if (++spins < 500)
+		{
+			__asm__ volatile("or 31,31,31\n\tor 31,31,31\n\tor 31,31,31\n\tor 31,31,31");
+			continue;
+		}
+		ps3_spu_direct3d_drain(1);
+		spu.bell->notify = position;
+		__sync_synchronize();
+		if ((int64_t)(spu.echo->consumed - position) < 0)
+			ps3_spu_direct3d_wait(1, 1000);
+		spu.bell->notify = 0;
+	}
+	__asm__ volatile("lwsync" : : : "memory");
+}
+
+/* (the game thread, the SPU drained) until the service thread has called every chunk */
+static void spu_chunks_wait(void)
+{
+	while (spu.on && !spu.stopped && spu.called != spu.echo->chunks)
+		ps3_host_sleep_microseconds(50);
+}
+
+static void direct3d_publish(void);
+static BOOL spu_direct3d_test(void);
+
+/* the SPU's set-up from the device's state now; TRUE when it runs and its first chunk reached the RSX */
+static BOOL spu_direct3d_start(void)
+{
+	spu_d3d_setup *setup = &spu.setup;
+	uint32_t spare_bytes = 0, offset = 0, index;
+	void *spare = ps3_gpu_command_spare(&spare_bytes);
+
+	if (!spare || spare_bytes < SPU_CHUNKS_BYTES || !ps3_gpu_io_offset(spare, &offset))
+	{
+		platform_log("Direct3D: no IO memory for the Direct3D SPU's commands");
+		return FALSE;
+	}
+	spu.gpu_lock = ps3_host_lock_create(FALSE);
+	spu.textures = ps3_spu_buffer_allocate(SPU_D3D_TEXTURES * sizeof(spu_d3d_texture));
+	spu.arrays = ps3_spu_buffer_allocate(SPU_D3D_ARRAYS * sizeof(spu_d3d_array));
+	spu.index_arrays = ps3_spu_buffer_allocate(SPU_D3D_INDEX_ARRAYS * sizeof(spu_d3d_index_array));
+	spu.fragment_capacity = rsx_packed_fragment_count + SPU_FRAGMENTS_SPARE;
+	spu.fragments = ps3_spu_buffer_allocate(spu.fragment_capacity * sizeof(spu_d3d_fragment));
+	if (!spu.gpu_lock || !spu.textures || !spu.arrays || !spu.index_arrays || !spu.fragments)
+	{
+		platform_log("Direct3D: no memory for the Direct3D SPU's tables");
+		free(spu.textures);
+		free(spu.arrays);
+		free(spu.index_arrays);
+		free(spu.fragments);
+		spu.textures = NULL;
+		spu.arrays = NULL;
+		spu.index_arrays = NULL;
+		spu.fragments = NULL;
+		return FALSE;
+	}
+	memset(spu.textures, 0, SPU_D3D_TEXTURES * sizeof(spu_d3d_texture));
+	for (index = 0; index < SPU_D3D_FRAGMENT_BUCKETS; index++)
+		spu_fragment_buckets[index] = -1;
+	/* (the pack's programs in both tables before the SPU reads them) */
+	if (!fragment_pack_loaded)
+		fragment_pack_load();
+	memset(setup, 0, sizeof(*setup));
+	setup->ring = (uint32_t)(uintptr_t)ring.memory;
+	setup->ring_bytes = (uint32_t)RING_BYTES;
+	setup->chunks = (uint32_t)(uintptr_t)spare;
+	setup->chunks_offset = offset;
+	setup->chunks_bytes = (uint32_t)SPU_CHUNKS_BYTES;
+	setup->chunk_list = (uint32_t)(uintptr_t)spu_chunk_list;
+	setup->request = (uint32_t)(uintptr_t)&spu_request_block;
+	setup->response = (uint32_t)(uintptr_t)&spu_response_block;
+	setup->statistics = (uint32_t)(uintptr_t)&spu_statistics_block;
+	ps3_gpu_direct3d_setup(setup);
+	setup->textures = (uint32_t)(uintptr_t)spu.textures;
+	setup->arrays = (uint32_t)(uintptr_t)spu.arrays;
+	setup->index_arrays = (uint32_t)(uintptr_t)spu.index_arrays;
+	setup->fragments = (uint32_t)(uintptr_t)spu.fragments;
+	setup->fragment_buckets = (uint32_t)(uintptr_t)spu_fragment_buckets;
+	setup->byte_floats = (uint32_t)(uintptr_t)byte_floats;
+	setup->initial = (uint32_t)(uintptr_t)&spu_initial;
+	setup->texture_cache = (uint32_t)(uintptr_t)physical_memory_get_texture_cache_base_address();
+	setup->texture_cache_bytes = (uint32_t)TEXTURE_CACHE_BYTES;
+	setup->stamp_part_offset = (uint32_t)offsetof(struct fragment_entry, stamp_parts);
+	setup->stamp_textures_offset = (uint32_t)offsetof(struct fragment_entry, stamp_textures);
+	memcpy(spu_initial.render_state, render_state, sizeof(spu_initial.render_state));
+	memcpy(spu_initial.texture_state, texture_state, sizeof(spu_initial.texture_state));
+	memcpy(spu_initial.targets, device.targets, sizeof(spu_initial.targets));
+	memcpy(&spu_initial.viewport, &device.viewport, sizeof(spu_initial.viewport));
+	spu_initial.shader_constant_mode = (uint32_t)device.shader_constant_mode;
+	spu_initial.screen_width = (uint32_t)screen_width;
+	spu_initial.screen_scale[0] = screen_scale[0];
+	spu_initial.screen_scale[1] = screen_scale[1];
+	spu_initial.static_begin = (uint32_t)(uintptr_t)static_vertices_begin;
+	spu_initial.static_end = (uint32_t)(uintptr_t)static_vertices_end;
+	spu_initial.button_style = hud_hires_rsx_style();
+	hud_hires_rsx_placeholders((unsigned int (*)[2])spu_initial.placeholders);
+	memcpy(spu_initial.constants, device.constants, sizeof(spu_initial.constants));
+	memcpy(spu_initial.attributes, device.attributes, sizeof(spu_initial.attributes));
+	__sync_synchronize();
+	if (!ps3_spu_direct3d_start(setup))
+		return FALSE;
+	spu.bell = ps3_spu_direct3d_bell();
+	spu.echo = ps3_spu_direct3d_echo();
+	spu.called = spu.answered = 0;
+	spu.stop = spu.stopped = 0;
+	if (ps3_host_thread_create(spu_service_thread, NULL, 0x40000, PS3_HOST_PRIORITY_NORMAL - 1, "d3d_service") != 0)
+	{
+		platform_log("Direct3D: cannot start the Direct3D SPU's service thread");
+		ps3_spu_direct3d_stop();
+		return FALSE;
+	}
+	spu.on = TRUE;
+	if (!spu_direct3d_test())
+	{
+		ps3_spu_direct3d_report("its first chunk did not reach the RSX in 200 ms");
+		spu.on = FALSE;
+		spu.stop = 1;
+		ps3_spu_direct3d_stop();
+		while (!spu.stopped)
+			ps3_host_sleep_microseconds(1000);
+		ring.written = ring.published = ring.consumed = 0;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/* a label the SPU's commands write, in a chunk the service thread calls */
+static BOOL spu_direct3d_test(void)
+{
+	volatile uint32_t *label = ps3_gpu_label(SPU_TEST_LABEL);
+	uint64_t start = ps3_host_microseconds();
+
+	if (!label)
+		return FALSE;
+	*label = 0;
+	__sync_synchronize();
+	record_begin(_record_label, 0, SPU_TEST_LABEL, SPU_TEST_VALUE);
+	record_commit();
+	direct3d_publish();
+	while (*label != SPU_TEST_VALUE && ps3_host_microseconds() - start < 200000)
+		ps3_host_sleep_microseconds(200);
+	return *label == SPU_TEST_VALUE;
+}
+
+/* ps3_timers.h's Direct3D thread timers: the SPU's since the last log */
+static void spu_timers_collect(void)
+{
+	const spu_d3d_statistics *s = &spu_statistics_block;
+	int index;
+
+	if (!spu.on)
+		return;
+	for (index = 0; index < _spu_d3d_timer_count; index++)
+	{
+		if (index == _spu_d3d_timer_thread_wait || index == _spu_d3d_timer_texture_upload)
+			continue;
+		ps3_timers[_ps3_timer_thread_busy + index] += s->timers[index] - spu.timers[index];
+		ps3_timer_counts[_ps3_timer_thread_busy + index] += s->counts[index] - spu.counts[index];
+		spu.timers[index] = s->timers[index];
+		spu.counts[index] = s->counts[index];
 	}
 }
 
@@ -4529,8 +5682,11 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 		device.gpu_ready = ps3_gpu_initialize() == 0;
 		/* (its first read sets the screen up: before the Direct3D thread can make one) */
 		halo_screen_width();
+		if (device.gpu_ready && config_boolean("display.half_resolution_particles"))
+			particles_targets();
 		device.created = TRUE;
 		ps3_timers_shaders_log = shaders_log;
+		ps3_timers_direct3d_collect = spu_timers_collect;
 		if (device.gpu_ready)
 			direct3d_start();
 		platform_log("Direct3D: %lux%lu on the RSX%s, back buffer at 0x%08lx; %s", width, height,
@@ -4659,7 +5815,7 @@ BOOL WINAPI D3DDevice_IsBusy(void)
 {
 	if (ps3_host_thread_id() == ring.producer)
 		direct3d_publish();
-	return ring.running && !ring.dead && ring.consumed != ring.written;
+	return ring.running && !ring.dead && ring_consumed() != ring.written;
 }
 
 void WINAPI D3DDevice_KickPushBuffer(void)
@@ -4916,8 +6072,15 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 	(void)destination_rectangle;
 	(void)unused;
 	(void)unused2;
-	record_begin(_record_present, 0, 0, 0);
-	record_commit();
+	{
+		struct surface_words *words = record_begin(_record_present, sizeof(*words), 0, 0);
+
+		if (words)
+		{
+			surface_words_read(&device.back_buffer, words);
+			record_commit();
+		}
+	}
 	direct3d_publish();
 	front.frame++;
 	direct3d_wait(front.previous_present);

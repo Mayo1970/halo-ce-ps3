@@ -7,6 +7,7 @@ Xbox layer has the game's 32-bit long. Offsets are RSX local memory offsets. */
 #include <stdint.h>
 
 #include "ps3_rsx_program.h"
+#include "spu_direct3d.h"
 #include "spu_vertices.h"
 
 /* ---------- start-up and frames */
@@ -23,10 +24,10 @@ void ps3_gpu_wait_idle(void);
 void ps3_gpu_display(uint32_t *width, uint32_t *height, int *widescreen);
 /* the RSX's time at this split of the frame, without a stall: a timestamp report, read two frames on */
 void ps3_gpu_timestamp(int part);
-/* (the timer build) the draws from here stamped (on) or not, in one frame of eight: each draw's RSX time by its key
-(ps3_draw_stamp_nanoseconds), read with the frame's timestamps */
+/* (the timer build) the draws from here stamped (on) or not, in one frame of eight: each draw's RSX time by its stamp
+(ps3_timers.h's key and part), read with the frame's timestamps; 1 if this frame's draws are stamped */
 void ps3_gpu_draw_stamps(int on);
-void ps3_gpu_draw_stamp(uint16_t key);
+int ps3_gpu_draw_stamp(uint16_t stamp);
 /* changes when the RSX's state kept here is reset (each frame): the units, programs and states set before are unknown */
 uint32_t ps3_gpu_state_epoch(void);
 /* the thread that draws ends at stop_drawing (the process ends, or the display thread takes the RSX back) */
@@ -110,6 +111,9 @@ struct ps3_gpu_state
 	uint32_t blend;
 	uint32_t blend_source;
 	uint32_t blend_destination;
+	/* the alpha channel's */
+	uint32_t blend_source_alpha;
+	uint32_t blend_destination_alpha;
 	uint32_t blend_equation;
 	uint32_t blend_color;
 	uint32_t alpha_function;
@@ -128,6 +132,10 @@ struct ps3_gpu_state
 	uint16_t scissor_height;
 	float depth_minimum;
 	float depth_maximum;
+	/* the stored depths a pixel must hold to be drawn (the lights' bounds); 0 no such test */
+	uint32_t depth_bounds;
+	float depth_bounds_minimum;
+	float depth_bounds_maximum;
 };
 
 void ps3_gpu_set_state(const struct ps3_gpu_state *state);
@@ -176,6 +184,8 @@ struct ps3_gpu_texture
 void ps3_gpu_set_texture(uint32_t unit, const struct ps3_gpu_texture *texture);
 /* texels were written: the RSX's texture cache is flushed before the next draw */
 void ps3_gpu_textures_written(void);
+/* its calls so far */
+uint32_t ps3_gpu_textures_written_count(void);
 
 /* ---------- vertices and draws */
 
@@ -189,5 +199,45 @@ void ps3_gpu_vertices_written(void);
 void ps3_gpu_draw(uint32_t primitive, uint32_t first, uint32_t count);
 /* 16-bit indices at offset */
 void ps3_gpu_draw_indexed(uint32_t primitive, uint32_t offset, uint32_t count);
+
+/* ---------- the half resolution particles (d3d8_rsx.c): a quad over the bound surface, the caches after it unknown */
+
+/* each pixel's depth the texel at its top left of a Z24S8 surface of twice its size */
+void ps3_gpu_particles_depth(uint32_t depth_offset, uint32_t depth_pitch, uint32_t width, uint32_t height);
+/* an A8R8G8B8 surface over it: its colour plus the bound one's times its alpha (the particles' and their
+transmittance) */
+void ps3_gpu_particles_composite(uint32_t color_offset, uint32_t color_pitch, uint32_t width, uint32_t height);
+
+/* ---------- the Direct3D SPU's frames (spu_direct3d.c writes the draws' commands in chunks) */
+
+/* the scratch, the frames' stamps, the present's blit and the frame's number, into the SPU's set-up */
+void ps3_gpu_direct3d_setup(spu_d3d_setup *setup);
+/* a call to each chunk (IO offsets) from the command buffer, then the RSX takes them */
+void ps3_gpu_call_chunks(const uint32_t *offsets, uint32_t count);
+/* the host buffer past the command buffer: IO-mapped main memory the RSX reads (NULL before the start) */
+void *ps3_gpu_command_spare(uint32_t *bytes);
+/* a label's word (64 to 255: the system's are below), which the RSX's label commands write */
+volatile uint32_t *ps3_gpu_label(uint32_t index);
+/* main memory's IO offset; 1 when it is mapped */
+int ps3_gpu_io_offset(const void *address, uint32_t *offset);
+/* ZCull's surface as the targets' allocations left it: bound, offset, width, height */
+void ps3_gpu_zcull_state(uint32_t words[4]);
+/* the present's start: the flip's slot, then the display's size and its next buffer's surface (colour offset and pitch,
+depth offset and pitch) */
+void ps3_gpu_present_begin_spu(uint32_t words[6]);
+
+struct ps3_gpu_frame_spu
+{
+	/* the next frame's number, the last the RSX finished; the resident programs dropped, the draw stamps read */
+	uint32_t index;
+	uint32_t finished;
+	uint32_t programs_reset;
+	uint32_t stamps_read;
+};
+
+/* the present's end after the SPU's chunks: the flip, and the next frame */
+void ps3_gpu_present_end_spu(struct ps3_gpu_frame_spu *frame);
+/* the present's log every 600 frames, from the SPU's counts */
+void ps3_gpu_log_spu(const spu_d3d_statistics *statistics);
 
 #endif

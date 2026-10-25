@@ -1,5 +1,5 @@
-/* SPU_GAME.C: the game thread's jobs (spu_game.h): the checkpoint's copies (exact); the particles' rays and the render's
-jobs (render only: the SPU rounds toward zero), each after the game function it names. */
+/* SPU_GAME.C: the game thread's jobs (spu_game.h): the checkpoint's copies (exact); the particles' update and the
+render's jobs (render only: the SPU rounds toward zero), each after the game function it names. */
 
 #include <spu_intrinsics.h>
 #include <spu_mfcio.h>
@@ -813,21 +813,16 @@ static void weather_table(weather_state *w, const spu_game_weather_type *type)
 	}
 }
 
-/* scenario_get_current_from_weather_palette with wind_variance_get */
-static void weather_wind(const weather_state *w, const float *position, uint32_t physics_flags, float *wind)
+/* scenario_get_current_from_weather_palette for a valid entry, with wind_variance_get on the variance table */
+static void wind_get(const float *velocity3d, float velocity, float variation_weight, float variation_rate,
+	float damping, float time, const float *variance_table, const float *position, uint32_t physics_flags, float *wind)
 {
 	static const float axis_scale[3] = { 0.1f, 0.2f, 0.07f };
-	const spu_game_weather *p = w->p;
 	float weight, magnitude, variance[3] = { 0.0f, 0.0f, 0.0f };
 	uint32_t axis;
 
-	if (!p->wind_valid)
-	{
-		wind[0] = wind[1] = wind[2] = 0.0f;
-		return;
-	}
-	weight = (physics_flags & (1u << PHYSICS_SIMPLE_WIND)) ? 0.0f : p->wind_variation_weight;
-	magnitude = p->wind_variation_weight * p->wind_velocity * (1.0f / 3.0f);
+	weight = (physics_flags & (1u << PHYSICS_SIMPLE_WIND)) ? 0.0f : variation_weight;
+	magnitude = variation_weight * velocity * (1.0f / 3.0f);
 	for (axis = 0; axis < 3; axis++)
 	{
 		union
@@ -837,19 +832,31 @@ static void weather_wind(const weather_state *w, const float *position, uint32_t
 		} key;
 		const float *sample;
 
-		key.value = absolute((axis_scale[axis] * p->wind_time * p->wind_variation_rate + position[axis]) * 8.0f) +
-			8388608.0f;
-		sample = w->variance + (axis * 64 + (key.bits & 0x3F)) * 3;
+		key.value = absolute((axis_scale[axis] * time * variation_rate + position[axis]) * 8.0f) + 8388608.0f;
+		sample = variance_table + (axis * 64 + (key.bits & 0x3F)) * 3;
 		variance[0] += sample[0];
 		variance[1] += sample[1];
 		variance[2] += sample[2];
 	}
 	for (axis = 0; axis < 3; axis++)
 	{
-		wind[axis] = p->wind_velocity3d[axis] * (1.0f - weight) + variance[axis] * magnitude;
+		wind[axis] = velocity3d[axis] * (1.0f - weight) + variance[axis] * magnitude;
 		if (physics_flags & (1u << PHYSICS_DAMPED_WIND))
-			wind[axis] *= 1.0f - p->wind_damping;
+			wind[axis] *= 1.0f - damping;
 	}
+}
+
+static void weather_wind(const weather_state *w, const float *position, uint32_t physics_flags, float *wind)
+{
+	const spu_game_weather *p = w->p;
+
+	if (!p->wind_valid)
+	{
+		wind[0] = wind[1] = wind[2] = 0.0f;
+		return;
+	}
+	wind_get(p->wind_velocity3d, p->wind_velocity, p->wind_variation_weight, p->wind_variation_rate, p->wind_damping,
+		p->wind_time, w->variance, position, physics_flags, wind);
 }
 
 /* weather_particle_update_physics: the acceleration, point_physics_update with no collisions, the drift, the wrap */
@@ -1346,7 +1353,7 @@ static void weather_job(uint32_t params, uint32_t size)
 	mfc_putf(state.p, params, (size + 15) & ~15u, TAG_OUTPUT, 0, 0);
 }
 
-/* ---------- PARTICLES: point_physics_update's rays (point_physics.c) through collision_test_vector's structure and
+/* ---------- PARTICLES: particles_update's loop (particles.c), its rays through collision_test_vector's structure and
 media tests (collisions.c: collision_bsp_test_vector of collision_bsp.c, bsp2d_test_point, bsp3d_test_point) */
 
 /* _collision_test_* */
@@ -1373,7 +1380,78 @@ media tests (collisions.c: collision_bsp_test_vector of collision_bsp.c, bsp2d_t
 #define EDGES_PER_SURFACE 8
 #define RESULT_STRUCTURE 0
 #define RESULT_MEDIA 1
-#define PARTICLES_BATCH 256
+/* _point_physics_in_air_bit, _in_water_bit; the point physics' _structure_collisions_bit, _water_collisions_bit */
+#define IN_AIR 0
+#define IN_WATER 1
+#define PHYSICS_STRUCTURE_COLLISIONS 1
+#define PHYSICS_WATER_COLLISIONS 2
+/* the particle definition's flags and the particle's (particles.c, particles.h) */
+#define DEFINITION_STOPS_AT_REST 1
+#define DEFINITION_ONCE_PER_FRAME 3
+#define DEFINITION_DIES_ON_WATER 7
+#define DEFINITION_DIES_ON_AIR 8
+#define DATUM_BACKWARDS 0
+#define DATUM_AT_REST 1
+#define MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT 15
+/* the job's LS after its parameters: the breakable flags, the definitions, the palettes, the variance, a batch of
+datums, the events */
+#define PARTICLES_DATUMS 64
+#define PARTICLES_EVENT_BATCH 64
+#define PARTICLES_BREAKABLE 512
+#define PARTICLES_DEFINITIONS 1024
+#define PARTICLES_PALETTES (PARTICLES_DEFINITIONS + SPU_GAME_PARTICLE_DEFINITIONS * 128 + 32)
+#define PARTICLES_VARIANCE (PARTICLES_PALETTES + SPU_GAME_WIND_PALETTES * 32 + 32)
+#define PARTICLES_BATCH (PARTICLES_VARIANCE + 2304 + 32)
+#define PARTICLES_EVENTS (PARTICLES_BATCH + PARTICLES_DATUMS * 112 + 32)
+
+/* particles.h's struct particle_datum */
+typedef struct
+{
+	int16_t identifier;
+	uint16_t flags;
+	int32_t definition_index;
+	int32_t object_index;
+	int16_t node_index;
+	uint8_t state;
+	uint8_t local_player_index;
+	int32_t last_rendered_frame_index;
+	float age;
+	float lifespan;
+	float frame_time;
+	float frame_span;
+	int16_t sequence_index;
+	int16_t frame_index;
+	int32_t leaf_index;
+	int16_t cluster_index;
+	uint16_t bonus;
+	float position[3];
+	float direction[3];
+	float velocity[3];
+	float rotation;
+	float angular_velocity;
+	float radius;
+	float color[4];
+} particle_datum;
+
+/* a particle's rays: in, then their answer over it */
+typedef struct
+{
+	float position[3];
+	float dt;
+	float velocity[3];
+	float radius;
+	/* in: point_physics' collision flags (_collision_test_*); out: its result flags (_point_physics_*) */
+	uint32_t flags;
+	int32_t leaf_index;
+	int16_t cluster_index;
+	int16_t material_type;
+	float contact_friction;
+	float collision_normal[3];
+	float elasticity;
+} ray_particle;
+
+typedef char particles_layout_check[sizeof(particle_datum) == 0x70 && PARTICLES_EVENTS % 16 == 0 &&
+	PARTICLES_EVENTS + PARTICLES_EVENT_BATCH * sizeof(spu_game_particle_event) <= SCRATCH_BYTES ? 1 : -1];
 
 typedef struct
 {
@@ -1843,7 +1921,7 @@ static int particle_ray(const spu_game_particles *p, const uint32_t *breakable, 
 }
 
 /* point_physics_update's loop of up to 3 rays */
-static void particle_rays(const spu_game_particles *p, const uint32_t *breakable, spu_game_particle *particle)
+static void particle_rays(const spu_game_particles *p, const uint32_t *breakable, ray_particle *particle)
 {
 	uint32_t collision_flags = particle->flags, result = 0, axis, i;
 	float dt = particle->dt, offset = particle->radius < 0.005f ? particle->radius : 0.005f;
@@ -1889,11 +1967,251 @@ static void particle_rays(const spu_game_particles *p, const uint32_t *breakable
 	particle->flags = result;
 }
 
+typedef struct
+{
+	const spu_game_particles *p;
+	const uint32_t *breakable;
+	const spu_game_particle_definition *definitions;
+	const spu_game_wind_palette *palettes;
+	const float *variance;
+} particles_state;
+
+/* particle_update's answers */
+#define PARTICLE_FREE 0
+#define PARTICLE_UPDATED 1
+#define PARTICLE_EVENT 2
+
+/* the particle's definition slot; NULL with none (the PPE's) */
+static const spu_game_particle_definition *particle_definition(const particles_state *s, int32_t definition_index)
+{
+	uint32_t slot = SPU_GAME_PARTICLE_DEFINITION_SLOT(definition_index), probe;
+
+	for (probe = 0; probe < 4; probe++)
+	{
+		const spu_game_particle_definition *definition =
+			&s->definitions[(slot + probe) & (SPU_GAME_PARTICLE_DEFINITIONS - 1)];
+
+		if (definition->definition_index == definition_index)
+			return definition;
+		if (definition->definition_index == NONE)
+			break;
+	}
+	return NULL;
+}
+
+/* particle_next_frame in the particle's sequence: 0 when it takes the next sequence (the PPE's) */
+static int particle_next_frame(particle_datum *particle, const spu_game_particle_definition *definition)
+{
+	particle->frame_time = 0.0f;
+	if (particle->flags & (1u << DATUM_BACKWARDS))
+	{
+		if (particle->frame_index <= 0)
+			return 0;
+		particle->frame_index--;
+		return 1;
+	}
+	if (particle->sequence_index < 0 || particle->sequence_index >= definition->sequence_count ||
+		particle->frame_index + 1 >= definition->sprite_counts[particle->sequence_index])
+		return 0;
+	particle->frame_index++;
+	return 1;
+}
+
+/* particle_update_frame_time: 0 when it takes the next sequence */
+static int particle_frame_time(particle_datum *particle, const spu_game_particle_definition *definition, float dt,
+	int32_t update_ticks)
+{
+	int32_t steps = 0;
+
+	if ((definition->flags & (1u << DEFINITION_STOPS_AT_REST)) && (particle->flags & (1u << DATUM_AT_REST)))
+		return 1;
+	if (definition->flags & (1u << DEFINITION_ONCE_PER_FRAME))
+		return dt == 0.0f || update_ticks <= 0 || particle_next_frame(particle, definition);
+	if (particle->frame_time == -1.0f)
+	{
+		if (!particle_next_frame(particle, definition))
+			return 0;
+		particle->frame_time = 0.0f;
+	}
+	while (dt > 0.0f)
+	{
+		float remaining = particle->frame_span - particle->frame_time;
+
+		if (remaining > dt)
+		{
+			particle->frame_time = dt + particle->frame_time;
+			break;
+		}
+		/* (a frame span of 0 steps on without end: the PPE's) */
+		if (++steps > 64 || !particle_next_frame(particle, definition))
+			return 0;
+		dt = dt - remaining;
+	}
+	return 1;
+}
+
+/* scenario_get_current (wind.c) at the particle: the wind, and 1 in water; NONE when its cluster is not the table's */
+static int particle_wind(const particles_state *s, const particle_datum *particle, uint32_t physics_flags, float *wind)
+{
+	const spu_game_particles *p = s->p;
+	int32_t palette_index = NONE, cluster_index = particle->cluster_index;
+	int in_water = 0;
+
+	if (cluster_index != NONE)
+	{
+		spu_game_cluster_wind lookup;
+
+		if (cluster_index < 0 || cluster_index >= p->structure.cluster_count)
+			return NONE;
+		cache_read(&lookup, p->cluster_wind + (uint32_t)cluster_index * sizeof(lookup), sizeof(lookup));
+		palette_index = lookup.weather_palette_index;
+		if (lookup.region_weather_palette_index != NONE && (!lookup.has_plane ||
+			dot3(lookup.plane, particle->position) - lookup.plane[3] + lookup.plane_distance < 0.0f))
+		{
+			palette_index = lookup.region_weather_palette_index;
+			in_water = lookup.region_water != 0;
+		}
+	}
+	if (palette_index >= 0 && palette_index < s->p->palette_count && s->palettes[palette_index].valid)
+	{
+		const spu_game_wind_palette *palette = &s->palettes[palette_index];
+
+		wind_get(palette->velocity3d, palette->velocity, palette->variation_weight, palette->variation_rate,
+			palette->damping, p->wind_time, s->variance, particle->position, physics_flags, wind);
+	}
+	else
+	{
+		wind[0] = wind[1] = wind[2] = 0.0f;
+	}
+	return in_water;
+}
+
+/* point_physics_update_forces (point_physics.c) with no force: the result's medium bit, the rays' flags; 0 when the
+particle's cluster is not the table's */
+static int particle_forces(const particles_state *s, particle_datum *particle, const spu_game_particle_definition *d,
+	float radius, uint32_t *result, ray_particle *ray)
+{
+	const spu_game_particles *p = s->p;
+	float wind[3], radius_squared = radius * radius, mass = d->mass_over_radius_cubed, buoyancy, friction, t;
+	int in_water = particle_wind(s, particle, d->physics_flags, wind), axis;
+
+	if (in_water == NONE)
+		return 0;
+	mass += in_water ? p->water_mass : p->air_mass;
+	buoyancy = d->buoyancy[in_water];
+	friction = d->friction[in_water] * radius_squared;
+	*result = 1u << (in_water ? IN_WATER : IN_AIR);
+	mass = mass * (radius_squared * radius);
+	if (d->physics_flags & (1u << PHYSICS_NO_GRAVITY))
+		buoyancy = 0.0f;
+	particle->velocity[2] = p->gravity * buoyancy * p->dt + particle->velocity[2];
+	if (mass == 0.0f)
+	{
+		t = friction == 0.0f ? 0.0f : 1.0f;
+	}
+	else
+	{
+		t = divide(p->dt, mass) * friction;
+		t = PIN(t, 0.0f, 1.0f);
+	}
+	for (axis = 0; axis < 3; axis++)
+		particle->velocity[axis] += (wind[axis] - particle->velocity[axis]) * t;
+	ray->flags = (1u << TEST_FRONT_FACING) |
+		((d->physics_flags & (1u << PHYSICS_WATER_COLLISIONS)) ? 1u << TEST_MEDIA : 0) |
+		((d->physics_flags & (1u << PHYSICS_STRUCTURE_COLLISIONS)) ? 1u << TEST_STRUCTURE : 0);
+	return 1;
+}
+
+/* particles_update's loop for a particle: updated whole, or an event for the PPE (a contact's after its update here;
+else the particle as it was) */
+static int particle_update(const particles_state *s, particle_datum *particle, int32_t absolute_index,
+	spu_game_particle_event *event)
+{
+	const spu_game_particles *p = s->p;
+	const spu_game_particle_definition *definition;
+	particle_datum original;
+	uint32_t result = 0;
+	int was_new;
+
+	if (!particle->identifier)
+		return PARTICLE_FREE;
+	memset(event, 0, sizeof(*event));
+	event->particle_index = (int32_t)((uint32_t)(uint16_t)particle->identifier << 16 | (uint32_t)absolute_index);
+	event->kind = SPU_GAME_PARTICLE_PPE;
+	event->material_type = NONE;
+	definition = particle_definition(s, particle->definition_index);
+	/* (one not rendered for long, one attached to an object, one of a definition without a slot) */
+	if ((p->frame_index - particle->last_rendered_frame_index > MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT &&
+		particle->last_rendered_frame_index < p->oldest_tick_frame_index) || !definition ||
+		particle->object_index != NONE)
+		return PARTICLE_EVENT;
+	original = *particle;
+	was_new = particle->age == 0.0f;
+	particle->age = p->dt + particle->age;
+	/* (its death, its next sequence) */
+	if ((particle->age >= particle->lifespan && !was_new && !definition->final_sequence_count) ||
+		!particle_frame_time(particle, definition, p->dt, p->update_ticks))
+	{
+		*particle = original;
+		return PARTICLE_EVENT;
+	}
+	if (particle->flags & (1u << DATUM_AT_REST))
+		return PARTICLE_UPDATED;
+	if (p->dt != 0.0f)
+	{
+		float radius = ((definition->radius_bounds[1] - definition->radius_bounds[0]) *
+			divide(particle->age, particle->lifespan) + definition->radius_bounds[0]) * particle->radius;
+		ray_particle ray;
+
+		if (!(radius >= 0.0f))
+			radius = 0.0f;
+		if (!particle_forces(s, particle, definition, radius, &result, &ray))
+		{
+			*particle = original;
+			return PARTICLE_EVENT;
+		}
+		memcpy(ray.position, particle->position, sizeof(ray.position));
+		memcpy(ray.velocity, particle->velocity, sizeof(ray.velocity));
+		memset(ray.collision_normal, 0, sizeof(ray.collision_normal));
+		ray.dt = p->dt;
+		ray.radius = radius;
+		ray.leaf_index = particle->leaf_index;
+		ray.cluster_index = particle->cluster_index;
+		ray.material_type = NONE;
+		ray.contact_friction = definition->contact_friction;
+		ray.elasticity = definition->elasticity;
+		particle_rays(p, s->breakable, &ray);
+		memcpy(particle->position, ray.position, sizeof(particle->position));
+		memcpy(particle->velocity, ray.velocity, sizeof(particle->velocity));
+		particle->leaf_index = ray.leaf_index;
+		particle->cluster_index = ray.cluster_index;
+		result |= ray.flags;
+		memcpy(event->collision_normal, ray.collision_normal, sizeof(event->collision_normal));
+		event->material_type = ray.material_type;
+	}
+	/* a collision, or a death in its medium: particle_update_physics_contact */
+	if ((result & ((1u << COLLIDED_STRUCTURE) | (1u << COLLIDED_WATER))) ||
+		((result & (1u << IN_AIR)) && (definition->flags & (1u << DEFINITION_DIES_ON_AIR))) ||
+		((result & (1u << IN_WATER)) && (definition->flags & (1u << DEFINITION_DIES_ON_WATER))))
+	{
+		event->kind = SPU_GAME_PARTICLE_CONTACT;
+		event->collision_flags = result;
+		return PARTICLE_EVENT;
+	}
+	/* particle_update_physics_rest, not settled */
+	if (dot3(particle->velocity, particle->velocity) >= 0.0625f)
+		memcpy(particle->direction, particle->velocity, sizeof(particle->direction));
+	particle->rotation = p->dt * particle->angular_velocity + particle->rotation;
+	return PARTICLE_UPDATED;
+}
+
 static void particles_job(uint32_t params, uint32_t size)
 {
+	static spu_game_particles_answer answer __attribute__((aligned(16)));
 	spu_game_particles *p = (spu_game_particles *)scratch;
-	const uint32_t *breakable;
-	int32_t done;
+	spu_game_particle_event *events = (spu_game_particle_event *)(scratch + PARTICLES_EVENTS);
+	particles_state s;
+	int32_t first, put = 0, buffered = 0, updated = 0, stop;
 
 	if (size != sizeof(spu_game_particles) || (params & 15))
 	{
@@ -1901,30 +2219,77 @@ static void particles_job(uint32_t params, uint32_t size)
 		return;
 	}
 	dma_get(p, params, sizeof(*p), TAG_PARAMS);
-	dma_wait(1 << TAG_PARAMS);
-	if (p->particle_count < 0 || p->particle_count > SPU_GAME_PARTICLES_MAXIMUM || (p->particles & 15) ||
-		p->breakable_count < 0 || p->breakable_count > 1024)
+	dma_wait((1 << TAG_PARAMS) | (1 << TAG_OUTPUT));
+	if (p->answer & 15)
 	{
 		echo.refused++;
-		answer_put(p->answer, SPU_GAME_REFUSED, 0);
+		return;
+	}
+	answer.status = SPU_GAME_REFUSED;
+	answer.updated = 0;
+	answer.event_count = 0;
+	answer.end_index = p->first_index;
+	if (p->first_index < 0 || p->end_index < p->first_index ||
+		p->end_index - p->first_index > SPU_GAME_PARTICLES_RANGE || p->datum_size != (int32_t)sizeof(particle_datum) || p->event_capacity < 0 || (p->events & 15) ||
+		(p->definitions & 15) || (p->cluster_wind & 3) || p->palette_count < 0 ||
+		p->palette_count > SPU_GAME_WIND_PALETTES || p->breakable_count < 0 || p->breakable_count > 1024)
+	{
+		echo.refused++;
+		mfc_putf(&answer, p->answer, sizeof(answer), TAG_OUTPUT, 0, 0);
 		return;
 	}
 	cache_check(p->structure.generation);
-	breakable = fetch(scratch + 256, p->breakable_flags, ((uint32_t)p->breakable_count + 31) / 32 * 4);
-	for (done = 0; done < p->particle_count; done += PARTICLES_BATCH)
+	s.p = p;
+	s.breakable = fetch(scratch + PARTICLES_BREAKABLE, p->breakable_flags,
+		((uint32_t)p->breakable_count + 31) / 32 * 4);
+	s.definitions = fetch(scratch + PARTICLES_DEFINITIONS, p->definitions,
+		SPU_GAME_PARTICLE_DEFINITIONS * sizeof(spu_game_particle_definition));
+	s.palettes = fetch(scratch + PARTICLES_PALETTES, p->palettes,
+		(uint32_t)p->palette_count * sizeof(spu_game_wind_palette));
+	s.variance = fetch(scratch + PARTICLES_VARIANCE, p->variance, 3 * 64 * 12);
+	stop = p->end_index;
+	for (first = p->first_index; first < stop; first += PARTICLES_DATUMS)
 	{
-		int32_t n = p->particle_count - done < PARTICLES_BATCH ? p->particle_count - done : PARTICLES_BATCH, index;
-		spu_game_particle *batch = (spu_game_particle *)(scratch + 1024);
+		int32_t n = p->end_index - first < PARTICLES_DATUMS ? p->end_index - first : PARTICLES_DATUMS, index;
+		uint32_t ea = p->datums + (uint32_t)first * sizeof(particle_datum);
+		unsigned char *batch;
 
 		dma_wait(1 << TAG_OUTPUT);
-		dma_get(batch, p->particles + done * sizeof(spu_game_particle), n * sizeof(spu_game_particle), TAG_BULK);
-		dma_wait(1 << TAG_BULK);
+		batch = fetch(scratch + PARTICLES_BATCH, ea, (uint32_t)n * sizeof(particle_datum));
 		for (index = 0; index < n; index++)
-			particle_rays(p, breakable, &batch[index]);
-		mfc_put(batch, p->particles + done * sizeof(spu_game_particle), n * sizeof(spu_game_particle), TAG_OUTPUT, 0,
-			0);
+		{
+			int state;
+
+			/* (an event a datum at most: none past their room) */
+			if (put + buffered >= p->event_capacity)
+			{
+				stop = first + index;
+				break;
+			}
+			state = particle_update(&s, (particle_datum *)(batch + index * sizeof(particle_datum)), first + index,
+				&events[buffered]);
+			updated += state == PARTICLE_UPDATED;
+			if (state == PARTICLE_EVENT && ++buffered == PARTICLES_EVENT_BATCH)
+			{
+				mfc_put(events, p->events + (uint32_t)put * sizeof(*events), buffered * sizeof(*events), TAG_OUTPUT, 0,
+					0);
+				dma_wait(1 << TAG_OUTPUT);
+				put += buffered;
+				buffered = 0;
+			}
+		}
+		put_exact(batch, ea, (uint32_t)n * sizeof(particle_datum), TAG_OUTPUT);
 	}
-	answer_put(p->answer, SPU_GAME_DONE, (uint32_t)p->particle_count);
+	if (buffered)
+	{
+		mfc_put(events, p->events + (uint32_t)put * sizeof(*events), buffered * sizeof(*events), TAG_OUTPUT, 0, 0);
+		put += buffered;
+	}
+	answer.status = SPU_GAME_DONE;
+	answer.updated = (uint32_t)updated;
+	answer.event_count = (uint32_t)put;
+	answer.end_index = stop;
+	mfc_putf(&answer, p->answer, sizeof(answer), TAG_OUTPUT, 0, 0);
 }
 
 /* ---------- LIGHTS: each light's structure_visibility_build_surfaces (the SHADOW job's traversals), then
@@ -2706,6 +3071,275 @@ static void contrails_job(uint32_t params, uint32_t size)
 	answer_put(p->answer, SPU_GAME_DONE, (uint32_t)p->contrail_count);
 }
 
+/* ---------- INTERPOLATION: render_interpolation_tick (render_interpolation.c), a batch of objects at a time: their
+node matrices block references and records, then their matrices, then the snapshots and records out */
+
+#define INTERPOLATION_HEADERS 128
+#define INTERPOLATION_OBJECTS 32
+/* a record's lines in LS, and the scratch's parts */
+#define INTERPOLATION_RECORD_ROOM 128
+#define INTERPOLATION_REFERENCES 4096
+#define INTERPOLATION_RECORDS 5120
+#define INTERPOLATION_DEFERRED 16384
+#define INTERPOLATION_MATRICES 32768
+
+enum
+{
+	_interpolation_skip,
+	_interpolation_none,
+	_interpolation_deferred,
+	_interpolation_taken,
+};
+
+typedef struct
+{
+	uint32_t object;
+	uint32_t record;
+	uint32_t source;
+	uint32_t target;
+	uint32_t matrices;
+	int32_t index;
+	int32_t absolute;
+	int32_t header;
+	int32_t node_count;
+	int32_t action;
+	int32_t continuing;
+	int32_t latest;
+} interpolation_entry;
+
+static inline int32_t ls_s32(const unsigned char *p)
+{
+	return *(const int32_t *)p;
+}
+
+static inline int16_t ls_s16(const unsigned char *p)
+{
+	return *(const int16_t *)p;
+}
+
+/* the low word of a 64-bit pointer, 0 when it is above 4 GB */
+static inline uint32_t ls_pointer(const unsigned char *p)
+{
+	return *(const uint32_t *)p ? 0 : *(const uint32_t *)(p + 4);
+}
+
+static inline int ls_null(const unsigned char *p)
+{
+	return !(*(const uint32_t *)p | *(const uint32_t *)(p + 4));
+}
+
+/* bytes to to from from (any alignments) a quadword at a time; to's quadwords whole (the bytes around are LS of no use) */
+static void ls_shift_copy(unsigned char *to, const unsigned char *from, uint32_t bytes)
+{
+	static const vec_uchar16 order = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+	vec_uchar16 *out = (vec_uchar16 *)((uint32_t)to & ~15u);
+	const unsigned char *source = from - ((uint32_t)to & 15);
+	const vec_uchar16 *in = (const vec_uchar16 *)((uint32_t)source & ~15u);
+	vec_uchar16 pattern = (vec_uchar16)spu_add((vec_ushort8)order,
+		spu_splats((unsigned short)(((uint32_t)source & 15) * 0x0101)));
+	uint32_t quads = (((uint32_t)to & 15) + bytes + 15) >> 4, quad;
+	vec_uchar16 previous = in[0];
+
+	/* (four at a time: each load waits 6 cycles) */
+	for (quad = 0; quad + 4 <= quads; quad += 4)
+	{
+		vec_uchar16 a = in[quad + 1], b = in[quad + 2], c = in[quad + 3], d = in[quad + 4];
+
+		out[quad] = spu_shuffle(previous, a, pattern);
+		out[quad + 1] = spu_shuffle(a, b, pattern);
+		out[quad + 2] = spu_shuffle(b, c, pattern);
+		out[quad + 3] = spu_shuffle(c, d, pattern);
+		previous = d;
+	}
+	for (; quad < quads; quad++)
+	{
+		vec_uchar16 next = in[quad + 1];
+
+		out[quad] = spu_shuffle(previous, next, pattern);
+		previous = next;
+	}
+}
+
+/* a correction's and its pending part's words zero but their signs (correction_advance gives +0 of them) */
+static inline int corrections_zero(const unsigned char *correction, const unsigned char *pending)
+{
+	uint32_t index, bits = 0;
+
+	for (index = 0; index < 3; index++)
+		bits |= ((const uint32_t *)correction)[index] | ((const uint32_t *)pending)[index];
+	return !(bits & 0x7fffffffu);
+}
+
+static void interpolation_job(uint32_t params, uint32_t size)
+{
+	static spu_game_interpolation p __attribute__((aligned(16)));
+	static interpolation_entry entries[INTERPOLATION_OBJECTS];
+	int16_t *deferred = (int16_t *)(scratch + INTERPOLATION_DEFERRED);
+	int32_t first, deferred_count = 0;
+
+	if (size != sizeof(p) || (params & 15))
+	{
+		echo.refused++;
+		return;
+	}
+	dma_get(&p, params, sizeof(p), TAG_PARAMS);
+	dma_wait(1 << TAG_PARAMS);
+	if (p.header_size < 8 || p.header_size > 24 || p.datum_offset + 8 > p.header_size || p.record_size > 96 ||
+		p.record_count <= 0 || p.record_count > 8192 || p.node_size <= 0 || p.maximum_nodes <= 0 ||
+		p.header_count < 0 || (p.deferred & 15))
+	{
+		answer_put(p.answer, SPU_GAME_REFUSED, 0);
+		return;
+	}
+	p.object_count = p.node_count = 0;
+	for (first = 0; first < p.header_count; )
+	{
+		int32_t batch = p.header_count - first < INTERPOLATION_HEADERS ? p.header_count - first : INTERPOLATION_HEADERS;
+		const unsigned char *headers = fetch(scratch, p.headers + (uint32_t)first * p.header_size,
+			(uint32_t)batch * p.header_size);
+		int32_t at = 0;
+
+		while (at < batch)
+		{
+			int32_t count = 0, item;
+			uint32_t used = 0;
+
+			/* the objects' block references and records */
+			for (; at < batch && count < INTERPOLATION_OBJECTS; at++)
+			{
+				const unsigned char *header = headers + at * p.header_size;
+				interpolation_entry *entry = &entries[count];
+				uint32_t reference, line;
+
+				if (!ls_s16(header))
+					continue;
+				/* (object_iterator_next ends at a null datum) */
+				if (ls_null(header + p.datum_offset))
+				{
+					p.header_count = first + at;
+					batch = at;
+					break;
+				}
+				if (first + at >= p.record_count)
+					continue;
+				entry->absolute = first + at;
+				entry->header = at;
+				entry->index = (int32_t)((uint32_t)entry->absolute | (uint32_t)(uint16_t)ls_s16(header) << 16);
+				entry->object = ls_pointer(header + p.datum_offset);
+				entry->record = p.records + (uint32_t)entry->absolute * p.record_size;
+				entry->action = _interpolation_skip;
+				reference = entry->object + p.node_matrices_offset;
+				if (entry->object)
+					mfc_get(scratch + INTERPOLATION_REFERENCES + count * 32, reference & ~15u, 32, TAG_BULK, 0, 0);
+				line = entry->record & ~15u;
+				mfc_get(scratch + INTERPOLATION_RECORDS + count * INTERPOLATION_RECORD_ROOM, line,
+					((entry->record + p.record_size + 15) & ~15u) - line, TAG_BULK, 0, 0);
+				count++;
+			}
+			dma_wait(1 << TAG_BULK);
+			/* each object's action, and the matrices of those taken */
+			for (item = 0; item < count; item++)
+			{
+				interpolation_entry *entry = &entries[item];
+				unsigned char *record = scratch + INTERPOLATION_RECORDS + item * INTERPOLATION_RECORD_ROOM +
+					(entry->record & 15);
+				const unsigned char *reference;
+				int32_t capacity, offset, bytes, need;
+				uint32_t nodes;
+
+				if (!entry->object)
+				{
+					entry->action = _interpolation_deferred;
+					continue;
+				}
+				reference = scratch + INTERPOLATION_REFERENCES + item * 32 + ((entry->object + p.node_matrices_offset) & 15);
+				entry->node_count = (int16_t)(ls_s16(reference) / p.node_size);
+				offset = ls_s16(reference + 2);
+				if (entry->node_count <= 0 || entry->node_count > p.maximum_nodes)
+				{
+					entry->action = _interpolation_none;
+					continue;
+				}
+				capacity = ls_s16(record + p.node_capacity_offset);
+				nodes = ls_pointer(record + p.nodes_offset);
+				entry->continuing = ls_s32(record + p.object_index_offset) == entry->index &&
+					ls_s16(record + p.node_count_offset) == entry->node_count &&
+					ls_s32(record + p.tick_offset) == p.previous_tick;
+				entry->latest = record[p.latest_offset] ^ (entry->continuing ? 1 : 0);
+				if (capacity < entry->node_count || offset <= 0 || !nodes ||
+					(entry->continuing && !corrections_zero(record + p.correction_offset, record + p.pending_offset)))
+				{
+					entry->action = _interpolation_deferred;
+					continue;
+				}
+				bytes = entry->node_count * p.node_size;
+				/* (the fetched lines, then the copy at the target's alignment) */
+				need = 2 * ((bytes + 32 + 15) & ~15);
+				if (used + (uint32_t)need > SCRATCH_BYTES - INTERPOLATION_MATRICES)
+				{
+					/* (no room: this object and those after it in the next round) */
+					at = entry->header;
+					count = item;
+					break;
+				}
+				entry->source = entry->object + (uint32_t)offset;
+				entry->target = nodes + (uint32_t)(entry->latest * capacity * p.node_size);
+				entry->matrices = used;
+				mfc_get(scratch + INTERPOLATION_MATRICES + used, entry->source & ~15u,
+					((entry->source + (uint32_t)bytes + 15) & ~15u) - (entry->source & ~15u), TAG_BULK, 0, 0);
+				used += (uint32_t)need;
+				entry->action = _interpolation_taken;
+			}
+			dma_wait(1 << TAG_BULK);
+			/* the snapshots and the records out, as render_interpolation_tick writes them */
+			for (item = 0; item < count; item++)
+			{
+				interpolation_entry *entry = &entries[item];
+				unsigned char *record = scratch + INTERPOLATION_RECORDS + item * INTERPOLATION_RECORD_ROOM +
+					(entry->record & 15);
+
+				if (entry->action == _interpolation_none)
+				{
+					*(int32_t *)(record + p.object_index_offset) = NONE;
+					put_exact(record + p.object_index_offset, entry->record + p.object_index_offset, 4, TAG_OUTPUT);
+				}
+				else if (entry->action == _interpolation_deferred)
+				{
+					deferred[deferred_count++] = (int16_t)entry->absolute;
+				}
+				else if (entry->action == _interpolation_taken)
+				{
+					uint32_t bytes = (uint32_t)(entry->node_count * p.node_size);
+					unsigned char *base = scratch + INTERPOLATION_MATRICES + entry->matrices;
+					unsigned char *aligned = base + ((bytes + 32 + 15) & ~15u) + (entry->target & 15);
+
+					ls_shift_copy(aligned, base + (entry->source & 15), bytes);
+					put_exact(aligned, entry->target, bytes, TAG_OUTPUT);
+					record[p.latest_offset] = (unsigned char)entry->latest;
+					memset(record + p.correction_offset, 0, 12);
+					memset(record + p.pending_offset, 0, 12);
+					record[p.rotations_valid_offset + entry->latest] = 0;
+					*(int32_t *)(record + p.object_index_offset) = entry->index;
+					*(int16_t *)(record + p.node_count_offset) = (int16_t)entry->node_count;
+					*(int32_t *)(record + p.tick_offset) = p.tick;
+					record[p.has_previous_offset] = (unsigned char)entry->continuing;
+					*(int32_t *)(record + p.blended_frame_offset) = NONE;
+					put_exact(record, entry->record, p.record_size, TAG_OUTPUT);
+					p.object_count++;
+					p.node_count += entry->node_count;
+				}
+			}
+			/* (the buffers are the next round's) */
+			dma_wait(1 << TAG_OUTPUT);
+		}
+		first += batch;
+	}
+	if (deferred_count)
+		put_exact(deferred, p.deferred, (uint32_t)deferred_count * 2, TAG_OUTPUT);
+	put_exact(&p.object_count, params + offsetof(spu_game_interpolation, object_count), 8, TAG_OUTPUT);
+	answer_put(p.answer, SPU_GAME_DONE, (uint32_t)deferred_count);
+}
+
 /* ---------- the jobs */
 
 static void run_job(const spu_game_job *job)
@@ -2748,6 +3382,9 @@ static void run_job(const spu_game_job *job)
 		break;
 	case SPU_GAME_CONTRAILS:
 		contrails_job(job->source, job->size);
+		break;
+	case SPU_GAME_INTERPOLATION:
+		interpolation_job(job->source, job->size);
 		break;
 	default:
 		echo.refused++;

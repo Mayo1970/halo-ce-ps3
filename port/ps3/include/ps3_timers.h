@@ -50,9 +50,10 @@ enum
 	_ps3_timer_frame_sound,
 	_ps3_timer_frame_other,
 	/* the particles' part of it: particles_update (its particles' physics, with the particles and those with physics:
-	ps3_timer_counts; particles.c), contrails_update, particle_systems_update */
+	ps3_timer_counts; particles.c), the SPU's update taken (its events), contrails_update, particle_systems_update */
 	_ps3_timer_particles_update,
 	_ps3_timer_particles_physics,
+	_ps3_timer_particles_finish,
 	_ps3_timer_contrails_update,
 	_ps3_timer_particle_systems_update,
 	/* point_physics_update at every call (point_physics.c), ms a frame: its whole time, its wind, its rays; its calls
@@ -459,6 +460,7 @@ enum
 	_ps3_timer_spu_game_visibility_wait,
 	_ps3_timer_spu_game_sprites_wait,
 	_ps3_timer_spu_game_contrails_wait,
+	_ps3_timer_spu_game_interpolation_wait,
 	_ps3_timer_spu_shadow_check,
 	_ps3_timer_spu_shadow_apart,
 	/* RSX splits only (ps3_rsx_timers): the frame's start, before each window, after the render */
@@ -477,6 +479,31 @@ enum
 	_ps3_collision_point,
 	_ps3_collision_move,
 	_ps3_collision_kinds
+};
+
+/* the draw stamps' parts (ps3_timers_draw_stamps): the specular part's splits in order, then the effects pass's;
+a transparent group's by its maker (ps3_transparent_origin), else by its shader's type as the transparent timers */
+enum
+{
+	_ps3_stamp_specular_lights,
+	_ps3_stamp_specular_fog = _ps3_stamp_specular_lights + 6,
+	_ps3_stamp_effects_rest,
+	_ps3_stamp_weather,
+	_ps3_stamp_particles,
+	_ps3_stamp_particle_systems,
+	_ps3_stamp_contrails,
+	_ps3_stamp_effect,
+	_ps3_stamp_model,
+	_ps3_stamp_generic,
+	_ps3_stamp_chicago,
+	_ps3_stamp_water,
+	_ps3_stamp_glass,
+	_ps3_stamp_meter,
+	_ps3_stamp_plasma,
+	_ps3_stamp_other,
+	_ps3_stamp_decals,
+	_ps3_stamp_detail,
+	_ps3_stamp_count
 };
 
 /* the game's collision users and logged collision functions (collision_usage.h) */
@@ -532,15 +559,25 @@ extern uint64_t ps3_rsx_timers[_ps3_timer_count];
 extern uint64_t ps3_rsx_frame_nanoseconds;
 extern uint32_t ps3_rsx_frames;
 extern uint32_t ps3_rsx_draws[_ps3_timer_count];
-/* the stamped draws (ps3_timers_draw_stamps): the RSX's nanoseconds and the draws by the Direct3D device's key for
-the draw's pixel shader; the frames stamped, the draws past a frame's stamps */
+/* the stamped draws' RSX nanoseconds and draws by the Direct3D device's key for their pixel shader, in the specular
+part [0] and the effects pass [1], and by part; a stamp is the key and part << PS3_DRAW_STAMP_PART_SHIFT */
 #define PS3_DRAW_STAMP_KEYS 1024
-extern uint64_t ps3_draw_stamp_nanoseconds[PS3_DRAW_STAMP_KEYS];
-extern uint32_t ps3_draw_stamp_draws[PS3_DRAW_STAMP_KEYS];
+#define PS3_DRAW_STAMP_PART_SHIFT 10
+extern uint64_t ps3_draw_stamp_nanoseconds[2][PS3_DRAW_STAMP_KEYS];
+extern uint32_t ps3_draw_stamp_draws[2][PS3_DRAW_STAMP_KEYS];
+extern uint64_t ps3_draw_stamp_part_nanoseconds[_ps3_stamp_count];
+extern uint32_t ps3_draw_stamp_part_draws[_ps3_stamp_count];
+/* the frames stamped, the draws past a frame's stamps */
 extern uint32_t ps3_draw_stamp_frames;
 extern uint32_t ps3_draw_stamp_dropped;
+/* the game thread's stamp part (ps3_timers_draw_stamps, -1 none); the part of the transparent groups made now
+(render.c sets it around the particles' and contrails' submits; 0: by the shader's type) */
+extern int ps3_draw_stamps_part;
+extern int ps3_transparent_origin;
 /* the Direct3D device's lines of the stamped pixel shaders, at each log (d3d8_rsx.c); NULL: none */
 extern void (*ps3_timers_shaders_log)(void);
+/* the Direct3D SPU's timers into the Direct3D thread's, at each window's end (d3d8_rsx.c); NULL: none */
+extern void (*ps3_timers_direct3d_collect)(void);
 
 /* the timebase, read again while its low word is 0 (PSL1GHT's __gettime: a Cell erratum) */
 static inline uint64_t ps3_timer_now(void)
@@ -573,8 +610,8 @@ void ps3_timers_frame(void);
 /* a split of the RSX's frame: a timestamp report in the Direct3D thread's order (d3d8_rsx.c), which ps3_gpu.c
 reads two frames on (no stall); returns the time now, the start of a next span */
 uint64_t ps3_timers_rsx_wait(int part);
-/* the draws from here stamped on the RSX (on) or not, in the Direct3D thread's order (d3d8_rsx.c), in one frame of
-eight: each draw's time by its pixel shader */
-void ps3_timers_draw_stamps(int on);
+/* the draws from here stamped on the RSX in a part (_ps3_stamp_*) or not (-1), in the Direct3D thread's order
+(d3d8_rsx.c), in one frame of eight: each draw's time by its pixel shader and part */
+void ps3_timers_draw_stamps(int part);
 
 #endif

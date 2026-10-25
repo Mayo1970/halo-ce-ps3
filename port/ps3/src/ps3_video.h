@@ -15,6 +15,11 @@ int ps3_video_widescreen(void);
 
 /* waits for a free buffer and makes it the render target */
 void ps3_video_begin_frame(void);
+/* the same in two parts, for commands an SPU writes: the wait, then that buffer's surface words */
+void ps3_video_wait_slot(void);
+void ps3_video_display_target(u32 *color_offset, u32 *color_pitch, u32 *depth_offset, u32 *depth_pitch);
+/* the host buffer's part past the command buffer: IO-mapped main memory the RSX reads (NULL before the start) */
+void *ps3_video_spare(u32 *bytes);
 void ps3_video_clear(unsigned argb);
 /* queues the flip of the current buffer at the next vsync */
 void ps3_video_end_frame(void);

@@ -230,8 +230,14 @@ struct rsx_fragment_key
 	/* the stages (bit n) whose texel coordinates are scaled before the lookup: a linear target drawn at the
 	screen's scale */
 	uint8_t texture_scaled;
-	uint8_t padding;
+	/* the fragments killed as the draw's blend leaves the target unchanged by them: a test (RSX_KILL_*) and the
+	colour's channels it reads (red in bit 4 to alpha in bit 7); 0 none */
+	uint8_t kill_mode;
 };
+
+/* rsx_fragment_key's kill_mode tests: the channels all 0, or all 1 */
+#define RSX_KILL_ZERO 1
+#define RSX_KILL_ONE 2
 
 /* the per-draw constants: colours as 0..1 floats, the fog's start, end and density, per stage the bump
 matrix (00 01 10 11) and its luminance scale and offset, and the texel coordinates' scale (s t 1 1) */
@@ -271,7 +277,8 @@ struct rsx_fragment_program
 
 /* clears the fields the translation does not read: one key for each program */
 void rsx_fragment_key_clean(struct rsx_fragment_key *key);
-/* the key as one line of hex (the pack's key list, the log): 39 words, then 15 bytes; parse gives 0 on success */
+/* the key as one line of hex (the pack's key list, the log): 39 words, then 16 bytes (parse takes 15, the kill mode
+0); parse gives 0 on success */
 #define RSX_FRAGMENT_KEY_TEXT 400
 void rsx_fragment_key_text(const struct rsx_fragment_key *key, char text[RSX_FRAGMENT_KEY_TEXT]);
 int rsx_fragment_key_parse(const char *text, struct rsx_fragment_key *key);

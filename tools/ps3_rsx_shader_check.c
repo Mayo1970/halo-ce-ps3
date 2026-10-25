@@ -1339,6 +1339,26 @@ static int reference_fragment(const struct rsx_fragment_key *key, const struct f
 	return 0;
 }
 
+/* the key's kill mode on the colour (ps3_rsx_fp.c's kill_unchanged): 1 killed, 0 not, -1 a channel too near its test's
+value for the program's results to agree */
+static int reference_kill_mode(const struct rsx_fragment_key *key, const float result[4])
+{
+	float target = (key->kill_mode & 3) == RSX_KILL_ONE ? 1.0f : 0.0f;
+	int component, near = 0;
+
+	if (!(key->kill_mode & 3))
+		return 0;
+	for (component = 0; component < 4; component++)
+	{
+		if (!((key->kill_mode >> (4 + component)) & 1) || result[component] == target)
+			continue;
+		if (fabsf(result[component] - target) > 1.0e-4f)
+			return 0;
+		near = 1;
+	}
+	return near ? -1 : 1;
+}
+
 /* ---------- RSX fragment programs: an interpreter of the instructions */
 
 /* a value as a half-precision register holds it: 11 significant bits, rounded to the nearest (even), 2^-24 below
@@ -1601,6 +1621,9 @@ static void random_key(struct rsx_fragment_key *key)
 		if (random_below(4) == 0)
 			key->texture_scaled |= (uint8_t)(1 << stage);
 	}
+	/* a blend that some colours leave the target unchanged by (d3d8_rsx.c's fragment_kill_mode) on a third */
+	if (random_below(3) == 0)
+		key->kill_mode = (uint8_t)((random_below(2) ? RSX_KILL_ZERO : RSX_KILL_ONE) | ((1 + random_below(15)) << 4));
 }
 
 static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t number, uint32_t *instruction_total)
@@ -1804,6 +1827,13 @@ static void check_fragment_key(const struct rsx_fragment_key *key, uint32_t numb
 			in.uniforms[_rsx_uniform_texture_scale + uniform][3] = 1.0f;
 		}
 		reference_killed = reference_fragment(key, &in, reference);
+		if (!reference_killed)
+		{
+			/* (a colour too near the kill test's value is not compared) */
+			reference_killed = reference_kill_mode(key, reference);
+			if (reference_killed < 0)
+				continue;
+		}
 		killed = rsx_fragment_run(instructions, count, key, &in, result);
 		if (killed != reference_killed)
 		{
@@ -1855,7 +1885,7 @@ static void check_key_clean(uint32_t number, uint32_t *changed)
 	key.fog_enable = (uint8_t)random_below(2);
 	key.fog_table_mode = (uint8_t)random_below(6);
 	key.texture_scaled = (uint8_t)random_below(16);
-	key.padding = (uint8_t)random_next();
+	key.kill_mode = (uint8_t)random_next();
 
 	cleaned = key;
 	rsx_fragment_key_clean(&cleaned);
@@ -1868,7 +1898,7 @@ static void check_key_clean(uint32_t number, uint32_t *changed)
 		char text[RSX_FRAGMENT_KEY_TEXT];
 
 		rsx_fragment_key_text(&cleaned, text);
-		if (strlen(text) != 39 * 9 + 15 * 3 - 1 || rsx_fragment_key_parse(text, &twice) != 0 ||
+		if (strlen(text) != 39 * 9 + 16 * 3 - 1 || rsx_fragment_key_parse(text, &twice) != 0 ||
 			memcmp(&cleaned, &twice, sizeof(cleaned)))
 		{
 			fail("clean key %u: its text does not give it back (%s)", number, text);
