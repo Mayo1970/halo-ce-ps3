@@ -722,6 +722,22 @@ void game_state_create_persistent_storage(
 #ifdef HALO_PS3
 /* port: zeroes, the game state's unused middle as the file holds it (never written) */
 static byte game_state_checkpoint_zeroes[64*1024];
+/* port: the writer's waits for the reads (port/ps3/xbox/xbox_files.c) in this write; FALSE: the game thread writes */
+static DWORD game_state_checkpoint_paused;
+static boolean game_state_checkpoint_yields;
+
+int xbox_files_reads_running(void); /* port: port/ps3/xbox/xbox_files.c */
+
+/* port: the reads first (a bsp's, the game thread's), each part after them; at most 2 s a part */
+static void game_state_checkpoint_yield(
+	void)
+{
+	DWORD start = GetTickCount();
+
+	while (game_state_checkpoint_yields && xbox_files_reads_running() > 0 && GetTickCount() - start < 2000)
+		Sleep(1);
+	game_state_checkpoint_paused += GetTickCount() - start;
+}
 
 /* port: size bytes from data (NULL: zeroes) to the file at its pointer, in parts (CHECKPOINT_WRITE_PART) */
 static boolean game_state_checkpoint_write_range(
@@ -735,6 +751,7 @@ static boolean game_state_checkpoint_write_range(
 	{
 		long part = MIN(data ? CHECKPOINT_WRITE_PART : (long)sizeof(game_state_checkpoint_zeroes), size - offset);
 
+		game_state_checkpoint_yield();
 		if (!WriteFile(xbox_game_state_globals.handle, data ? data + offset : game_state_checkpoint_zeroes, part,
 			&bytes_written, NULL) || bytes_written != (unsigned long)part)
 		{
@@ -756,16 +773,17 @@ static DWORD WINAPI game_state_checkpoint_writer(
 	long gpu_size = game_state_checkpoint.gpu_size;
 	char line[128];
 
-	(void)parameter;
+	game_state_checkpoint_yields = parameter != NULL;
+	game_state_checkpoint_paused = 0;
 	game_state_checkpoint.write_failed =
 		SetFilePointer(xbox_game_state_globals.handle, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER ||
 		!game_state_checkpoint_write_range(game_state_checkpoint.image, cpu_size) ||
 		!game_state_checkpoint_write_range(NULL, xbox_game_state_globals.buffer_size - cpu_size - gpu_size) ||
 		!game_state_checkpoint_write_range(game_state_checkpoint.image + game_state_checkpoint.gpu_offset, gpu_size);
 	game_state_checkpoint.write_error = game_state_checkpoint.write_failed ? GetLastError() : 0;
-	sprintf(line, "[halo] checkpoint: %ld KB written by the writer in %lu ms%s\n",
+	sprintf(line, "[halo] checkpoint: %ld KB written by the writer in %lu ms (%lu waiting for reads)%s\n",
 		xbox_game_state_globals.buffer_size >> 10, (unsigned long)(GetTickCount() - start),
-		game_state_checkpoint.write_failed ? ", failed" : "");
+		(unsigned long)game_state_checkpoint_paused, game_state_checkpoint.write_failed ? ", failed" : "");
 	OutputDebugStringA(line);
 
 	return 0;
@@ -989,7 +1007,8 @@ static boolean game_state_checkpoint_save(
 		(copied.u.LowPart - start.u.LowPart) / 1000.0, gap_size >> 10, (checked.u.LowPart - start.u.LowPart) / 1000.0,
 		cpu_size >> 10, gpu_size >> 10);
 	OutputDebugStringA(line);
-	game_state_checkpoint.writer = CreateThread(NULL, 0, game_state_checkpoint_writer, NULL, 0, NULL);
+	game_state_checkpoint.writer = CreateThread(NULL, 0, game_state_checkpoint_writer, (LPVOID)&game_state_checkpoint, 0,
+		NULL);
 	if (!game_state_checkpoint.writer)
 	{
 		game_state_checkpoint_writer(NULL);

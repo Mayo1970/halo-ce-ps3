@@ -1609,23 +1609,26 @@ short collision_move_pill(
 	center.y = position->y + velocity->j * 0.5f;
 	center.z = height * 0.5f + (position->z + velocity->k * 0.5f);
 
-	if (collision_get_features_in_sphere(
+	/* port: (the timer build) */
+	if (PS3_PILL_QUERY(collision_get_features_in_sphere(
 		flags,
 		&center,
 		magnitude3d(velocity) * 0.5f + height * 0.5f + radius,
 		height,
 		radius,
 		ignore_object_index,
-		&features))
+		&features)))
 	{
-		result = collision_move_point(
+		/* port: (the timer build) */
+		PS3_PILL_COUNT(_ps3_timer_pill_feature_count, features.count[0] + features.count[1] + features.count[2]);
+		result = PS3_PILL_TIMED(_ps3_timer_pill_move, collision_move_point(
 			position,
 			velocity,
 			&features,
 			clipped_position,
 			clipped_velocity,
 			maximum_collision_count,
-			collisions);
+			collisions));
 	}
 	else
 	{

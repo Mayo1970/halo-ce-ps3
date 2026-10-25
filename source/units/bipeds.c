@@ -372,9 +372,11 @@ enum
 /* port: the timer build's spans of biped_update's steps (port/ps3/include/ps3_timers.h) */
 #define PS3_BIPED_SPAN(span) ((span) = ps3_timer_now())
 #define PS3_BIPED_ADD(timer, span) ((span) = ps3_timer_add((timer), (span)))
+#define PS3_BIPED_COUNT(timer) (ps3_timer_counts[(timer)]++)
 #else
 #define PS3_BIPED_SPAN(span) ((void)0)
 #define PS3_BIPED_ADD(timer, span) ((void)0)
+#define PS3_BIPED_COUNT(timer) ((void)0)
 #endif
 
 /* ---------- structures */
@@ -2368,6 +2370,9 @@ static void biped_update_physics(
 	struct collision_plane collisions[16];
 	short collision_count;
 	unsigned long collision_flags;
+#ifdef HALO_PS3
+	uint64_t ps3_physics_span; /* port: (the timer build) */
+#endif
 
 	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\units\\bipeds.c", 0xBCC, &physics->position);
 	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\units\\bipeds.c", 0xBCD, &physics->velocity);
@@ -2617,6 +2622,7 @@ static void biped_update_physics(
 	}
 	else
 	{
+		PS3_BIPED_SPAN(ps3_physics_span); /* port: (the timer build) */
 		collision_count = collision_move_pill(
 			collision_flags,
 			&position,
@@ -2628,6 +2634,8 @@ static void biped_update_physics(
 			&clipped_velocity,
 			16,
 			collisions);
+		PS3_BIPED_ADD(_ps3_timer_moving_pill, ps3_physics_span); /* port: (the timer build) */
+		PS3_BIPED_COUNT(_ps3_timer_moving_pill); /* port: (the timer build) */
 	}
 
 	if (debug_biped_physics &&
@@ -2643,6 +2651,7 @@ static void biped_update_physics(
 
 	SET_FLAG(physics->out_flags, _biped_physics_out_splatter_bit, collision_count >= 16);
 	physics->stick_surface_index = NONE;
+	PS3_BIPED_SPAN(ps3_physics_span); /* port: (the timer build) */
 	if (!collision_count && physics->existing_support_surface_index != NONE)
 	{
 		struct collision_bsp *bsp = global_collision_bsp_get();
@@ -2811,7 +2820,9 @@ static void biped_update_physics(
 				}
 			}
 		}
+		PS3_BIPED_COUNT(_ps3_timer_moving_support); /* port: (the timer build) */
 	}
+	PS3_BIPED_ADD(_ps3_timer_moving_support, ps3_physics_span); /* port: (the timer build) */
 
 	{
 		real magnitude_squared = facing.j * facing.j + facing.i * facing.i;
@@ -3527,7 +3538,11 @@ static void biped_update_moving(
 	struct biped_datum *biped;
 	real movement_scale;
 	word in_flags;
+#ifdef HALO_PS3
+	uint64_t ps3_moving_span; /* port: (the timer build) */
+#endif
 
+	PS3_BIPED_SPAN(ps3_moving_span); /* port: (the timer build) */
 	biped = biped_get(biped_index);
 
 	if (TEST_FLAG(biped->object.flags, _object_at_rest_bit) &&
@@ -3982,7 +3997,10 @@ static void biped_update_moving(
 	}
 	physics.in_flags = in_flags;
 
+	PS3_BIPED_ADD(_ps3_timer_moving_setup, ps3_moving_span); /* port: (the timer build) */
+	PS3_BIPED_COUNT(_ps3_timer_moving_setup); /* port: (the timer build) */
 	biped_update_physics(&physics);
+	PS3_BIPED_ADD(_ps3_timer_moving_physics, ps3_moving_span); /* port: (the timer build) */
 
 	if (physics.elevator_object_index == NONE)
 	{
@@ -4148,6 +4166,7 @@ static void biped_update_moving(
 		if (TEST_FLAG(biped->object.flags, _object_on_ground_bit))
 			biped->object.angular_velocity = *global_zero_vector3d;
 	}
+	PS3_BIPED_ADD(_ps3_timer_moving_after, ps3_moving_span); /* port: (the timer build) */
 
 	return;
 }

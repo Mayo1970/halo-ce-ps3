@@ -267,6 +267,13 @@ HANDLE WINAPI CreateFileA(LPCSTR file_name, DWORD desired_access, DWORD share_mo
 
 /* every transfer's bytes so far, for a large one's line: what the others moved while it ran */
 static volatile __uint64 transfers_bytes;
+/* the reads running now: the checkpoint's writer waits for them (game_state_xbox.c), a bsp's read has the disk alone */
+static volatile int reads_running;
+
+int xbox_files_reads_running(void)
+{
+	return reads_running;
+}
 
 static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDWORD done_count, BOOL positioned,
 	__uint64 offset, BOOL write)
@@ -278,6 +285,8 @@ static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDW
 	int result = 0;
 	int direction = write ? 1 : 0;
 
+	if (!write)
+		__sync_fetch_and_add(&reads_running, 1);
 	ps3_host_lock_enter(file->lock);
 	start = ps3_host_microseconds();
 	if (positioned)
@@ -319,6 +328,8 @@ static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDW
 	if (write && total)
 		file->written = TRUE;
 	ps3_host_lock_leave(file->lock);
+	if (!write)
+		__sync_fetch_and_sub(&reads_running, 1);
 	/* (the pieces: where the time went; the others: another thread's reads moving the disk's head meanwhile) */
 	if (total >= TRANSFER_LOG_BYTES)
 		platform_log("%s: %s %lu KB in %llu ms (at %llu KB; the file's lock %llu ms, the seek %llu ms; %lu pieces, the "

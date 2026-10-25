@@ -79,15 +79,28 @@ the loop's end, with the objects the copies' iterator walked and read from kept 
 #define PS3_COLLISION_TEST_END(los, span) ((void)((los) ? (ps3_los_test_time += ps3_timer_now() - (span)) : 0))
 #define PS3_COLLISION_LOOP_END(los, span, walked, read) ((void)((los) ? (ps3_los_loop_time += ps3_timer_now() - (span), \
 	ps3_los_walked += ps3_bounds_walked - (walked), ps3_los_read += ps3_bounds_read - (read)) : 0))
-/* port: the parts of compute_ground_plane's sphere query alone (physics.c sets ps3_timer_ground_query): a span's start,
-its time added to a timer (the next span's start), a count */
+/* port: the parts of compute_ground_plane's sphere query (physics.c sets ps3_timer_ground_query 1) or collision_move_pill's
+(2: its timers, in the ground's order): a span's start, its time added to a timer (the next span's start), a count */
+#define PS3_SPHERE_TIMER(timer) ((timer) + (ps3_timer_ground_query == 2 ? \
+	_ps3_timer_pill_leaves - _ps3_timer_ground_leaves : 0))
 #define PS3_SPHERE_SPAN(span) ((void)(ps3_timer_ground_query ? ((span) = ps3_timer_now()) : 0))
-#define PS3_SPHERE_ADD(timer, span) ((void)(ps3_timer_ground_query ? ((span) = ps3_timer_add((timer), (span))) : 0))
+#define PS3_SPHERE_ADD(timer, span) ((void)(ps3_timer_ground_query ? \
+	((span) = ps3_timer_add(PS3_SPHERE_TIMER(timer), (span))) : 0))
 #define PS3_SPHERE_COUNT(timer, count) ((void)(ps3_timer_ground_query ? \
-	(ps3_timer_counts[(timer)] += (uint32_t)(count)) : 0))
+	(ps3_timer_counts[PS3_SPHERE_TIMER(timer)] += (uint32_t)(count)) : 0))
 #define PS3_SPHERE_TIMED(timer, call) ({ uint64_t ps3_sphere_start = ps3_timer_ground_query ? ps3_timer_now() : 0; \
 	__typeof__(call) ps3_sphere_result = (call); \
 	PS3_SPHERE_ADD((timer), ps3_sphere_start); PS3_SPHERE_COUNT((timer), 1); ps3_sphere_result; })
+/* port: collision_move_pill's sphere query, its parts timed in it; a call timed with its count; a count */
+#define PS3_PILL_QUERY(call) ({ uint32_t ps3_pill_query = ps3_timer_ground_query; \
+	uint64_t ps3_pill_start = ps3_timer_now(); __typeof__(call) ps3_pill_result; ps3_timer_ground_query = 2; \
+	ps3_pill_result = (call); ps3_timer_ground_query = ps3_pill_query; \
+	ps3_timer_add(_ps3_timer_pill_features, ps3_pill_start); ps3_timer_counts[_ps3_timer_pill_features]++; \
+	ps3_pill_result; })
+#define PS3_PILL_TIMED(timer, call) ({ uint64_t ps3_pill_start = ps3_timer_now(); \
+	__typeof__(call) ps3_pill_result = (call); \
+	ps3_timer_add((timer), ps3_pill_start); ps3_timer_counts[(timer)]++; ps3_pill_result; })
+#define PS3_PILL_COUNT(timer, count) ((void)(ps3_timer_counts[(timer)] += (uint32_t)(count)))
 #else
 #define PS3_COLLISION_BEGIN() ((void)0)
 #define PS3_COLLISION_END(kind) ((void)0)
@@ -102,6 +115,9 @@ its time added to a timer (the next span's start), a count */
 #define PS3_SPHERE_ADD(timer, span) ((void)0)
 #define PS3_SPHERE_COUNT(timer, count) ((void)0)
 #define PS3_SPHERE_TIMED(timer, call) (call)
+#define PS3_PILL_QUERY(call) (call)
+#define PS3_PILL_TIMED(timer, call) (call)
+#define PS3_PILL_COUNT(timer, count) ((void)0)
 #endif
 
 /* ---------- structures */

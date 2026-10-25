@@ -294,6 +294,49 @@ static void collision_log(uint32_t frames, double scale)
 	ps3_log_printf("%s\n", line);
 }
 
+/* inside the heavy ticks' largest parts: the type's preprocess, the bipeds' moving and its pill test (every caller's),
+the AI props' refreshes; the rests: a part's time outside the parts it lists */
+static void tick_parts_log(const double *k)
+{
+	double ticks = ps3_timer_game_ticks ? (double)ps3_timer_game_ticks : 1.0;
+	const uint32_t *c = ps3_timer_counts;
+
+	ps3_log_printf("[time] the type's preprocess by part, ms a tick (calls a tick): unit %.2f (%.1f), weapon %.2f (%.1f), "
+		"device %.2f (%.1f), other %.2f (%.1f); in the unit's (applies a tick): legs %.2f, actions %.2f (%.1f), seat "
+		"%.2f (%.1f), aiming %.2f (%.1f), looking %.2f (%.1f), rest %.2f; the screens from kept frames %.1f a tick "
+		"(checked %u, apart %u)\n", k[_ps3_timer_preprocess_unit],
+		c[_ps3_timer_preprocess_unit] / ticks, k[_ps3_timer_preprocess_weapon], c[_ps3_timer_preprocess_weapon] / ticks,
+		k[_ps3_timer_preprocess_device], c[_ps3_timer_preprocess_device] / ticks, k[_ps3_timer_preprocess_other],
+		c[_ps3_timer_preprocess_other] / ticks, k[_ps3_timer_unit_legs], k[_ps3_timer_unit_actions],
+		c[_ps3_timer_unit_actions] / ticks, k[_ps3_timer_unit_seat], c[_ps3_timer_unit_seat] / ticks,
+		k[_ps3_timer_unit_aiming], c[_ps3_timer_unit_aiming] / ticks, k[_ps3_timer_unit_looking],
+		c[_ps3_timer_unit_looking] / ticks, k[_ps3_timer_preprocess_unit] - k[_ps3_timer_unit_legs] -
+		k[_ps3_timer_unit_actions] - k[_ps3_timer_unit_seat] - k[_ps3_timer_unit_aiming] - k[_ps3_timer_unit_looking],
+		c[_ps3_timer_aiming_kept] / ticks, (unsigned)c[_ps3_timer_aiming_checked], (unsigned)c[_ps3_timer_aiming_apart]);
+	ps3_log_printf("[time] the bipeds' moving, ms a tick (calls a tick): setup %.2f (%.1f), physics %.2f "
+		"(collision_move_pill %.2f (%.1f), the support surface's edges %.2f (%.1f), rest %.2f), after %.2f, rest %.2f\n",
+		k[_ps3_timer_moving_setup], c[_ps3_timer_moving_setup] / ticks, k[_ps3_timer_moving_physics],
+		k[_ps3_timer_moving_pill], c[_ps3_timer_moving_pill] / ticks, k[_ps3_timer_moving_support],
+		c[_ps3_timer_moving_support] / ticks, k[_ps3_timer_moving_physics] - k[_ps3_timer_moving_pill] -
+		k[_ps3_timer_moving_support], k[_ps3_timer_moving_after], k[_ps3_timer_biped_moving] -
+		k[_ps3_timer_moving_setup] - k[_ps3_timer_moving_physics] - k[_ps3_timer_moving_after]);
+	ps3_log_printf("[time] collision_move_pill (every caller), ms a tick (calls a tick): features in the sphere %.2f "
+		"(%.1f; %.1f features a call; bsp leaves %.2f (%.1f leaves a call), structure %.2f, objects %.2f (%.1f clusters, "
+		"%.1f objects walked, %.1f read from kept blocks), in them the objects' tests %.2f (%.1f), rest %.2f), the move "
+		"%.2f (%.1f)\n", k[_ps3_timer_pill_features], c[_ps3_timer_pill_features] / ticks,
+		c[_ps3_timer_pill_features] ? (double)c[_ps3_timer_pill_feature_count] / c[_ps3_timer_pill_features] : 0.0,
+		k[_ps3_timer_pill_leaves], c[_ps3_timer_pill_leaves] ?
+		(double)c[_ps3_timer_pill_leaf_count] / c[_ps3_timer_pill_leaves] : 0.0, k[_ps3_timer_pill_structure],
+		k[_ps3_timer_pill_objects], c[_ps3_timer_pill_objects] / ticks, c[_ps3_timer_pill_objects_walked] / ticks,
+		c[_ps3_timer_pill_objects_read] / ticks, k[_ps3_timer_pill_object_tests], c[_ps3_timer_pill_object_tests] / ticks,
+		k[_ps3_timer_pill_features] - k[_ps3_timer_pill_leaves] - k[_ps3_timer_pill_structure] -
+		k[_ps3_timer_pill_objects], k[_ps3_timer_pill_move], c[_ps3_timer_pill_move] / ticks);
+	ps3_log_printf("[time] the AI props' refreshes, ms a tick (a tick): position %.2f (%.1f), status %.2f (%.1f; of it "
+		"the line of sight %.2f), rest %.2f\n", k[_ps3_timer_prop_position], c[_ps3_timer_prop_position] / ticks,
+		k[_ps3_timer_prop_status], c[_ps3_timer_prop_status] / ticks, k[_ps3_timer_prop_status_los],
+		k[_ps3_timer_perception_prop_refresh] - k[_ps3_timer_prop_position] - k[_ps3_timer_prop_status]);
+}
+
 static void timers_log(uint32_t frames, uint64_t elapsed)
 {
 	double frequency = (double)sysGetTimebaseFrequency(), scale = 1000.0 / frequency / frames;
@@ -428,6 +471,7 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		k[_ps3_timer_part_unit], k[_ps3_timer_part_biped], k[_ps3_timer_biped_turning], k[_ps3_timer_biped_moving],
 		k[_ps3_timer_biped_state], k[_ps3_timer_biped_animation], k[_ps3_timer_biped_rest], k[_ps3_timer_part_vehicle],
 		k[_ps3_timer_part_item], k[_ps3_timer_part_projectile], k[_ps3_timer_part_other]);
+	tick_parts_log(k);
 	ps3_log_printf("[time] vehicles, ms a tick (calls a tick): physics %.2f (%.1f), effects %.2f, stopping %.2f, "
 		"animation %.2f (%.1f)\n", k[_ps3_timer_vehicle_physics], tick_scale ?
 		(double)ps3_timer_counts[_ps3_timer_vehicle_physics] / ps3_timer_game_ticks : 0.0, k[_ps3_timer_vehicle_effects],

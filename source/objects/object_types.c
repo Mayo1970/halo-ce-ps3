@@ -673,9 +673,26 @@ static int ps3_part_timer(
 	default: return _ps3_timer_part_other;
 	}
 }
+
+/* port: and of each part's node orientations' preprocess, with its calls */
+#define PS3_PREPROCESS_ADD(group_tag, span) ((span) = ps3_timer_add(ps3_preprocess_timer(group_tag), (span)), \
+	ps3_timer_counts[ps3_preprocess_timer(group_tag)]++)
+
+static int ps3_preprocess_timer(
+	unsigned long group_tag)
+{
+	switch (group_tag)
+	{
+	case 'unit': return _ps3_timer_preprocess_unit;
+	case 'weap': return _ps3_timer_preprocess_weapon;
+	case 'devi': return _ps3_timer_preprocess_device;
+	default: return _ps3_timer_preprocess_other;
+	}
+}
 #else
 #define PS3_PART_SPAN(span) ((void)0)
 #define PS3_PART_ADD(group_tag, span) ((void)0)
+#define PS3_PREPROCESS_ADD(group_tag, span) ((void)0)
 #endif
 
 boolean object_type_update(
@@ -788,13 +805,18 @@ void object_type_preprocess_node_orientations(
 {
 	short i;
 	struct object_type_definition *definition = object_type_definition_get(object_get(object_index)->object.type);
+#ifdef HALO_PS3
+	uint64_t ps3_span; /* port: (the timer build) */
+#endif
 
 	for (i = 0; definition->part_definitions[i]; i++)
 	{
 		struct object_type_definition *current_definition = definition->part_definitions[i];
 		if (current_definition->datum_preprocess_node_orientations)
 		{
+			PS3_PART_SPAN(ps3_span); /* port: (the timer build) */
 			current_definition->datum_preprocess_node_orientations(object_index, node_orientations);
+			PS3_PREPROCESS_ADD(current_definition->group_tag, ps3_span); /* port: (the timer build) */
 		}
 	}
 

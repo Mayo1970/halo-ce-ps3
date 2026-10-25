@@ -53,6 +53,45 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-25: steps 1 and 2's prefetches taken out (Matt: "Do 1-2
+  then."): `collision_bsp.c` and `object_bounds_cache.c` match HEAD again;
+  steps 3 and 4 kept. PKG of 22:29 in `build/ps3_ticks/`. Next: step 3 of
+  the proposals (the bsp sphere query's instructions on the PC), when Matt
+  says so.
+- 2026-10-25: the 22:15 PKG run on b40 (Matt: "Done"): a clean exit;
+  59.6 / 54.25 fps (40 play windows / the 2 under 56). Steps 1 and 2 (the
+  prefetches) gain nothing; step 3 the aiming screen 16.0 to 14.0 us an
+  apply, 8,514 checked, 0 apart; step 4 the BSP read with a checkpoint
+  572 ms (was 1,677). See the Log. Next: Matt's choice. Our listener
+  stopped; UDP 18194 is free.
+- 2026-10-25: the 4 steps built (Matt: "Do all 4."): prefetches in the
+  sphere query's bsp test and in its objects' walk, the aiming screens
+  from kept frames (one apply in 16 checked bit for bit on the PS3), the
+  checkpoint's writer waiting for reads. See the Log. PKG of 22:15 in
+  `build/ps3_ticks/`. Not tested on the PS3. Not committed.
+- 2026-10-25: the 21:32 PKG run on b40 (Matt: "Done"): a clean exit; 59.8
+  / 55.8 fps (medians of 50 play windows / the 1 under 56 fps). In the
+  heaviest ticks (8.5 ms): the bipeds' move tests 0.73 ms, of it the
+  sphere query 0.66 (bsp leaves 0.35, objects 0.21), the move 0.07; the
+  units' aiming screen 0.28 (16 us an apply); the AI status refresh 0.29
+  (its line of sight 0.24). See the Log. Next: Matt's choice. Our
+  listener stopped; UDP 18194 is free.
+- 2026-10-25: timers inside the heavy ticks' largest parts built (Matt:
+  "Let's go with 1."): the type's preprocess by part and the unit's by
+  animation kind, the bipeds' moving (setup, physics with
+  `collision_move_pill` and the support surface, after),
+  `collision_move_pill`'s sphere query by part and its move, the AI props'
+  refreshes (position, status, the line of sight in it). Four new
+  `[time]` lines. PKG of 21:32 in `build/ps3_ticks/` (the 19:54 tree and
+  these timers). `check` passed. Not tested on the PS3. Not committed.
+- 2026-10-25: the 19:54 PKG run on b40 (Matt: "I'm done. This run felt
+  way smoother!"): a clean exit; 59.9 / 51.2 fps (medians of 29 play
+  windows / the 1 under 56 fps), 59.3 on average. The play was lighter
+  than the 17:53 run's (the lights' specular 10.9 draws a frame, was
+  19.0): the bounds' gain cannot be seen (the RSX's lights part also holds
+  the shadows and the decals; no split). The slow window is the game
+  thread's and the RSX's (19.3 and 16.7 ms a frame). See the Log. Our
+  listener stopped; UDP 18194 is free.
 - 2026-10-25: the lights' bounds built (Matt: "Can we do 1 and 3?": the PC
   check of the attenuation outside each light, then a scissor and the depth
   bounds test). The check: only the diffuse lights' draws give exactly 0
@@ -5475,3 +5514,139 @@ then `./build.sh pkg LOG_IP=<address>`.
   - `check`: 0 `r2off`, `.got` 0x89c8. The Direct3D SPU's image 206.8 KB
     (was 204.2). The earlier session's `d3dcheck` harness is gone: not
     run. PKG of 19:54 in `build/ps3_lights/`. Not tested on the PS3.
+- 2026-10-25: The 19:54 PKG on hardware (b40; Matt: "I'm done. This run
+  felt way smoother!"): the boot line's build 18:50:02 (the container's
+  UTC: this build), `[ps3] exit 0`. 37 windows: 5 of the menu, the load
+  (21:01:58), left out the BSP swap (21:03:50) and the revert with its
+  swap (21:04:36). Medians of 29 play windows / the 1 under 56 fps: 59.9 /
+  51.2 fps, 59.3 on average (17:53: 59.9 / 54.25, 59.0).
+  - The game thread: work 9.0 / 19.3 ms a frame, present wait 7.7 / 0.2.
+    The RSX: 9.9 / 16.7 (lightmaps 1.3 / 1.8, lights 1.0 / 2.7, diffuse
+    0.8 / 1.1, specular 3.8 / 5.6 (its lights 0.80 / 2.96 for 10.9 / 36.2
+    draws), effects 1.1 / 2.7, objects 0.7 / 1.6).
+  - A lighter play than 17:53's (the lights' specular 10.9 draws a frame,
+    were 19.0; the RSX 9.9, was 10.95). The RSX's lights part holds the
+    shadows, the diffuse lights and the decals: the bounds' share cannot
+    be split. In the heaviest window the part was 2.7 ms for 36.2 draws of
+    the lights' specular, as 17:53's slow windows (2.5 for 46, 2.2 for
+    28): no gain to be seen. The Direct3D statistics: 0 draws skipped by
+    the scissor.
+  - The slow window (21:04:31, before the death and revert): the game
+    thread's 19.3 ms (the ticks 10.9 ms each, 0.59 a frame: objects 6.68
+    (units 2.11, node matrices 1.72, projectiles 0.85), ai 1.83; the
+    render 12.5: objects 3.0, effects 3.4, lights 1.7) and the RSX's 16.7
+    (specular 5.6, lights 2.7, effects 2.7).
+- 2026-10-25: The game ticks in heavy combat (Matt: "Option 3"; the 19:54
+  run's 4 heaviest windows, 21:04:20 to 21:04:31: 10.9 to 12.1 ms a tick,
+  0.5 to 0.59 ticks a frame). Analysis only, nothing built.
+  - objects 5.7 to 6.7 ms a tick: units 2.1 (biped 1.1 to 1.2, of it the
+    moving 0.8 to 1.0 with its collision move tests, about 16 a tick at
+    about 47 us each: the features in the sphere about 22 us and the move;
+    unit 0.6; vehicle 0.3); node matrices 1.7 to 1.8 (the type's
+    preprocess 0.6 for 40 calls, 15 us each: the units' replacement,
+    overlay, aiming, looking and emotion animations; the matrices 0.55
+    for 225 calls and 828 nodes; the orientations 0.23); projectiles 0.2
+    to 0.9; lights 0.55; values 0.4; items 0.3 to 0.5; the rest 0.3.
+  - ai 1.85 ms a tick: perception 0.75 (the props' refreshes 0.50 for 22,
+    23 us each), decisions 0.5, line of sight 0.37 (14.5 rays). The
+    interpolation's tick 0.35, scripts 0.14.
+  - A tick runs every second frame: such a frame is about 12 ms of tick
+    and 10 ms of render on the game thread. In the slowest window the
+    render was 12.5 ms a frame and the ticks 6.4.
+  - Proposed (for Matt; not built): (1) timers inside the biped's move
+    test (the features in the sphere, the move, the ground), the units'
+    preprocess by animation kind, and the AI props' refresh, then the
+    largest; (2) the units' preprocess: frames decoded again each tick
+    with the same frame and weights kept per unit (exact; up to 0.6 ms a
+    tick); (3) the features in the sphere of the biped's tests.
+- 2026-10-25: Proposal 1 of the ticks' analysis built (Matt: "Let's go
+  with 1."): timers only, the game's results unchanged.
+  - `object_types.c`: the type's preprocess by part (unit, weapon, device,
+    other) with the calls. `units.c`: in `unit_preprocess_node_orientations`
+    the grenade throw's legs, the actions' animations (action, overlay
+    action, soft ping), the seat's (emotion, mouth, acceleration), the
+    aiming and the looking screens, each with its applies.
+  - `bipeds.c`: `biped_update_moving`'s setup (with the calls), its
+    `biped_update_physics` (in it `collision_move_pill` and the support
+    surface's edges, with their calls) and the move after it.
+  - `collisions.c`: `collision_move_pill`'s sphere query (every caller's)
+    by part, as the ground's (`ps3_timer_ground_query` 2 picks the
+    `_ps3_timer_pill_*` set, in the ground's order:
+    `ps3_pill_timers_check`), its features found, and the move.
+  - `actor_perception.c`: the props' refreshes' position and status, and
+    the line of sight in the status (`ai.c`'s timer's growth in it).
+  - `ps3_timers.c`: the lines "the type's preprocess by part", "the
+    bipeds' moving", "collision_move_pill (every caller)", "the AI props'
+    refreshes". `check`: 0 `r2off`, `.got` 0x89e8. PKG of 21:32 in
+    `build/ps3_ticks/`. Not tested on the PS3.
+- 2026-10-25: The 21:32 PKG on hardware (b40; Matt: "Done"): the boot
+  line's build 20:27:26 (UTC: this build), `[ps3] exit 0`. 53 windows:
+  the menu's, the load (21:42:11), left out the BSP swap (21:44:30: its
+  5,386 KB read in 1,677 ms while the checkpoint's writer wrote, 2,647
+  ms). Medians of 50 play windows / the 1 under 56 fps: 59.8 / 55.8 fps,
+  59.5 on average; the game thread's work 9.65 / 17.4 ms a frame, the RSX
+  10.65 / 16.5.
+  - The 8 heaviest windows (21:45:30 to 21:46:06, ticks of 7 ms or more;
+    medians): a tick 8.5 ms: objects 5.53 (units 2.08: biped 1.20, unit
+    0.53, vehicle 0.38; node matrices 1.52; lights 0.56; values 0.39;
+    items 0.24; projectiles 0.15), ai 1.35.
+  - The bipeds' moving 0.77 ms a tick: `collision_move_pill` 0.73 (14.1
+    calls, 52 us each): its sphere query 0.66 (47 us a call: the bsp
+    leaves 0.35, 25 us a call for 4.9 leaves; the objects 0.21, 534
+    objects walked a tick, 38 a call, 25.8 tested; the structure 0.04),
+    the move 0.07 (5 us).
+  - The type's preprocess: the unit's 0.42 ms for 22.9 calls: the aiming
+    screen 0.28 for 17.6 applies (16 us each), the looking 0.07 (13.7),
+    the seat and legs 0.03 each; the other parts 0.08 (the bipeds' and
+    vehicles' checks).
+  - The AI props' refreshes: the status 0.29 ms (7.1 a tick; of it the
+    line of sight 0.24), the position 0.06 (10.8).
+- 2026-10-25: The 4 steps of the 21:32 run (Matt: "Do all 4."), each with
+  the same results:
+  - 1, the sphere query's bsp part (`collision_bsp.c`): a model of
+    `collision_bsp_test_sphere` on b40's real bsps (Python, the map's
+    collision bsps, spheres of 0.30 to 0.45 near its vertices) finds about
+    25 nodes, 3.5 leaves, 11 references, 5 surfaces and 19 edges a query:
+    the misses of the nodes' planes and of the edges and vertices, not
+    the work, set its time (a surface tested again: 1 a query, its lines
+    then in the cache). Built: each node's children's planes (or leaves)
+    fetched while its own is (`bsp3d_sphere_prefetch_children`), a
+    surface's next edge while its vertex is. Hints only.
+  - 2, the objects part (`object_bounds_cache.c`): the cluster list's
+    next reference fetched while the object's copy is read, in the sphere
+    queries' walk and in a kept block's build. Hints only.
+  - 3, the aiming screens (`model_animations.c`): an uncompressed frame's
+    rotations and translations kept by node (128 entries, 32 nodes each,
+    decoded by the loop's own steps; b40's aiming screens are all
+    uncompressed: 9 frames, 17 to 30 nodes), forgotten at each map
+    (`game.c`); one apply in 16 is done again by the loop that decodes and
+    compared bit for bit (`the screens from kept frames ... (checked N,
+    apart N)` in `[time] the type's preprocess`).
+  - 4, the checkpoint's writer (`game_state_xbox.c`, `xbox_files.c`):
+    before each part it waits while a read runs (at most 2 s a part; the
+    writer's thread only), so a bsp's read has the disk alone; its line
+    adds the time it waited.
+  - `check`: 0 `r2off`, `.got` 0x89e8. No warnings in the changed files.
+    No PC check of 3 (its check runs on the PS3). PKG of 22:15 in
+    `build/ps3_ticks/`. Not tested on the PS3.
+- 2026-10-25: The 22:15 PKG on hardware (b40; Matt: "Done"): the new
+  checkpoint line shows this build (the boot line's 20:27:26 is the last
+  folder's `ps3_main.o`), `[ps3] exit 0`. 43 windows; left out the load
+  and the BSP swap (22:20:28). Medians of 40 play windows / the 2 under
+  56 fps: 59.6 / 54.25 fps, 58.8 on average; the game thread's work 11.45
+  / 17.6 ms a frame (a heavier play: a tick 6.15 ms on median, was 5.35),
+  the RSX 10.8 / 16.25.
+  - A call's cost over all play windows (the 21:32 run first): the pill's
+    sphere query 40.3 to 42.0 us: its bsp leaves 23.8 to 24.2, its
+    objects 11.8 to 12.3 (0.45 to 0.51 us an object walked); the move 4.9
+    to 5.2. Steps 1 and 2 (the prefetches) gain nothing: the misses do
+    not set those times.
+  - Step 3: the aiming screen 16.0 to 14.0 us an apply (with the check's
+    second apply in 16: about 13.2 without); 8,514 checked, 0 apart.
+  - Step 4: the BSP swap's 5,386 KB read in 572 ms (was 1,677) with the
+    checkpoint written at the same time, 0 KB of others' transfers; the
+    writer waited 524 ms for reads (741 at the first checkpoint).
+- 2026-10-25: steps 1 and 2 taken out (Matt: "Do 1-2 then."): the
+  prefetch hints in `collision_bsp.c` and `object_bounds_cache.c` removed,
+  both files as at HEAD; steps 3 and 4 kept. `check`: 0 `r2off`, `.got`
+  0x89e8. PKG of 22:29 in `build/ps3_ticks/`.

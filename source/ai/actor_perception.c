@@ -41,12 +41,19 @@ upstream halo-ce-universal copy of source/ai/actor_perception.c. */
 #define PS3_PERCEPTION_REFRESH_BEGIN(span, refresh) ((span) = (refresh) ? ps3_timer_now() : 0)
 #define PS3_PERCEPTION_REFRESH_END(span) ((span) ? (ps3_timer_add(_ps3_timer_perception_prop_refresh, (span)), \
 	ps3_timer_counts[_ps3_timer_perception_prop_refresh]++) : 0)
+/* port: a status refresh's span and count, the line of sight's time in it (ai.c's timer) */
+#define PS3_PERCEPTION_LOS_BEGIN(span, los) ((span) = ps3_timer_now(), (los) = ps3_timers[_ps3_timer_los_total])
+#define PS3_PERCEPTION_LOS_END(span, los) (ps3_timer_add(_ps3_timer_prop_status, (span)), \
+	ps3_timer_counts[_ps3_timer_prop_status]++, \
+	ps3_timers[_ps3_timer_prop_status_los] += ps3_timers[_ps3_timer_los_total] - (los))
 #else
 #define PS3_PERCEPTION_SPAN(span) ((void)0)
 #define PS3_PERCEPTION_ADD(timer, span) ((void)0)
 #define PS3_PERCEPTION_COUNT(timer) ((void)0)
 #define PS3_PERCEPTION_REFRESH_BEGIN(span, refresh) ((void)0)
 #define PS3_PERCEPTION_REFRESH_END(span) ((void)0)
+#define PS3_PERCEPTION_LOS_BEGIN(span, los) ((void)0)
+#define PS3_PERCEPTION_LOS_END(span, los) ((void)0)
 #endif
 
 /* ---------- constants */
@@ -5902,7 +5909,7 @@ void actor_perception_update(
 	struct prop_datum *prop;
 	struct actor_position_data position;
 #ifdef HALO_PS3
-	uint64_t ps3_span, ps3_refresh;
+	uint64_t ps3_span, ps3_refresh, ps3_part, ps3_los;
 #endif
 
 	PS3_PERCEPTION_SPAN(ps3_span); /* port: (the timer build) */
@@ -6183,17 +6190,22 @@ void actor_perception_update(
 			PS3_PERCEPTION_REFRESH_BEGIN(ps3_refresh, refresh_position); /* port: (the timer build) */
 			if (refresh_position)
 			{
+				PS3_PERCEPTION_SPAN(ps3_part); /* port: (the timer build) */
 				prop_position_refresh(
 					actor_index,
 					iterator.index,
 					&position,
 					FALSE,
 					refresh_status);
+				PS3_PERCEPTION_ADD(_ps3_timer_prop_position, ps3_part); /* port: (the timer build) */
+				PS3_PERCEPTION_COUNT(_ps3_timer_prop_position); /* port: (the timer build) */
 			}
 
 			if (refresh_status)
 			{
+				PS3_PERCEPTION_LOS_BEGIN(ps3_part, ps3_los); /* port: (the timer build) */
 				prop_status_refresh(actor_index, iterator.index, &position);
+				PS3_PERCEPTION_LOS_END(ps3_part, ps3_los); /* port: (the timer build) */
 			}
 			PS3_PERCEPTION_REFRESH_END(ps3_refresh); /* port: (the timer build) */
 		}

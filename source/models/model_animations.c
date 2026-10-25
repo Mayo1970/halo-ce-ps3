@@ -9,6 +9,9 @@ upstream halo-ce-universal copy of source/models/model_animations.c. */
 #include "models/models.h"
 #include "models/model_definitions.h"
 #include "objects/objects.h"
+#ifdef HALO_PS3
+#include "ps3_timers.h" /* port: port/ps3/include/ps3_timers.h */
+#endif
 
 /* ---------- constants */
 
@@ -1610,6 +1613,143 @@ void overlay_animation_apply_continuous_scaled(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: an uncompressed overlay frame's rotations and translations by node, decoded once by the steps of
+aiming_screen_apply's loop (the same floats); a unit's four frames change little from tick to tick */
+enum
+{
+	AIMING_FRAME_NODES = 32,
+	AIMING_FRAME_ENTRIES = 128,
+	AIMING_FRAME_CHECK_PERIOD = 16
+};
+
+struct aiming_frame
+{
+	struct animation const *animation;
+	long frame_index;
+	real_quaternion rotations[AIMING_FRAME_NODES];
+	real_point3d translations[AIMING_FRAME_NODES];
+};
+
+static struct aiming_frame aiming_frames[AIMING_FRAME_ENTRIES];
+/* set while a checked apply runs again the loop that decodes at each apply */
+static boolean aiming_frames_off;
+
+/* game.c: a new map's tags may be at the same addresses */
+void aiming_frames_forget(
+	void)
+{
+	csmemset(aiming_frames, 0, sizeof(aiming_frames));
+}
+
+/* (an animation's frames take consecutive entries: an apply's four never push each other out) */
+static struct aiming_frame const *aiming_frame_get(
+	struct animation const *animation,
+	short frame_index)
+{
+	struct aiming_frame *frame = &aiming_frames[
+		((uintptr_t)animation / 16 * 31 + (uintptr_t)frame_index) % AIMING_FRAME_ENTRIES];
+
+	if (frame->animation != animation || frame->frame_index != frame_index)
+	{
+		byte *data = animation_get_frame_data(animation, frame_index);
+		unsigned long rotation_flags = 0;
+		unsigned long translation_flags = 0;
+		short node_index;
+
+		for (node_index = 0; node_index < animation->node_count; node_index++)
+		{
+			if (!(node_index & (LONG_BITS - 1)))
+			{
+				translation_flags = animation->nodes_with_translation_flags[node_index >> LONG_BITS_BITS];
+				rotation_flags = animation->nodes_with_rotation_flags[node_index >> LONG_BITS_BITS];
+			}
+			if (TEST_FLAG(rotation_flags, 0))
+			{
+				quaternion_decompress_8byte((struct compressed_quaternion_8byte const *)data,
+					&frame->rotations[node_index]);
+				data += sizeof(struct compressed_quaternion_8byte);
+			}
+			rotation_flags >>= 1;
+			if (TEST_FLAG(translation_flags, 0))
+			{
+				frame->translations[node_index] = *(real_point3d const *)data;
+				data += sizeof(real_point3d);
+			}
+			translation_flags >>= 1;
+		}
+		frame->animation = animation;
+		frame->frame_index = frame_index;
+	}
+	return frame;
+}
+
+/* aiming_screen_apply's loop over the kept frames, its steps as they are */
+static void aiming_screen_apply_kept(
+	struct animation const *animation,
+	struct aiming_frame const *frame00,
+	struct aiming_frame const *frame10,
+	struct aiming_frame const *frame01,
+	struct aiming_frame const *frame11,
+	real yaw_fraction,
+	real pitch_fraction,
+	struct real_orientation *node_orientations)
+{
+	unsigned long rotation_flags = 0;
+	unsigned long translation_flags = 0;
+	short node_index;
+
+	for (node_index = 0; node_index<animation->node_count; node_index++)
+	{
+		struct real_orientation *orientation = &node_orientations[node_index];
+
+		if (!(node_index&(LONG_BITS-1)))
+		{
+			short long_index = node_index>>LONG_BITS_BITS;
+
+			translation_flags = animation->nodes_with_translation_flags[long_index];
+			rotation_flags = animation->nodes_with_rotation_flags[long_index];
+		}
+
+		if (TEST_FLAG(rotation_flags, 0))
+		{
+			real_quaternion yaw_rotation0;
+			real_quaternion yaw_rotation1;
+			real_quaternion rotation;
+
+			quaternions_interpolate_and_normalize(&frame00->rotations[node_index], &frame10->rotations[node_index],
+				yaw_fraction, &yaw_rotation0);
+			quaternions_interpolate_and_normalize(&frame01->rotations[node_index], &frame11->rotations[node_index],
+				yaw_fraction, &yaw_rotation1);
+			quaternions_interpolate_and_normalize(&yaw_rotation0, &yaw_rotation1, pitch_fraction, &rotation);
+			quaternions_multiply(&rotation, &orientation->rotation, &orientation->rotation);
+		}
+		rotation_flags >>= 1;
+
+		if (TEST_FLAG(translation_flags, 0))
+		{
+			real_point3d const *translation00 = &frame00->translations[node_index];
+			real_point3d const *translation10 = &frame10->translations[node_index];
+			real_point3d const *translation01 = &frame01->translations[node_index];
+			real_point3d const *translation11 = &frame11->translations[node_index];
+			real inverse_yaw_fraction = 1.0f-yaw_fraction;
+			real inverse_pitch_fraction = 1.0f-pitch_fraction;
+
+			orientation->translation.x +=
+				(translation01->x*inverse_yaw_fraction+translation11->x*yaw_fraction)*pitch_fraction+
+				(translation00->x*inverse_yaw_fraction+translation10->x*yaw_fraction)*inverse_pitch_fraction;
+			orientation->translation.y +=
+				(translation01->y*inverse_yaw_fraction+translation11->y*yaw_fraction)*pitch_fraction+
+				(translation00->y*inverse_yaw_fraction+translation10->y*yaw_fraction)*inverse_pitch_fraction;
+			orientation->translation.z +=
+				(translation00->z*inverse_yaw_fraction+translation10->z*yaw_fraction)*inverse_pitch_fraction+
+				(translation01->z*inverse_yaw_fraction+translation11->z*yaw_fraction)*pitch_fraction;
+		}
+		translation_flags >>= 1;
+	}
+}
+#endif
+
 void aiming_screen_apply(
 	struct animation const *animation,
 	struct animation_aiming_screen_bounds const *aiming_screen_bounds,
@@ -1730,6 +1870,39 @@ void aiming_screen_apply(
 	{
 		return;
 	}
+#ifdef HALO_PS3
+	/* port: from kept frames; one apply in AIMING_FRAME_CHECK_PERIOD also by the loop below, compared bit for bit */
+	if (!compressed && !aiming_frames_off && animation->node_count <= AIMING_FRAME_NODES)
+	{
+		struct aiming_frame const *frame00 = aiming_frame_get(animation, frame_index00);
+		struct aiming_frame const *frame10 = aiming_frame_get(animation, frame_index10);
+		struct aiming_frame const *frame01 = aiming_frame_get(animation, frame_index01);
+		struct aiming_frame const *frame11 = aiming_frame_get(animation, frame_index11);
+
+		if (frame00->animation == animation && frame00->frame_index == frame_index00 &&
+			frame10->animation == animation && frame10->frame_index == frame_index10 &&
+			frame01->animation == animation && frame01->frame_index == frame_index01)
+		{
+			struct real_orientation before[AIMING_FRAME_NODES];
+			boolean check = ++ps3_timer_counts[_ps3_timer_aiming_kept] % AIMING_FRAME_CHECK_PERIOD == 0;
+
+			if (check)
+				csmemcpy(before, node_orientations, animation->node_count * sizeof(struct real_orientation));
+			aiming_screen_apply_kept(animation, frame00, frame10, frame01, frame11, yaw_fraction, pitch_fraction,
+				node_orientations);
+			if (check)
+			{
+				aiming_frames_off = TRUE;
+				aiming_screen_apply(animation, aiming_screen_bounds, yaw, pitch, before);
+				aiming_frames_off = FALSE;
+				ps3_timer_counts[_ps3_timer_aiming_checked]++;
+				if (memcmp(before, node_orientations, animation->node_count * sizeof(struct real_orientation)))
+					ps3_timer_counts[_ps3_timer_aiming_apart]++;
+			}
+			return;
+		}
+	}
+#endif
 	data00 = animation_get_frame_data(animation, frame_index00);
 	data10 = animation_get_frame_data(animation, frame_index10);
 	data01 = animation_get_frame_data(animation, frame_index01);

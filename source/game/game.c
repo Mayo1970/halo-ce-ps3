@@ -555,6 +555,9 @@ boolean game_load(
 
 void network_distributed_new_game(void);
 void network_objects_placed(void);
+#ifdef HALO_PS3
+void aiming_frames_forget(void); /* port: source/models/model_animations.c */
+#endif
 
 void game_initialize_for_new_map(
 	void)
@@ -572,6 +575,9 @@ void game_initialize_for_new_map(
 	game_engine_dispose();
 	game_engine_initialize(&game_variant_global);
 	real_math_reset_precision();
+#ifdef HALO_PS3
+	aiming_frames_forget(); /* port: model_animations.c's frames of the last map's tags */
+#endif
 	rasterizer_initialize_for_new_map();
 	game_state_initialize_for_new_map();
 	game_time_initialize_for_new_map();
