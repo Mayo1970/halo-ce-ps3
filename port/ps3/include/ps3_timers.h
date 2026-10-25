@@ -91,6 +91,10 @@ enum
 	_ps3_timer_perception_danger,
 	_ps3_timer_perception_props,
 	_ps3_timer_perception_prop_refresh,
+	/* in the props' refreshes: the position's and the status's with their counts, the line of sight in the status's */
+	_ps3_timer_prop_position,
+	_ps3_timer_prop_status,
+	_ps3_timer_prop_status_los,
 	/* ai_test_line_of_sight (ai.c): its whole time and calls, the first ray and its calls, the fog, the mode's rays;
 	the first rays' length in hundredths of a world unit (a count only) */
 	_ps3_timer_los_total,
@@ -181,6 +185,18 @@ enum
 	_ps3_timer_ground_objects_walked,
 	_ps3_timer_ground_objects_read,
 	_ps3_timer_ground_object_tests,
+	/* collision_move_pill's (collisions.c): its sphere query's parts as the ground's, in their order; the query with the
+	calls and the features found (a count only), the move with the calls */
+	_ps3_timer_pill_leaves,
+	_ps3_timer_pill_leaf_count,
+	_ps3_timer_pill_structure,
+	_ps3_timer_pill_objects,
+	_ps3_timer_pill_objects_walked,
+	_ps3_timer_pill_objects_read,
+	_ps3_timer_pill_object_tests,
+	_ps3_timer_pill_features,
+	_ps3_timer_pill_feature_count,
+	_ps3_timer_pill_move,
 	/* vehicle_update's parts (vehicles.c): the physics with the vehicles simulated as its count, the effects after it
 	(slipping, suspension, crashing, airborne), the stopping, the animation with the vehicles as its count */
 	_ps3_timer_vehicle_physics,
@@ -215,6 +231,21 @@ enum
 	_ps3_timer_nodes_overlays,
 	_ps3_timer_nodes_preprocess,
 	_ps3_timer_nodes_interpolate,
+	/* the type's preprocess by part, with the calls (object_types.c); in the unit's (units.c): the grenade's legs, the
+	actions' animations, the seat's (emotion, mouth, acceleration), the aiming and looking screens, with the applies */
+	_ps3_timer_preprocess_unit,
+	_ps3_timer_preprocess_weapon,
+	_ps3_timer_preprocess_device,
+	_ps3_timer_preprocess_other,
+	_ps3_timer_unit_legs,
+	_ps3_timer_unit_actions,
+	_ps3_timer_unit_seat,
+	_ps3_timer_unit_aiming,
+	_ps3_timer_unit_looking,
+	/* counts: the aiming screens applied from kept frames, those checked against the decode, those apart */
+	_ps3_timer_aiming_kept,
+	_ps3_timer_aiming_checked,
+	_ps3_timer_aiming_apart,
 	/* the render interpolation (render_interpolation.c): a tick's objects kept (the nodes: a count only), then a frame's
 	blends: the snap tests (objects), the snapshots' rotations (nodes), the blends (nodes) */
 	_ps3_timer_interpolation_objects,
@@ -355,6 +386,13 @@ enum
 	_ps3_timer_biped_state,
 	_ps3_timer_biped_animation,
 	_ps3_timer_biped_rest,
+	/* biped_update_moving's parts (bipeds.c): the setup, biped_update_physics (in it collision_move_pill and the support
+	surface's edges, with their calls), the move after it */
+	_ps3_timer_moving_setup,
+	_ps3_timer_moving_physics,
+	_ps3_timer_moving_pill,
+	_ps3_timer_moving_support,
+	_ps3_timer_moving_after,
 	/* the render's interface pass (render.c), interface_draw_screen in it (interface.c, hud.c) */
 	_ps3_timer_hud_fog_flares,
 	_ps3_timer_hud_screen,
@@ -469,6 +507,9 @@ enum
 	_ps3_timer_rsx_after,
 	_ps3_timer_count
 };
+
+typedef char ps3_pill_timers_check[_ps3_timer_pill_object_tests - _ps3_timer_pill_leaves ==
+	_ps3_timer_ground_object_tests - _ps3_timer_ground_leaves ? 1 : -1];
 
 /* the outermost collision test's kind (collisions.c, collision_models.c, collision_usage.c) */
 enum
