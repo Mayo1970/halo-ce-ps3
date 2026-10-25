@@ -479,4 +479,94 @@ int ps3_vmx_zeroes(const void *source, uint32_t size)
 	return 1;
 }
 
+void ps3_vmx_copy_to_quadwords(void *destination, const void *source, uint32_t size)
+{
+	unsigned char *to = destination;
+	const unsigned char *from = source;
+
+	if (size >= 16)
+	{
+		/* each quadword from the two that hold its bytes: never past the one with its last byte */
+		const stream_vector permute = vec_lvsl(0, from);
+
+		for (; size >= STREAM_LINE; size -= STREAM_LINE, to += STREAM_LINE, from += STREAM_LINE)
+		{
+			stream_touch(from + STREAM_AHEAD);
+			vec_st(vec_perm(vec_ld(0, from), vec_ld(15, from), permute), 0, to);
+			vec_st(vec_perm(vec_ld(16, from), vec_ld(31, from), permute), 16, to);
+			vec_st(vec_perm(vec_ld(32, from), vec_ld(47, from), permute), 32, to);
+			vec_st(vec_perm(vec_ld(48, from), vec_ld(63, from), permute), 48, to);
+			vec_st(vec_perm(vec_ld(64, from), vec_ld(79, from), permute), 64, to);
+			vec_st(vec_perm(vec_ld(80, from), vec_ld(95, from), permute), 80, to);
+			vec_st(vec_perm(vec_ld(96, from), vec_ld(111, from), permute), 96, to);
+			vec_st(vec_perm(vec_ld(112, from), vec_ld(127, from), permute), 112, to);
+		}
+		for (; size >= 16; size -= 16, to += 16, from += 16)
+			vec_st(vec_perm(vec_ld(0, from), vec_ld(15, from), permute), 0, to);
+	}
+	for (; size; size--)
+		*to++ = *from++;
+}
+
+void ps3_vmx_zero_lines(void *address, uint32_t count)
+{
+	unsigned char *line = address;
+
+	if (!stream_dcbz_lines())
+		return;
+	for (; count; count--, line += STREAM_LINE)
+		stream_zero_line(line);
+}
+
+int ps3_vmx_equal(const void *a, const void *b, uint32_t size)
+{
+	const unsigned char *x = a, *y = b;
+	const stream_vector zero = vec_splat_u8(0);
+	stream_vector differ = zero;
+
+	for (; size >= 16; size -= 16, x += 16, y += 16)
+		differ = vec_or(differ, vec_xor(vec_ld(0, x), vec_ld(0, y)));
+	return vec_all_eq(differ, zero);
+}
+
+uint32_t ps3_vmx_words_changed(const uint32_t *now, uint32_t *recorded, uint32_t count, uint32_t first,
+	uint32_t *pairs)
+{
+	const vector unsigned int zero = vec_splat_u32(0);
+	uint32_t index, quad, word, changed = 0;
+
+	/* (their misses overlap, not one after another as the loop's loads would take them) */
+	for (index = 0; index < count; index += STREAM_LINE / 4)
+	{
+		stream_touch(now + index);
+		stream_touch(recorded + index);
+	}
+	for (index = 0; index < count; index += 16)
+	{
+		vector unsigned int differ = vec_or(vec_or(vec_xor(vec_ld(0, now + index), vec_ld(0, recorded + index)),
+			vec_xor(vec_ld(16, now + index), vec_ld(16, recorded + index))),
+			vec_or(vec_xor(vec_ld(32, now + index), vec_ld(32, recorded + index)),
+			vec_xor(vec_ld(48, now + index), vec_ld(48, recorded + index))));
+
+		if (vec_all_eq(differ, zero))
+			continue;
+		for (quad = index; quad < index + 16; quad += 4)
+		{
+			if (vec_all_eq(vec_ld(0, now + quad), vec_ld(0, recorded + quad)))
+				continue;
+			for (word = quad; word < quad + 4; word++)
+			{
+				if (now[word] != recorded[word])
+				{
+					pairs[changed * 2] = first + word;
+					pairs[changed * 2 + 1] = now[word];
+					recorded[word] = now[word];
+					changed++;
+				}
+			}
+		}
+	}
+	return changed;
+}
+
 /* STREAM END */

@@ -28,5 +28,17 @@ void ps3_vmx_copy(void *destination, const void *source, uint32_t size);
 void ps3_vmx_zero(void *destination, uint32_t size);
 /* 1 when size bytes from source are all zeroes */
 int ps3_vmx_zeroes(const void *source, uint32_t size);
+/* memcpy to a 16-byte aligned destination from any source, 16 bytes at a time (newlib's goes a byte at a time where an
+address is not 8-aligned) */
+void ps3_vmx_copy_to_quadwords(void *destination, const void *source, uint32_t size);
+/* count 128-byte lines from address (128-aligned) zeroed in the cache, not read from memory first; nothing where dcbz
+does not zero exactly a line (the caller's stores then read it) */
+void ps3_vmx_zero_lines(void *address, uint32_t count);
+/* 1 when size bytes (a multiple of 16) at a and b (both 16-byte aligned) are the same */
+int ps3_vmx_equal(const void *a, const void *b, uint32_t size);
+/* the words of now unlike recorded's (both 16-byte aligned, count a multiple of 16), as (first + index, value) pairs in
+their order, which recorded then holds; the pairs found. 64 bytes compared at once, the lines touched first */
+uint32_t ps3_vmx_words_changed(const uint32_t *now, uint32_t *recorded, uint32_t count, uint32_t first,
+	uint32_t *pairs);
 
 #endif

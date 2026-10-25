@@ -146,7 +146,8 @@ static struct
 	uint32_t refused;
 } rsx_memory;
 
-/* what the RSX holds; reset at each frame, which the system's overlays can change */
+/* what the RSX holds; reset at each frame, which the system's overlays can change (epoch: the resets) */
+static uint32_t caches_epoch;
 static struct ps3_gpu_state state;
 static int state_valid;
 static struct ps3_gpu_surface surface;
@@ -524,6 +525,7 @@ void *ps3_gpu_scratch(uint32_t size, uint32_t alignment, uint32_t *offset)
 
 static void caches_invalidate(void)
 {
+	caches_epoch++;
 	state_valid = 0;
 	surface_valid = 0;
 	viewport_valid = 0;
@@ -533,6 +535,11 @@ static void caches_invalidate(void)
 	/* unknown: every attribute is turned off before its first use */
 	memset(attribute_enabled, 1, sizeof(attribute_enabled));
 	texture_cache_dirty = 1;
+}
+
+uint32_t ps3_gpu_state_epoch(void)
+{
+	return caches_epoch;
 }
 
 /* ---------- render targets */
@@ -966,6 +973,19 @@ void ps3_gpu_fragment_task_run(const spu_vertices_task *task)
 
 /* ---------- textures */
 
+typedef char texture_words_check[sizeof(struct ps3_gpu_texture) % 4 == 0 ? 1 : -1];
+
+/* the descriptions' words compared (newlib's memcmp goes a byte at a time where an address is not 8-aligned) */
+static int texture_same(const struct ps3_gpu_texture *a, const struct ps3_gpu_texture *b)
+{
+	const uint32_t *x = (const uint32_t *)a, *y = (const uint32_t *)b;
+	uint32_t index, differ = 0;
+
+	for (index = 0; index < sizeof(*a) / 4; index++)
+		differ |= x[index] ^ y[index];
+	return !differ;
+}
+
 static void texture_unit_off(uint32_t unit)
 {
 	if (texture_states[unit] != 1)
@@ -987,7 +1007,7 @@ void ps3_gpu_set_texture(uint32_t unit, const struct ps3_gpu_texture *texture)
 		texture_unit_off(unit);
 		return;
 	}
-	if (texture_states[unit] == 2 && !memcmp(texture, &textures[unit], sizeof(*texture)))
+	if (texture_states[unit] == 2 && texture_same(texture, &textures[unit]))
 		return;
 	textures[unit] = *texture;
 	texture_states[unit] = 2;

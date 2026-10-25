@@ -72,9 +72,9 @@ int halo_interpolation_enabled(void);
 
 /* ---------- state the XDK header's inline functions read and write */
 
-/* (16-byte aligned: record_states compares them a doubleword at a time) */
-DWORD D3D__RenderState[D3DRS_MAX] __attribute__((aligned(16)));
-DWORD D3D__TextureState[D3DTSS_MAXSTAGES][D3DTSS_MAX] __attribute__((aligned(16)));
+/* (on cache lines: record_states compares them 64 bytes at a time with VMX, their lines fetched first) */
+DWORD D3D__RenderState[D3DRS_MAX] __attribute__((aligned(128)));
+DWORD D3D__TextureState[D3DTSS_MAXSTAGES][D3DTSS_MAX] __attribute__((aligned(128)));
 WORD *D3D__IndexData;
 
 /* ---------- the device */
@@ -173,6 +173,15 @@ static struct
 static DWORD render_state[D3DRS_MAX];
 static DWORD texture_state[D3DTSS_MAXSTAGES][D3DTSS_MAX];
 
+/* what the records changed since a draw made those parts of its state (states_apply, the texture records): a stage's
+sampler states, the texture modes, the fragment key's states, a stage's texture */
+#define CHANGED_SAMPLER(stage) (1u << (stage))
+#define CHANGED_TEXTURE_MODES 0x10u
+#define CHANGED_FRAGMENT_KEY 0x20u
+#define CHANGED_TEXTURE(stage) (0x100u << (stage))
+#define CHANGED_TEXTURES (0xfu | CHANGED_TEXTURE_MODES | 0xf00u)
+static uint32_t draw_state_changes = ~0u;
+
 /* the device as the game's thread sees it; the records carry it to the Direct3D thread */
 static struct
 {
@@ -212,8 +221,8 @@ static struct
 	unsigned long frame;
 	long ui_offset;
 	/* what the records have given the Direct3D thread */
-	DWORD recorded_render_state[D3DRS_MAX] __attribute__((aligned(16)));
-	DWORD recorded_texture_state[D3DTSS_MAXSTAGES][D3DTSS_MAX] __attribute__((aligned(16)));
+	DWORD recorded_render_state[D3DRS_MAX] __attribute__((aligned(128)));
+	DWORD recorded_texture_state[D3DTSS_MAXSTAGES][D3DTSS_MAX] __attribute__((aligned(128)));
 	float recorded_attributes[VERTEX_ATTRIBUTE_COUNT][4];
 	struct stage_texture recorded_stages[TEXTURE_STAGES];
 	struct surface_words recorded_targets[2];
@@ -266,6 +275,8 @@ struct record
 #define RECORD_LARGEST (RING_BYTES / 4)
 /* the records the Direct3D thread gets at once (the game's thread publishes them) */
 #define PUBLISH_BYTES (64UL * 1024)
+/* the PPE's cache line: the ring's lines are zeroed in the cache before records are written (ring_lines_zero) */
+#define RING_LINE 128
 /* a wait sees again after this, whatever wakes it */
 #define WAIT_MICROSECONDS 100000
 
@@ -696,6 +707,9 @@ struct render_target
 static struct render_target *render_target_buckets[RENDER_TARGET_BUCKET_COUNT];
 /* moves when targets go (render_targets_evict): bind_targets looks them up again */
 static unsigned long render_target_generation;
+/* moves when what a texture stage binds can change: the frame, a target made, gone or first drawn in a frame, a
+texture's RSX copy or button texture (bind_textures binds its kept stages again) */
+static unsigned long texture_epoch;
 
 static struct render_target **render_target_bucket(DWORD data)
 {
@@ -763,6 +777,7 @@ static struct render_target *render_target_lookup(DWORD data, unsigned long unit
 	target->depth = depth;
 	target->next = *render_target_bucket(data);
 	*render_target_bucket(data) = target;
+	texture_epoch++;
 	return target;
 }
 
@@ -803,6 +818,7 @@ static void render_targets_evict(void)
 		}
 	}
 	render_target_generation++;
+	texture_epoch++;
 }
 
 /* the colour target last drawn with this data, for a texture over it */
@@ -860,7 +876,12 @@ static BOOL bind_targets(BOOL *has_depth)
 	last.valid = TRUE;
 
 bind:
-	color->last_rendered = device.frame + 1;
+	/* (render_target_find takes the target with this data last drawn) */
+	if (color->last_rendered != device.frame + 1)
+	{
+		color->last_rendered = device.frame + 1;
+		texture_epoch++;
+	}
 	surface.color_offset = color->offset;
 	surface.color_pitch = color->pitch;
 	surface.depth_offset = depth->offset;
@@ -1023,6 +1044,19 @@ static void texture_upload(struct texture_entry *entry, const unsigned char *sou
 	else if (!description->compressed)
 		entry->gpu.pitch = (uint32_t)(xgpu_texture_rsx_level_bytes(description, 0) /
 			(description->height * description->depth));
+	texture_epoch++;
+}
+
+/* the descriptions' words compared (newlib's memcmp goes a byte at a time where an address is not 8-aligned) */
+static BOOL gpu_texture_same(const struct ps3_gpu_texture *a, const struct ps3_gpu_texture *b)
+{
+	const uint32_t *x = (const uint32_t *)a, *y = (const uint32_t *)b;
+	uint32_t differ = 0;
+	unsigned long index;
+
+	for (index = 0; index < sizeof(*a) / 4; index++)
+		differ |= x[index] ^ y[index];
+	return !differ;
 }
 
 /* the texture cache's memory, which only the cache's disk reads fill */
@@ -1033,12 +1067,11 @@ static BOOL texture_cache_holds(const unsigned char *source, unsigned long size)
 	return base && source >= base && source + size <= base + TEXTURE_CACHE_BYTES;
 }
 
-static struct texture_entry *texture_get(struct stage_texture *texture, const DWORD *palette, DWORD palette_hash)
+/* once a frame, or fresh: the texels checked and uploaded if they changed, and the button textures looked up */
+static struct texture_entry *texture_check(struct texture_entry *entry, BOOL fresh, const DWORD *palette,
+	DWORD palette_hash)
 {
-	DWORD data = texture->data, format_word = texture->format, size_word = texture->size;
-	BOOL fresh = texture->fresh != 0;
-	struct texture_entry **bucket = &texture_buckets[texture_bucket_index(data, format_word, size_word)];
-	struct texture_entry *entry;
+	DWORD data = entry->data;
 	const unsigned char *source;
 	unsigned long size;
 	__uint64 hash;
@@ -1046,29 +1079,6 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	BOOL cached, changed;
 	int style = hud_hires_rsx_style();
 
-	for (entry = *bucket; entry; entry = entry->next)
-	{
-		if (entry->data == data && entry->format_word == format_word && entry->size_word == size_word &&
-			entry->palette_hash == palette_hash)
-			break;
-	}
-	if (!entry)
-	{
-		entry = calloc(1, sizeof(*entry));
-		if (!entry)
-			return NULL;
-		entry->data = data;
-		entry->format_word = format_word;
-		entry->size_word = size_word;
-		entry->palette_hash = palette_hash;
-		xgpu_texture_describe(format_word, size_word, &entry->description);
-		entry->next = *bucket;
-		*bucket = entry;
-	}
-	entry->last_used_frame = texture_frame;
-	texture->fresh = 0;
-	if (entry->checked_frame == texture_frame && !fresh)
-		return entry->memory || entry->placeholder ? entry : NULL;
 	/* once a frame: the game writes texels with the CPU (the text cache) */
 	entry->checked_frame = texture_frame;
 	entry->placeholder = hud_hires_rsx_placeholder(data, &entry->hires_gpu);
@@ -1117,12 +1127,54 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	return entry->memory ? entry : NULL;
 }
 
+static struct texture_entry *texture_get(struct stage_texture *texture, const DWORD *palette, DWORD palette_hash)
+{
+	DWORD data = texture->data, format_word = texture->format, size_word = texture->size;
+	BOOL fresh = texture->fresh != 0, placeholder, hires;
+	struct texture_entry **bucket = &texture_buckets[texture_bucket_index(data, format_word, size_word)];
+	struct texture_entry *entry, *result;
+	struct ps3_gpu_texture hires_gpu;
+
+	for (entry = *bucket; entry; entry = entry->next)
+	{
+		if (entry->data == data && entry->format_word == format_word && entry->size_word == size_word &&
+			entry->palette_hash == palette_hash)
+			break;
+	}
+	if (!entry)
+	{
+		entry = calloc(1, sizeof(*entry));
+		if (!entry)
+			return NULL;
+		entry->data = data;
+		entry->format_word = format_word;
+		entry->size_word = size_word;
+		entry->palette_hash = palette_hash;
+		xgpu_texture_describe(format_word, size_word, &entry->description);
+		entry->next = *bucket;
+		*bucket = entry;
+	}
+	entry->last_used_frame = texture_frame;
+	texture->fresh = 0;
+	if (entry->checked_frame == texture_frame && !fresh)
+		return entry->memory || entry->placeholder ? entry : NULL;
+	/* (a button texture taken or let go moves texture_epoch, as an upload does) */
+	placeholder = entry->placeholder;
+	hires = entry->hires;
+	hires_gpu = entry->hires_gpu;
+	result = texture_check(entry, fresh, palette, palette_hash);
+	if (entry->placeholder != placeholder || entry->hires != hires || !gpu_texture_same(&entry->hires_gpu, &hires_gpu))
+		texture_epoch++;
+	return result;
+}
+
 /* drops the textures not used for a while */
 static void textures_begin_frame(void)
 {
 	unsigned long index;
 
 	texture_frame++;
+	texture_epoch++;
 	if (texture_frame % 600)
 		return;
 	for (index = 0; index < TEXTURE_BUCKET_COUNT; index++)
@@ -1221,23 +1273,51 @@ static void sampler_fill(int stage, struct ps3_gpu_texture *texture)
 	texture->border = state[D3DTSS_BORDERCOLOR];
 }
 
-/* the palette's 256 entries as ARGB (palettes keep the Xbox's order: trap 27) */
-static DWORD palette_load(int stage, DWORD palette[256])
+/* a stage's palette as last read: its data, its words, as ARGB (palettes keep the Xbox's order: trap 27), their hash */
+static struct
+{
+	DWORD data;
+	DWORD hash;
+	DWORD words[256] __attribute__((aligned(16)));
+	DWORD entries[256];
+} palettes[TEXTURE_STAGES];
+
+/* whether the stage's palette holds the words last read (the game's one palette never changes; reading it took 256
+swaps and multiplies a draw) */
+static BOOL palette_same(int stage)
 {
 	DWORD data = device.stages[stage].palette;
-	const DWORD *entries;
-	DWORD hash = 2166136261UL;
+	const DWORD *words;
+
+	if (!data || palettes[stage].data != data || !palettes[stage].hash)
+		return FALSE;
+	words = (const DWORD *)PLATFORM_PHYSICAL_TO_VIRTUAL(data);
+	if ((uintptr_t)words & 15)
+		return !memcmp(words, palettes[stage].words, sizeof(palettes[stage].words));
+	return ps3_vmx_equal(words, palettes[stage].words, sizeof(palettes[stage].words));
+}
+
+/* the palette's hash (0 for none) and its 256 entries as ARGB, read again when its words change */
+static DWORD palette_load(int stage, const DWORD **entries)
+{
+	DWORD data = device.stages[stage].palette, hash = 2166136261UL;
 	int index;
 
 	if (!data)
 		return 0;
-	entries = (const DWORD *)PLATFORM_PHYSICAL_TO_VIRTUAL(data);
-	for (index = 0; index < 256; index++)
+	if (!palette_same(stage))
 	{
-		palette[index] = __builtin_bswap32(entries[index]);
-		hash = (hash ^ palette[index]) * 16777619UL;
+		memcpy(palettes[stage].words, PLATFORM_PHYSICAL_TO_VIRTUAL(data), sizeof(palettes[stage].words));
+		for (index = 0; index < 256; index++)
+		{
+			palettes[stage].entries[index] = __builtin_bswap32(palettes[stage].words[index]);
+			hash = (hash ^ palettes[stage].entries[index]) * 16777619UL;
+		}
+		palettes[stage].data = data;
+		palettes[stage].hash = hash ? hash : 1;
 	}
-	return hash ? hash : 1;
+	*entries = palettes[stage].entries;
+	return palettes[stage].hash;
 }
 
 /* (the timer build) the specular split the stamped draws are in, -1 with no span on (ps3_timers_draw_stamps); the
@@ -1246,85 +1326,141 @@ static int draw_stamps_part = -1;
 static struct ps3_gpu_texture bound_textures[TEXTURE_STAGES];
 static uint8_t bound_texture_mask;
 
-static void bind_textures(struct rsx_fragment_key *key)
+/* bind_textures' part of the fragment key: each stage's sampler, the stages whose texel coordinates are scaled */
+struct texture_samplers
 {
-	int stage;
+	uint8_t types[TEXTURE_STAGES];
+	uint8_t scaled;
+};
 
+/* each stage's last bind: on, its texture set (else its unit off); palette, its texture's palette read. Kept while
+the stage's texture and sampler states, the texture modes, its palette's words and texture_epoch stay */
+static struct
+{
+	/* (8-aligned: its memset is stores of doublewords, not newlib's) */
+	struct ps3_gpu_texture bound __attribute__((aligned(8)));
+	BOOL kept, on, palette;
+	unsigned long epoch;
+	uint8_t sampler_type, scaled;
+} stage_binds[TEXTURE_STAGES];
+/* the RSX's state and the button icons' style the stages were bound with */
+static uint32_t binds_gpu_epoch;
+static int binds_style;
+
+/* a stage's texture to its unit, and its bind kept (stage_binds) */
+static void stage_bind(int stage)
+{
+	struct stage_texture *texture = &device.stages[stage];
+	unsigned long mode = stage_texture_mode(stage);
+	struct ps3_gpu_texture *bound = &stage_binds[stage].bound;
+	struct render_target *target;
+	BOOL hires = FALSE;
+
+	stage_binds[stage].on = FALSE;
+	stage_binds[stage].palette = FALSE;
+	stage_binds[stage].scaled = 0;
+	stage_binds[stage].sampler_type = mode == 0x11 ? _rsx_sampler_2d : _rsx_sampler_none;
+	device.texture_scale[stage][0] = device.texture_scale[stage][1] = 1.0f;
+	if (!texture->bound || !texture->data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
+	{
+		ps3_gpu_set_texture(stage, NULL);
+		return;
+	}
+	memset(&stage_binds[stage].bound, 0, sizeof(stage_binds[stage].bound));
+	target = render_target_find(texture->data);
+	if (target)
+	{
+		struct xgpu_texture_description description;
+
+		/* a rendered target: its surface, linear, its one level */
+		xgpu_texture_describe(texture->format, texture->size, &description);
+		bound->offset = target->offset;
+		bound->pitch = target->pitch;
+		bound->width = (uint16_t)target->width;
+		bound->height = (uint16_t)target->height;
+		bound->depth = 1;
+		bound->format = GCM_TEXTURE_FORMAT_A8R8G8B8 | GCM_TEXTURE_FORMAT_LIN |
+			(description.linear ? GCM_TEXTURE_FORMAT_UNRM : 0);
+		bound->levels = 1;
+		bound->dimension = GCM_TEXTURE_DIMS_2D;
+		/* the game's texel coordinates are in its units; the pixels are the screen's scale (ps3_rsx_fp.c) */
+		if (description.linear && (target->scale[0] != 1.0f || target->scale[1] != 1.0f))
+		{
+			stage_binds[stage].scaled = (uint8_t)(1 << stage);
+			device.texture_scale[stage][0] = target->scale[0];
+			device.texture_scale[stage][1] = target->scale[1];
+		}
+	}
+	else
+	{
+		const DWORD *palette = NULL;
+		DWORD palette_hash = 0;
+		struct texture_entry *entry;
+
+		if (((texture->format & D3DFORMAT_FORMAT_MASK) >> D3DFORMAT_FORMAT_SHIFT) == 0x0b)
+		{
+			palette_hash = palette_load(stage, &palette);
+			stage_binds[stage].palette = palette_hash != 0;
+		}
+		entry = texture_get(texture, palette_hash ? palette : NULL, palette_hash);
+		if (!entry)
+		{
+			ps3_gpu_set_texture(stage, NULL);
+			return;
+		}
+		hires = entry->hires || entry->placeholder;
+		*bound = hires ? entry->hires_gpu : entry->gpu;
+	}
+	sampler_fill(stage, bound);
+	/* a button icon's texture is drawn smaller than it is: every level, filtered (hud_hires_rsx.c) */
+	if (hires)
+	{
+		bound->minify = GCM_TEXTURE_LINEAR_MIPMAP_LINEAR;
+		bound->magnify = GCM_TEXTURE_LINEAR;
+		bound->minimum_level = 0;
+		bound->maximum_level = (uint16_t)((bound->levels - 1) << 8);
+	}
+	ps3_gpu_set_texture(stage, bound);
+	stage_binds[stage].sampler_type = bound->cube ? _rsx_sampler_cube :
+		bound->dimension == GCM_TEXTURE_DIMS_3D ? _rsx_sampler_3d : _rsx_sampler_2d;
+	stage_binds[stage].on = TRUE;
+}
+
+/* the stages' textures; a stage whose inputs stay keeps its bind, which its unit still has (bound_textures) */
+static void bind_textures(struct texture_samplers *samplers)
+{
+	uint32_t changes = draw_state_changes, gpu_epoch = ps3_gpu_state_epoch();
+	int style = hud_hires_rsx_style(), stage;
+
+	if (gpu_epoch != binds_gpu_epoch || style != binds_style)
+	{
+		binds_gpu_epoch = gpu_epoch;
+		binds_style = style;
+		texture_epoch++;
+	}
+	samplers->scaled = 0;
 	bound_texture_mask = 0;
 	for (stage = 0; stage < TEXTURE_STAGES; stage++)
 	{
-		struct stage_texture *texture = &device.stages[stage];
-		unsigned long mode = stage_texture_mode(stage);
-		struct render_target *target;
-		struct ps3_gpu_texture bound;
-		BOOL hires = FALSE;
-
-		key->sampler_type[stage] = mode == 0x11 ? _rsx_sampler_2d : _rsx_sampler_none;
-		device.texture_scale[stage][0] = device.texture_scale[stage][1] = 1.0f;
-		if (!texture->bound || !texture->data || mode == 0 || mode == 0x04 || mode == 0x05 || mode == 0x11)
+		if (!stage_binds[stage].kept || stage_binds[stage].epoch != texture_epoch ||
+			(changes & (CHANGED_TEXTURE_MODES | CHANGED_SAMPLER(stage) | CHANGED_TEXTURE(stage))) ||
+			(stage_binds[stage].palette && !palette_same(stage)))
 		{
-			ps3_gpu_set_texture(stage, NULL);
-			continue;
+			stage_bind(stage);
+			/* (after its own upload, if any: an upload moves the epoch for the other stages) */
+			stage_binds[stage].epoch = texture_epoch;
+			stage_binds[stage].kept = TRUE;
+			ps3_timer_counts[_ps3_timer_draw_textures]++;
 		}
-		memset(&bound, 0, sizeof(bound));
-		target = render_target_find(texture->data);
-		if (target)
+		samplers->types[stage] = stage_binds[stage].sampler_type;
+		samplers->scaled |= stage_binds[stage].scaled;
+		if (draw_stamps_part >= 0 && stage_binds[stage].on)
 		{
-			struct xgpu_texture_description description;
-
-			/* a rendered target: its surface, linear, its one level */
-			xgpu_texture_describe(texture->format, texture->size, &description);
-			bound.offset = target->offset;
-			bound.pitch = target->pitch;
-			bound.width = (uint16_t)target->width;
-			bound.height = (uint16_t)target->height;
-			bound.depth = 1;
-			bound.format = GCM_TEXTURE_FORMAT_A8R8G8B8 | GCM_TEXTURE_FORMAT_LIN |
-				(description.linear ? GCM_TEXTURE_FORMAT_UNRM : 0);
-			bound.levels = 1;
-			bound.dimension = GCM_TEXTURE_DIMS_2D;
-			/* the game's texel coordinates are in its units; the pixels are the screen's scale (ps3_rsx_fp.c) */
-			if (description.linear && (target->scale[0] != 1.0f || target->scale[1] != 1.0f))
-			{
-				key->texture_scaled |= (uint8_t)(1 << stage);
-				device.texture_scale[stage][0] = target->scale[0];
-				device.texture_scale[stage][1] = target->scale[1];
-			}
-		}
-		else
-		{
-			DWORD palette[256], palette_hash = 0;
-			struct texture_entry *entry;
-
-			if (((texture->format & D3DFORMAT_FORMAT_MASK) >> D3DFORMAT_FORMAT_SHIFT) == 0x0b)
-				palette_hash = palette_load(stage, palette);
-			entry = texture_get(texture, palette_hash ? palette : NULL, palette_hash);
-			if (!entry)
-			{
-				ps3_gpu_set_texture(stage, NULL);
-				continue;
-			}
-			hires = entry->hires || entry->placeholder;
-			bound = hires ? entry->hires_gpu : entry->gpu;
-		}
-		sampler_fill(stage, &bound);
-		/* a button icon's texture is drawn smaller than it is: every level, filtered (hud_hires_rsx.c) */
-		if (hires)
-		{
-			bound.minify = GCM_TEXTURE_LINEAR_MIPMAP_LINEAR;
-			bound.magnify = GCM_TEXTURE_LINEAR;
-			bound.minimum_level = 0;
-			bound.maximum_level = (uint16_t)((bound.levels - 1) << 8);
-		}
-		ps3_gpu_set_texture(stage, &bound);
-		key->sampler_type[stage] = bound.cube ? _rsx_sampler_cube :
-			bound.dimension == GCM_TEXTURE_DIMS_3D ? _rsx_sampler_3d : _rsx_sampler_2d;
-		if (draw_stamps_part >= 0)
-		{
-			bound_textures[stage] = bound;
+			bound_textures[stage] = stage_binds[stage].bound;
 			bound_texture_mask |= (uint8_t)(1 << stage);
 		}
 	}
+	draw_state_changes &= ~CHANGED_TEXTURES;
 }
 
 /* ---------- fragment programs, cached by their key */
@@ -1355,14 +1491,31 @@ static struct fragment_entry *fragment_last;
 
 typedef char fragment_key_size_check[sizeof(struct rsx_fragment_key) % 4 == 0 ? 1 : -1];
 
+/* a rotate and an exclusive or a word, then one mix: a multiply a word (FNV's) waited for the one before on the PPE */
 static DWORD hash_words(const void *data, unsigned long size)
 {
 	const DWORD *words = data;
-	DWORD hash = 2166136261UL;
+	DWORD hash = 0;
 
 	for (size /= 4; size; size--)
-		hash = (hash ^ *words++) * 16777619UL;
-	return hash;
+		hash = ((hash << 5) | (hash >> 27)) ^ *words++;
+	hash ^= hash >> 16;
+	hash *= 0x85ebca6bUL;
+	return hash ^ (hash >> 13);
+}
+
+/* the keys' words compared (newlib's memcmp goes a byte at a time where an address is not 8-aligned) */
+static BOOL fragment_key_same(const struct rsx_fragment_key *a, const struct rsx_fragment_key *b)
+{
+	const uint32_t *x = (const uint32_t *)a, *y = (const uint32_t *)b;
+	unsigned long index;
+
+	for (index = 0; index < sizeof(*a) / 4; index++)
+	{
+		if (x[index] != y[index])
+			return FALSE;
+	}
+	return TRUE;
 }
 
 static void fragment_entry_add(struct fragment_entry *entry)
@@ -1446,14 +1599,14 @@ static const struct rsx_fragment_program *fragment_program_get(const struct rsx_
 	struct fragment_entry *entry;
 	DWORD hash;
 
-	if (fragment_last && !memcmp(&fragment_last->key, key, sizeof(*key)))
+	if (fragment_last && fragment_key_same(&fragment_last->key, key))
 		return fragment_last->translated ? &fragment_last->program : NULL;
 	if (!fragment_pack_loaded)
 		fragment_pack_load();
 	hash = hash_words(key, sizeof(*key));
 	for (entry = fragment_buckets[hash % FRAGMENT_BUCKETS]; entry; entry = entry->next)
 	{
-		if (entry->hash == hash && !memcmp(&entry->key, key, sizeof(*key)))
+		if (entry->hash == hash && fragment_key_same(&entry->key, key))
 			break;
 	}
 	if (!entry)
@@ -1590,6 +1743,67 @@ static void fragment_key_build(struct rsx_fragment_key *key)
 	}
 	key->fog_enable = rs[D3DRS_FOGENABLE] != 0;
 	key->fog_table_mode = (unsigned char)rs[D3DRS_FOGTABLEMODE];
+}
+
+#define TEXTURE_STATE(stage, type) (D3DRS_MAX + (stage) * D3DTSS_MAX + (type))
+#define STAGE_STATE_PARTS(stage) \
+	[TEXTURE_STATE(stage, D3DTSS_ADDRESSU) ... TEXTURE_STATE(stage, D3DTSS_MAXANISOTROPY)] = CHANGED_SAMPLER(stage), \
+	[TEXTURE_STATE(stage, D3DTSS_BORDERCOLOR)] = CHANGED_SAMPLER(stage), \
+	[TEXTURE_STATE(stage, D3DTSS_COLORSIGN)] = CHANGED_FRAGMENT_KEY, \
+	[TEXTURE_STATE(stage, D3DTSS_ALPHAKILL)] = CHANGED_FRAGMENT_KEY
+
+/* the parts of the draw state each state goes into (states_apply): fragment_key_build's and sampler_fill's states */
+static const uint8_t state_parts[D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX] =
+{
+	[D3DRS_PSALPHAINPUTS0 ... D3DRS_PSFINALCOMBINERINPUTSEFG] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_PSALPHAOUTPUTS0 ... D3DRS_PSCOMPAREMODE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_PSRGBOUTPUTS0 ... D3DRS_PSCOMBINERCOUNT] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_PSDOTMAPPING] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_PSINPUTTEXTURE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_FOGENABLE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_FOGTABLEMODE] = CHANGED_FRAGMENT_KEY,
+	[D3DRS_PSTEXTUREMODES] = CHANGED_TEXTURE_MODES | CHANGED_FRAGMENT_KEY,
+	STAGE_STATE_PARTS(0), STAGE_STATE_PARTS(1), STAGE_STATE_PARTS(2), STAGE_STATE_PARTS(3),
+};
+
+/* (sampler_fill's states but the border colour are ADDRESSU to MAXANISOTROPY: 10 to 18) */
+typedef char state_parts_check[D3DTSS_MAXSTAGES == TEXTURE_STAGES && D3DTSS_ADDRESSU == 10 &&
+	D3DTSS_MAXANISOTROPY == 18 ? 1 : -1];
+
+/* the last draw's fragment program, kept while the fragment key's states and the samplers stay (a program not found
+is looked for again) */
+static struct
+{
+	BOOL valid;
+	struct texture_samplers samplers;
+	const struct rsx_fragment_program *program;
+} fragment_kept;
+
+/* the draw's fragment program; its key made only when the states it reads or the samplers changed */
+static const struct rsx_fragment_program *fragment_program_find(const struct texture_samplers *samplers, uint64_t *span)
+{
+	const struct texture_samplers *kept = &fragment_kept.samplers;
+	const struct rsx_fragment_program *program;
+	struct rsx_fragment_key key;
+
+	if (fragment_kept.valid && !(draw_state_changes & CHANGED_FRAGMENT_KEY) && samplers->scaled == kept->scaled &&
+		samplers->types[0] == kept->types[0] && samplers->types[1] == kept->types[1] &&
+		samplers->types[2] == kept->types[2] && samplers->types[3] == kept->types[3])
+		return fragment_kept.program;
+	/* (fragment_key_build writes every field but these) */
+	fragment_key_build(&key);
+	memcpy(key.sampler_type, samplers->types, sizeof(key.sampler_type));
+	key.texture_scaled = samplers->scaled;
+	key.padding = 0;
+	*span = ps3_timer_add(_ps3_timer_draw_key, *span);
+	rsx_fragment_key_clean(&key);
+	program = fragment_program_get(&key);
+	fragment_kept.valid = program != NULL;
+	fragment_kept.samplers = *samplers;
+	fragment_kept.program = program;
+	draw_state_changes &= ~CHANGED_FRAGMENT_KEY;
+	ps3_timer_counts[_ps3_timer_draw_fragment]++;
+	return program;
 }
 
 /* a colour constant converted again only when its state word changes (a model's draw changes a few of them) */
@@ -2041,7 +2255,7 @@ static const struct rsx_vertex_program *prepare_draw_state(void)
 	struct vertex_shader_object *object = current_program();
 	const struct rsx_vertex_program *vertex_program;
 	const struct rsx_fragment_program *fragment_program;
-	struct rsx_fragment_key key;
+	struct texture_samplers samplers;
 	float uniforms[_rsx_uniform_count][4];
 	BOOL has_depth = FALSE;
 
@@ -2068,13 +2282,9 @@ static const struct rsx_vertex_program *prepare_draw_state(void)
 	screen_constants_update();
 	span = ps3_timer_add(_ps3_timer_draw_screen, span);
 
-	memset(&key, 0, sizeof(key));
-	fragment_key_build(&key);
-	span = ps3_timer_add(_ps3_timer_draw_key, span);
-	bind_textures(&key);
+	bind_textures(&samplers);
 	span = ps3_timer_add(_ps3_timer_draw_textures, span);
-	rsx_fragment_key_clean(&key);
-	fragment_program = fragment_program_get(&key);
+	fragment_program = fragment_program_find(&samplers, &span);
 	if (!fragment_program)
 	{
 		statistics.skipped_program++;
@@ -3110,51 +3320,26 @@ static BOOL static_data(const void *begin, unsigned long bytes)
 	return static_vertices_end && data >= static_vertices_begin && data + bytes <= static_vertices_end;
 }
 
-typedef char states_doubleword_check[D3DRS_MAX % 2 == 0 && D3DTSS_MAX % 2 == 0 ? 1 : -1];
+typedef char states_vmx_check[D3DRS_MAX % 16 == 0 && (D3DTSS_MAXSTAGES * D3DTSS_MAX) % 16 == 0 ? 1 : -1];
 
-/* the words of now unlike recorded's, as (first + index, value) pairs, which recorded then holds; count even, both
-8-aligned: a doubleword's compare takes two states (a word's loop ran 16 instructions a state) */
-static unsigned long states_changed(const DWORD *now, DWORD *recorded, unsigned long count, unsigned long first,
-	uint32_t *pairs)
-{
-	const uint64_t *now_words = (const uint64_t *)now;
-	uint64_t *recorded_words = (uint64_t *)recorded;
-	unsigned long index, changed = 0;
-
-	for (index = 0; index < count / 2; index++)
-	{
-		if (now_words[index] != recorded_words[index])
-		{
-			unsigned long word = index * 2, half;
-
-			for (half = word; half < word + 2; half++)
-			{
-				if (now[half] != recorded[half])
-				{
-					pairs[changed * 2] = (uint32_t)(first + half);
-					pairs[changed * 2 + 1] = now[half];
-					changed++;
-				}
-			}
-			recorded_words[index] = now_words[index];
-		}
-	}
-	return changed;
-}
-
-/* the render and texture stage states the game changed since the last record (the inline setters write them) */
+/* the render and texture stage states the game changed since the last record (the inline setters write them), in
+their order: the game sets most of them before each draw, so all are compared (ps3_vmx_words_changed) */
 static void record_states(void)
 {
-	uint32_t pairs[(D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX) * 2];
-	unsigned long count = states_changed(D3D__RenderState, front.recorded_render_state, D3DRS_MAX, 0, pairs);
+	uint32_t pairs[(D3DRS_MAX + D3DTSS_MAXSTAGES * D3DTSS_MAX) * 2] __attribute__((aligned(8)));
+	uint64_t *payload;
+	unsigned long count, index;
 
+	count = ps3_vmx_words_changed(D3D__RenderState, front.recorded_render_state, D3DRS_MAX, 0, pairs);
 	/* (a stage's states follow the last's: D3DRS_MAX + stage * D3DTSS_MAX + state) */
-	count += states_changed(&D3D__TextureState[0][0], &front.recorded_texture_state[0][0],
+	count += ps3_vmx_words_changed(&D3D__TextureState[0][0], &front.recorded_texture_state[0][0],
 		D3DTSS_MAXSTAGES * D3DTSS_MAX, D3DRS_MAX, pairs + count * 2);
 	if (count)
 	{
-		memcpy(record_begin(_record_states, count * 2 * sizeof(uint32_t), (uint32_t)count, 0), pairs,
-			count * 2 * sizeof(uint32_t));
+		/* (the pairs a doubleword each: newlib's memcpy goes a byte at a time under 32 bytes) */
+		payload = record_begin(_record_states, count * 2 * sizeof(uint32_t), (uint32_t)count, 0);
+		for (index = 0; index < count; index++)
+			payload[index] = ((const uint64_t *)pairs)[index];
 		record_commit();
 	}
 }
@@ -3273,6 +3458,17 @@ static DWORD draw_prologue(void)
 	return draw;
 }
 
+/* game memory into a record (16-byte aligned) 16 bytes at a time, counted for the timer log (newlib's memcpy goes a
+byte at a time where an address is not 8-aligned) */
+static void record_copy(void *destination, const void *source, unsigned long bytes)
+{
+	if ((uintptr_t)destination & 15)
+		memcpy(destination, source, bytes);
+	else
+		ps3_vmx_copy_to_quadwords(destination, source, (uint32_t)bytes);
+	ps3_timer_counts[_ps3_timer_front_draws] += (uint32_t)bytes;
+}
+
 /* a draw's streams: the tag cache's read where they are, the others copied (the game can write them again at once) */
 struct stream_plan
 {
@@ -3284,12 +3480,14 @@ struct stream_plan
 	unsigned long spans[16];
 };
 
+/* (a stream's entries are written when mask first takes it: no other is read) */
 static void streams_plan(struct stream_plan *plan)
 {
 	const struct vertex_shader_object *declaration = front.vertex_shader;
 	unsigned long index;
 
-	memset(plan, 0, sizeof(*plan));
+	plan->mask = 0;
+	plan->copied = 0;
 	if (!declaration)
 		return;
 	for (index = 0; index < declaration->element_count; index++)
@@ -3306,6 +3504,7 @@ static void streams_plan(struct stream_plan *plan)
 			plan->mask |= 1u << stream;
 			plan->strides[stream] = front.streams[stream].stride;
 			plan->sources[stream] = data ? (const unsigned char *)PLATFORM_PHYSICAL_TO_VIRTUAL(data) : NULL;
+			plan->spans[stream] = 0;
 			if (plan->sources[stream] && !static_data(plan->sources[stream], 1))
 				plan->copied |= 1u << stream;
 		}
@@ -3350,7 +3549,7 @@ static void streams_write(const struct stream_plan *plan, struct record_draw *dr
 		{
 			unsigned long bytes = stream_copy_bytes(plan, index, count);
 
-			memcpy(copies, plan->sources[index] + first * plan->strides[index], bytes);
+			record_copy(copies, plan->sources[index] + first * plan->strides[index], bytes);
 			/* (vertex first is the copy's first) */
 			stream->base = (uint64_t)copies - (uint64_t)first * plan->strides[index];
 			copies += (bytes + 15) & ~15UL;
@@ -3434,7 +3633,7 @@ static void draw_indexed_record(D3DPRIMITIVETYPE primitive_type_value, UINT vert
 	draw->indices = (uint64_t)index_data;
 	if (copied_indices)
 	{
-		memcpy(next, index_data, vertex_count * sizeof(WORD));
+		record_copy(next, index_data, vertex_count * sizeof(WORD));
 		draw->indices = (uint64_t)next;
 		next += index_bytes;
 	}
@@ -3572,7 +3771,7 @@ static void immediate_record(void)
 	immediate->count = count;
 	immediate->written = front.immediate_layout;
 	immediate->draw = number;
-	memcpy(immediate + 1, front.immediate_vertices, count * front.immediate_floats * sizeof(float));
+	record_copy(immediate + 1, front.immediate_vertices, count * front.immediate_floats * sizeof(float));
 	record_commit();
 }
 
@@ -3763,13 +3962,17 @@ static unsigned char record_scratch[64 * 1024] __attribute__((aligned(16)));
 
 static void states_apply(const uint32_t *pairs, uint32_t count)
 {
+	uint32_t changes = 0;
+
 	for (; count; count--, pairs += 2)
 	{
+		changes |= state_parts[pairs[0]];
 		if (pairs[0] < D3DRS_MAX)
 			render_state[pairs[0]] = pairs[1];
 		else
 			(&texture_state[0][0])[pairs[0] - D3DRS_MAX] = pairs[1];
 	}
+	draw_state_changes |= changes;
 }
 
 static void attributes_apply(DWORD mask, const float *values)
@@ -3800,6 +4003,7 @@ static void record_execute(const struct record *record)
 		break;
 	case _record_texture:
 		device.stages[record->a] = *(const struct stage_texture *)payload;
+		draw_state_changes |= CHANGED_TEXTURE(record->a);
 		break;
 	case _record_vertex_shader:
 		vertex_shader_apply(record->a, (struct vertex_shader_object *)*(const uint64_t *)payload, record->b);
@@ -4036,6 +4240,19 @@ static void ring_room(unsigned long bytes)
 	direct3d_wait(ring.written + bytes - RING_BYTES);
 }
 
+/* the lines a record starts, zeroed in the cache (a store that misses reads its line from memory first): those past
+its start, which hold no record, within the room given back */
+static void ring_lines_zero(unsigned long bytes)
+{
+	uint64_t line = (ring.written + RING_LINE - 1) & ~(uint64_t)(RING_LINE - 1);
+	uint64_t end = ring.written + bytes, room = ring.consumed + RING_BYTES - RING_LINE + 1;
+
+	if (room < end)
+		end = room;
+	if (line < end)
+		ps3_vmx_zero_lines(ring.memory + line % RING_BYTES, (uint32_t)((end - line + RING_LINE - 1) / RING_LINE));
+}
+
 static void *record_begin(uint32_t type, unsigned long payload_bytes, uint32_t a, uint32_t b)
 {
 	unsigned long bytes = (sizeof(struct record) + payload_bytes + 15) & ~15UL;
@@ -4055,6 +4272,7 @@ static void *record_begin(uint32_t type, unsigned long payload_bytes, uint32_t a
 			ring.written += RING_BYTES - offset;
 		}
 		ring_room(bytes);
+		ring_lines_zero(bytes);
 		record = (struct record *)(ring.memory + ring.written % RING_BYTES);
 		ring.current_inline = FALSE;
 	}
@@ -4108,7 +4326,10 @@ static void record_commit(void)
 static void direct3d_start(void)
 {
 #if DIRECT3D_THREAD
-	ring.memory = malloc(RING_BYTES);
+	/* (on whole lines: ring_lines_zero) */
+	unsigned char *memory = malloc(RING_BYTES + RING_LINE);
+
+	ring.memory = memory ? (unsigned char *)(((uintptr_t)memory + RING_LINE - 1) & ~(uintptr_t)(RING_LINE - 1)) : NULL;
 	ring.lock = ps3_host_lock_create(FALSE);
 	ring.work = ring.lock ? ps3_host_condition_create(ring.lock) : NULL;
 	ring.progress = ring.lock ? ps3_host_condition_create(ring.lock) : NULL;

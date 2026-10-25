@@ -99,6 +99,40 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
     cluster; no fault seen); the shadows' 128 entries and the VMX model
     bounds gave no gain (kept: the same picture); the timers cost a
     little (a timebase read a part).
+- 2026-10-25: The 01:46 PKG on hardware (Matt: "Done"): a clean run. The
+  render states 1.87 to 1.22 us a draw; the game thread's draw 4.08 to
+  3.29 us (4.22 before both rounds); about 0.3 to 0.4 ms a frame in the
+  heaviest windows. Average 57.3 fps (a lighter run). See the Log.
+- 2026-10-25: Matt: "Ok then, go with 1" (the render states with VMX).
+  Built: the setters as before (no marks); `record_states` compares the
+  272 states with the recorded copies with VMX (`ps3_vmx_words_changed`:
+  their cache lines touched first, 64 bytes at a time, the same pairs in
+  the same order); the four arrays on 128-byte lines. PC check: the same
+  logs (16 pairs), 2 of 2 faults found; the VMX compare 200,000 rounds, 0
+  apart, 6 of 6 faults found. PKG of 01:46 in `build/ps3_draws/`. Not
+  tested on the PS3. See the Log. Matt stopped for the day ("I will
+  resume tomorrow"): next, this PKG's run on b40 (the medians as in the
+  Log: play windows all / under 56 fps, a draw's cost over the windows
+  with 50 draws a frame or more). This session's changes (both rounds)
+  are not committed. Our listener is stopped; UDP 18194 is free.
+- 2026-10-25: The 23:54 PKG on hardware (b40; Matt: "Done"): a clean
+  run. A draw's cost: the Direct3D thread's draw state 10.3 to 8.0 us
+  (textures 4.0 to 2.84, the fragment program found 1.9 to 0.62); the
+  game thread's draw 4.22 to 4.08 us (its record 1.82 to 1.29, but the
+  render states 1.56 to 1.87: slower). See the Log.
+- 2026-10-24: Matt: "Work on these two" (the handoff's steps 1 and 2: the
+  game thread's draws' record and states; the Direct3D thread's textures
+  and fragment programs). Built (`d3d8_rsx.c`, `ps3_gpu.c`, `ps3_vmx.c`):
+  the setters mark the states they set and the draw's prologue compares
+  only those; the draws' copies 16 bytes at a time, and the ring's lines
+  zeroed in the cache (`dcbz`) before records are written; each texture
+  stage and the fragment program kept from the draw before while their
+  inputs stay; the palette compared, not read again; the keys and the
+  textures compared by words (newlib's `memcmp` and `memcpy` go a byte at
+  a time when an address is not 8-aligned). The same records and RSX
+  state: a PC check of `d3d8_rsx.c` whole on qemu-ppc64, 18 of 19 faults
+  found (the 19th cannot change a result). PKG of 23:54 in
+  `build/ps3_draws/`. Not tested on the PS3. See the Log.
 - 2026-10-24: The timers' run (21:32 PKG; Matt: "Done"), then the work on
   the largest part: the game thread's Direct3D draws, 3.2 ms a frame in
   the slowest windows (the draw prologue's 272 states compared one at a
@@ -4761,3 +4795,151 @@ then `./build.sh pkg LOG_IP=<address>`.
     11.35 (objects 3.15, effects 2.1, specular 1.4, lights 1.4, interface
     1.2, diffuse 0.85); its Direct3D draws 2.4 ms a frame.
   - The BSP read the same: 5,386 KB in 570 and 574 ms (no other transfer).
+- 2026-10-24: The handoff's steps 1 and 2 (Matt: "Work on these two"):
+  - Found: newlib's `memcpy` and `memcmp` in the ELF go a byte at a time
+    when an address is not 8-aligned (`memcpy` also under 32 bytes,
+    `memcmp` under 8): the fragment key's compares (172 bytes at offset 12
+    of its entry), the copies of the game's vertices and indices into the
+    records, `ps3_gpu_set_texture`'s compare. Each P8 texture's palette
+    (the game's one palette, for its bump maps) was swapped and hashed
+    (256 multiplies) at each draw.
+  - The game thread (`d3d8_rsx.c`): the setters mark each state they set
+    in `states_set` (a byte a state: a store only);
+    `D3DDevice_SetRenderState_Simple` finds its state from the method
+    (`D3DSIMPLERENDERSTATEENCODE` inverted); `record_states` compares the
+    marked states only, in the same order (after a method the table lacks,
+    every state, as before). The draws' copies by
+    `ps3_vmx_copy_to_quadwords` (`ps3_vmx.c`: any source alignment, 16
+    bytes at a time, no read past the quadword of the source's last
+    byte). The ring on 128-byte lines; a record's new lines zeroed in the
+    cache by `dcbz` first (`ring_lines_zero`: only lines past the record's
+    start that end within the room given back), so a store does not read
+    its line from memory. The streams' plan without its 328-byte `memset`.
+    The log's new field: the KB the draws' records copy.
+  - The Direct3D thread (`d3d8_rsx.c`): `states_apply` and the texture
+    records note what changed (`state_parts`: a stage's sampler states, the
+    texture modes, the fragment key's states; a stage's texture). A stage
+    keeps its last bind (its unit, sampler type, scale) while those stay,
+    its palette's words stay (compared with VMX: `ps3_vmx_equal`) and
+    `texture_epoch` stays (the frame; a target made, gone or first drawn in
+    a frame; an upload; a button texture taken or let go; the RSX's state
+    reset: `ps3_gpu_state_epoch`). The fragment program kept while its
+    states and the samplers stay; a lookup compares words and hashes with
+    a rotate a word (one multiply at the end). `ps3_gpu_set_texture`
+    compares words. The log's new fields: the stages bound again and the
+    fragment programs looked up again, a frame.
+  - PC check (scratchpad `drawcheck`; the method: memory
+    `ps3-drawcheck-method`): `d3d8_rsx.c` whole, HEAD's and the tree's,
+    compiled by ppu-gcc with the Xbox layer's flags and linked by the
+    `ppc64-qemu-test:2` image's powerpc64-linux-gnu-gcc with a model of
+    `ps3_gpu.c` (what reaches the RSX after its own skips: texture units,
+    fragment programs and uniforms, raster state, vertex programs,
+    constants, surfaces, clears, and each draw with a hash of the vertices
+    and indices it reads) and the real `ps3_vmx.o`, `ps3_rsx_*.o`,
+    `xbox_texture_layout.o` and shader pack; run on qemu-ppc64 (`-cpu
+    power7`: AltiVec, a 128-byte `dcbz`). A random scenario of the game's
+    calls: every state setter, the pack's pixel shaders (half of them the
+    two that read the fog) and vertex programs, 28 textures (P8 with the
+    palette, DXT, cube, linear; half in the texture cache), Lock 0 with
+    new texels, palette changes, render to texture (two targets on one
+    data), targets evicted, button styles and placeholders, static and
+    copied vertices and indices at any alignment, immediate mode, decals,
+    constants, frames, and stretches without frames; some sequences aimed
+    at the kept stages' cases. 4 seeds × 8,000 steps (about 3,200 draws
+    each), the records inline, with the Direct3D thread, and with a 64 KB
+    ring (passed about 145 times, with waits for room): the logs of HEAD's
+    and the tree's the same (16 pairs), and the Direct3D thread's states
+    the game's at each draw. Kept in that scenario: about half of the
+    stages' binds and three quarters of the program lookups.
+    `ring_lines_zero` against its rule, records near the room's end:
+    20,300 rounds, 0 apart.
+  - Faults (one each in a copy of the tree's file; 2 seeds, both ways),
+    found by the logs: a stage state's mark left out, a simple state
+    marked as the next, ZBias's and the pixel shader's texture modes'
+    marks left out, the sampler states or the texture records ignored,
+    the palette trusted, the epoch of an upload, of a target drawn first
+    in a frame or of a button texture left out, the samplers, FOGENABLE,
+    ALPHAKILL or the border colour left out of what keeps a program or a
+    stage, the copies' last bytes, the streams' plan's span; by the ring's
+    test (both ring sizes): a line zeroed before the record's start (it
+    also stalls the ring), the room's last line zeroed past it. Not found:
+    the epoch of a target made left out (each target made is drawn first
+    in the same call, or at a frame's end: the other epochs move). The
+    controls the same: the pairs' order in a doubleword reversed, a weak
+    hash, the RSX epoch's check left out (it moves with the frame here).
+    The VMX streams (`vmxcheck`): 200,000 rounds against memcpy, memset
+    and memcmp (sources that end at an unmapped page), 0 apart; 6 faults
+    found.
+  - Warnings (`-Wall`) in the changed files: none. Comments over 2 lines:
+    none. `check`: 0 `r2off`, `.got` 0x8878. PKG of 23:54 in
+    `build/ps3_draws/` (the tree of `6966998b` and this work only). Not
+    tested on the PS3. UDP 18194: our listener (`udplog.py`, PID 32804).
+- 2026-10-25: The 23:54 PKG on hardware (b40; Matt: "Done"): `[ps3] exit
+  0`, no draw skipped, `[vmx] dcbz zeroes 128 bytes`, the lowest free
+  main memory 17.7 MB. One pixel shader not in the pack, translated at a
+  draw (t=100 s; a constant colour, one combiner, no texture: `01201140`
+  ... in the log's "not in the pack" line). Medians of 46 play windows /
+  the 10 under 56 fps: 59.55 / 53.35 fps (the 22:23 run 59.6 / 51.5;
+  lighter play: 368 / 458 draws a frame, about 500 before). A draw's
+  cost, median of the windows with 50 draws a frame or more (the 22:23
+  run first; this run all / slow):
+  - The Direct3D thread's draw state 10.3 to 8.01 / 8.36 us: textures 4.0
+    to 2.84 / 3.04 (65% of the stages' binds kept), the fragment program
+    found 1.9 to 0.62 / 0.61 (66% of the programs kept; the key 0.10);
+    colours 1.16, raster state 1.24. An indexed draw's record 19.2 to
+    16.0 / 16.2 us each.
+  - The game thread's Direct3D draw 4.22 to 4.08 / 4.56 us: the draws'
+    record 1.82 to 1.29 / 1.51 (0.35 / 0.42 KB copied a draw: the copies
+    were a small part); the render states 1.56 to 1.87 / 1.99, slower in
+    every window: the game sets most states before each draw (the whole
+    pixel shader each time), so most of the 34 mark doublewords are set,
+    and the byte loop with a branch a state costs more than the
+    doubleword compare did. Attributes 0.44, textures 0.38.
+  - The slow windows' game thread 18.75 ms a frame: ticks 4.6, render
+    10.45; the Direct3D thread's work (busy less the flip's wait) 8.0 ms
+    a frame, 19.8 us a draw.
+- 2026-10-25: Step 1 of the run's proposals (Matt: "Ok then, go with 1"):
+  - Why: the render states' marks (the 23:54 PKG) cost more than the
+    compare they replaced (1.56 to 1.87 us a draw): the game sets most
+    states before each draw, so most mark doublewords were set, and the
+    byte loop took a branch a state.
+  - Built (`d3d8_rsx.c`, `ps3_vmx.c`): the setters as they were (no
+    marks); `record_states` compares the render states and the texture
+    stages' states with their recorded copies by `ps3_vmx_words_changed`
+    (every cache line of both arrays touched first, so their misses
+    overlap; 64 bytes compared at once, then the 16-byte parts that
+    differ, then their words): the same pairs in the same order, the
+    recorded copies updated. `D3D__RenderState`, `D3D__TextureState` and
+    the recorded copies on 128-byte lines. The pairs into the record a
+    doubleword each (as in the 23:54 PKG).
+  - PC check: `vmxcheck` (qemu-ppc64), `ps3_vmx_words_changed` against
+    the scalar compare: 200,000 rounds (144, 128 and other counts, up to
+    64 changed words), 0 apart; faults found: the last 16 words skipped,
+    a quadword left out of the test, a lane left out, the pairs without
+    `first`, the recorded copy not updated, the first quadword skipped.
+    `drawcheck` (HEAD's `d3d8_rsx.c` against the tree's, 4 seeds × 8,000
+    steps, inline, with the Direct3D thread and with a 64 KB ring): the
+    logs the same (16 pairs), the Direct3D thread's states the game's at
+    each draw; faults found: the last texture states not compared, the
+    texture states' first index off by one.
+  - `check`: 0 `r2off`, `.got` 0x8878. PKG of 01:46 in
+    `build/ps3_draws/` (the tree of `6966998b` and this session's work).
+    Not tested on the PS3. Our listener stopped at Matt's order (he
+    resumes tomorrow); UDP 18194 is free.
+- 2026-10-25: The 01:46 PKG (step 1, the states with VMX) on hardware
+  (b40; Matt: "Done"): `[ps3] exit 0`, no draw skipped, the lowest free
+  main memory 18.7 MB; the same pixel shader not in the pack translated
+  at a draw (`01201140` ...). A shorter, lighter run: 32 play windows
+  (2.8 min), 322 draws a frame on median, 4 windows under 56 fps.
+  Frames: average 57.3 fps (all frames over the time; the 23:54 run
+  57.25), median 59.6, 18 of 32 windows at 60.
+  - A draw's cost (windows with 50 draws a frame or more; the 23:54 run
+    first): the render states 1.87 to 1.22 us (the code before both
+    rounds: 1.56); the game thread's Direct3D draw 4.08 to 3.29 us (4.22
+    before both rounds): record 1.21, attributes 0.44, textures 0.41.
+    In the heaviest windows (430 to 510 draws a frame) the draw 3.8 to
+    4.0 us (4.5 to 5.0 in the 23:54 run): about 0.3 to 0.4 ms a frame.
+    The states' compare is now small: most of their 1.22 us is their
+    record (begin, the pairs, commit) and the timers' reads.
+  - The Direct3D thread as in the 23:54 run: draw state 7.97 us
+    (textures 2.93, the fragment program found 0.60).

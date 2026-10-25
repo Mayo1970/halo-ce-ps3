@@ -27,6 +27,8 @@ void ps3_gpu_timestamp(int part);
 (ps3_draw_stamp_nanoseconds), read with the frame's timestamps */
 void ps3_gpu_draw_stamps(int on);
 void ps3_gpu_draw_stamp(uint16_t key);
+/* changes when the RSX's state kept here is reset (each frame): the units, programs and states set before are unknown */
+uint32_t ps3_gpu_state_epoch(void);
 /* the thread that draws ends at stop_drawing (the process ends, or the display thread takes the RSX back) */
 void ps3_gpu_set_stop_hook(void (*hook)(void));
 void ps3_gpu_stop_drawing(void);

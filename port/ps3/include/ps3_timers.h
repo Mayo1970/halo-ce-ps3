@@ -392,7 +392,8 @@ enum
 	_ps3_timer_hud_sensor_update,
 	_ps3_timer_hud_sensor_render,
 	_ps3_timer_hud_auxiliary,
-	/* the game thread's Direct3D calls (d3d8_rsx.c): the draws with their prologue, the vertex constants; no ring waits */
+	/* the game thread's Direct3D calls (d3d8_rsx.c): the draws with their prologue (the bytes they copy as the count), the
+	vertex constants; no ring waits */
 	_ps3_timer_front_draws,
 	_ps3_timer_front_constants,
 	/* in the draws: the prologue's render states, attributes, targets and textures recorded (the rest: the draw's record) */
@@ -422,7 +423,8 @@ enum
 	_ps3_timer_record_timestamp,
 	_ps3_timer_record_draw_stamps,
 	_ps3_timer_record_present,
-	/* the Direct3D device's draws (d3d8_rsx.c): the state includes the textures and the colours */
+	/* the Direct3D device's draws (d3d8_rsx.c): the state includes the textures (the stages bound again as the count) and
+	the colours */
 	_ps3_timer_draw_state,
 	_ps3_timer_draw_textures,
 	_ps3_timer_texture_hash,
@@ -431,7 +433,7 @@ enum
 	_ps3_timer_draw_vertices,
 	_ps3_timer_draw_indices,
 	/* the state's other parts: the vertex program found, targets, raster state, screen constants, the fragment key, the
-	fragment program found, the uniforms (in the colours), the vertex program set, the constants */
+	fragment program found (looked up again as the count), the uniforms (in the colours), vertex program set, constants */
 	_ps3_timer_draw_program,
 	_ps3_timer_draw_targets,
 	_ps3_timer_draw_raster,
