@@ -253,6 +253,15 @@ static void bsp3d_test_sphere_recursive(
 	struct test_sphere_data *data,
 	long node_index,
 	short depth);
+#ifdef HALO_PS3
+struct sphere_fast_bsp;
+static struct sphere_fast_bsp const *sphere_fast_bsp_get(
+	struct collision_bsp const *bsp);
+static void bsp3d_test_sphere_fast(
+	struct test_sphere_data *data,
+	struct sphere_fast_bsp const *fast,
+	long node_index);
+#endif
 void render_debug_collision_edge(
 	struct collision_bsp *bsp,
 	long edge_index,
@@ -1134,7 +1143,19 @@ boolean collision_bsp_test_sphere(
 	result->edge_count = 0;
 	result->vertex_count = 0;
 
+#ifdef HALO_PS3
+	/* port: (bsp3d_test_sphere_fast) */
+	{
+		struct sphere_fast_bsp const *fast = sphere_fast_bsp_get(bsp);
+
+		if (fast)
+			bsp3d_test_sphere_fast(&context, fast, 0);
+		else
+			bsp3d_test_sphere_recursive(&context, 0, 0);
+	}
+#else
 	bsp3d_test_sphere_recursive(&context, 0, 0);
+#endif
 	PS3_COLLISION_NODES(collision_function, bsp->bsp3d.nodes.count - context.nodes_left);
 	collision_log_end_time(
 		collision_function,
@@ -2588,3 +2609,561 @@ static boolean bsp3d_test_pill_recursive(
 
 	return hit;
 }
+
+#ifdef HALO_PS3
+/* port: (the PS3) a bsp that passes every check of the sphere test for any sphere is tested without them, in the
+same steps and order: checked once a bsp and structure bsp generation (sphere_fast_bsp_get) */
+enum
+{
+	SPHERE_FAST_BSP_COUNT = 256,
+	SPHERE_FAST_MAXIMUM_NODES = 262144,
+};
+
+struct sphere_fast_bsp
+{
+	struct collision_bsp const *bsp;
+	unsigned long generation;
+	boolean valid;
+	struct bsp3d_node const *nodes;
+	real_plane3d const *planes;
+	struct collision_leaf const *leaves;
+	struct bsp2d_reference const *references;
+	struct bsp2d_node const *bsp2d_nodes;
+	struct collision_surface const *surfaces;
+	struct collision_edge const *edges;
+	struct collision_vertex const *vertices;
+};
+
+static struct sphere_fast_bsp sphere_fast_bsps[SPHERE_FAST_BSP_COUNT];
+/* the nodes a check walked: the bsp3d's, a bsp2d tree's; the bsp2d roots checked */
+static long sphere_fast_bsp3d_marks[BIT_VECTOR_SIZE_IN_LONGS(SPHERE_FAST_MAXIMUM_NODES)];
+static long sphere_fast_bsp2d_marks[BIT_VECTOR_SIZE_IN_LONGS(SPHERE_FAST_MAXIMUM_NODES)];
+static long sphere_fast_bsp2d_roots[BIT_VECTOR_SIZE_IN_LONGS(SPHERE_FAST_MAXIMUM_NODES)];
+static boolean warned_about_collision_bsp_sphere_checks;
+
+/* (tag_block_get_element_fast's test of a block) */
+static boolean sphere_fast_block(
+	struct tag_block const *block,
+	long element_size)
+{
+	return block->count >= 0 && block->count <= SPHERE_FAST_MAXIMUM_NODES && (!block->count || block->address) &&
+		(!block->definition || block->definition->element_size == element_size);
+}
+
+/* whether a ring (collision_surface_test_sphere's walk) closes within the bsp's edges, its vertices the bsp's */
+static boolean sphere_fast_check_ring(
+	struct collision_bsp const *bsp,
+	long surface_index)
+{
+	struct collision_surface const *surface = (struct collision_surface const *)bsp->surfaces.address + surface_index;
+	long first_edge_index = surface->first_edge_index;
+	long edge_index = first_edge_index;
+	short edge_count = 0;
+
+	if (edge_index < 0 || edge_index >= bsp->edges.count)
+		return FALSE;
+	while (TRUE)
+	{
+		struct collision_edge const *edge = (struct collision_edge const *)bsp->edges.address + edge_index;
+		boolean reverse = edge->surface_indices[1] == surface_index;
+
+		if (edge->vertex_indices[0] < 0 || edge->vertex_indices[0] >= bsp->vertices.count ||
+			edge->vertex_indices[1] < 0 || edge->vertex_indices[1] >= bsp->vertices.count)
+		{
+			return FALSE;
+		}
+		edge_index = edge->edge_indices[reverse];
+		if (edge_index == first_edge_index)
+			return TRUE;
+		if (edge_index < 0 || edge_index >= bsp->edges.count || ++edge_count >= MAXIMUM_EDGES_PER_COLLISION_SURFACE)
+			return FALSE;
+	}
+}
+
+/* whether a bsp2d reference's tree is a tree of the bsp's nodes within MAXIMUM_BSP2D_TRAVERSAL_DEPTH, its surfaces the
+bsp's; `clear` walks it again to clear its marks */
+static boolean sphere_fast_check_bsp2d(
+	struct collision_bsp const *bsp,
+	long root_index,
+	boolean clear)
+{
+	long stack[2 * (MAXIMUM_BSP2D_TRAVERSAL_DEPTH + 2)];
+	long stack_count = 0;
+
+	if (root_index & LONG_MIN)
+		return (root_index & LONG_MAX) < bsp->surfaces.count;
+	if (!clear && root_index < bsp->bsp2d.nodes.count && BIT_VECTOR_TEST_FLAG(sphere_fast_bsp2d_roots, root_index))
+		return TRUE;
+	stack[stack_count++] = root_index;
+	stack[stack_count++] = 0;
+	while (stack_count > 0)
+	{
+		long depth = stack[--stack_count];
+		long node_index = stack[--stack_count];
+		struct bsp2d_node const *node;
+		short child;
+
+		if (clear)
+		{
+			BIT_VECTOR_SET_FLAG(sphere_fast_bsp2d_marks, node_index, FALSE);
+		}
+		else
+		{
+			if (node_index >= bsp->bsp2d.nodes.count || depth >= MAXIMUM_BSP2D_TRAVERSAL_DEPTH ||
+				BIT_VECTOR_TEST_FLAG(sphere_fast_bsp2d_marks, node_index))
+			{
+				return FALSE;
+			}
+			BIT_VECTOR_SET_FLAG(sphere_fast_bsp2d_marks, node_index, TRUE);
+		}
+		node = (struct bsp2d_node const *)bsp->bsp2d.nodes.address + node_index;
+		for (child = 0; child < 2; child++)
+		{
+			long child_index = node->child_indices[child];
+
+			if (!(child_index & LONG_MIN))
+			{
+				if (stack_count + 2 > NUMBEROF(stack))
+					return FALSE;
+				stack[stack_count++] = child_index;
+				stack[stack_count++] = depth + 1;
+			}
+			else if ((child_index & LONG_MAX) >= bsp->surfaces.count)
+			{
+				return FALSE;
+			}
+		}
+	}
+	if (!clear)
+	{
+		BIT_VECTOR_SET_FLAG(sphere_fast_bsp2d_roots, root_index, TRUE);
+		return sphere_fast_check_bsp2d(bsp, root_index, TRUE);
+	}
+
+	return TRUE;
+}
+
+/* (collision_bsp_valid_leaf's test, and its references' trees) */
+static boolean sphere_fast_check_leaf(
+	struct collision_bsp const *bsp,
+	long leaf_index)
+{
+	struct collision_leaf const *leaf;
+	long reference_index;
+
+	if (leaf_index >= bsp->leaves.count)
+		return FALSE;
+	leaf = (struct collision_leaf const *)bsp->leaves.address + leaf_index;
+	if (leaf->bsp2d_reference_count != 0 &&
+		!(leaf->first_bsp2d_reference_index >= 0 &&
+		leaf->bsp2d_reference_count > 0 &&
+		leaf->first_bsp2d_reference_index <= bsp->bsp2d_references.count - leaf->bsp2d_reference_count))
+	{
+		return FALSE;
+	}
+	for (reference_index = leaf->first_bsp2d_reference_index;
+		reference_index < leaf->first_bsp2d_reference_index + leaf->bsp2d_reference_count;
+		reference_index++)
+	{
+		struct bsp2d_reference const *reference =
+			(struct bsp2d_reference const *)bsp->bsp2d_references.address + reference_index;
+
+		if (!sphere_fast_check_bsp2d(bsp, reference->root_index, FALSE))
+			return FALSE;
+	}
+
+	return TRUE;
+}
+
+/* whether no sphere can fail a check of the sphere test: the blocks' elements read as tag_block_get_element_fast
+reads them, the nodes a tree from the root within MAXIMUM_BSP3D_TRAVERSAL_DEPTH (collision_bsp3d_enter_node) */
+static boolean sphere_fast_check(
+	struct collision_bsp const *bsp)
+{
+	long stack[2 * (MAXIMUM_BSP3D_TRAVERSAL_DEPTH + 2)];
+	long stack_count = 0;
+	long surface_index;
+
+	if (!sphere_fast_block(&bsp->bsp3d.nodes, sizeof(struct bsp3d_node)) ||
+		!sphere_fast_block(&bsp->bsp3d.planes, sizeof(real_plane3d)) ||
+		!sphere_fast_block(&bsp->leaves, sizeof(struct collision_leaf)) ||
+		!sphere_fast_block(&bsp->bsp2d_references, sizeof(struct bsp2d_reference)) ||
+		!sphere_fast_block(&bsp->bsp2d.nodes, sizeof(struct bsp2d_node)) ||
+		!sphere_fast_block(&bsp->surfaces, sizeof(struct collision_surface)) ||
+		!sphere_fast_block(&bsp->edges, sizeof(struct collision_edge)) ||
+		!sphere_fast_block(&bsp->vertices, sizeof(struct collision_vertex)) ||
+		bsp->bsp3d.nodes.count <= 0)
+	{
+		return FALSE;
+	}
+	for (surface_index = 0; surface_index < bsp->surfaces.count; surface_index++)
+	{
+		if (!sphere_fast_check_ring(bsp, surface_index))
+			return FALSE;
+	}
+	csmemset(sphere_fast_bsp3d_marks, 0, BIT_VECTOR_SIZE_IN_BYTES(bsp->bsp3d.nodes.count));
+	csmemset(sphere_fast_bsp2d_marks, 0, BIT_VECTOR_SIZE_IN_BYTES(bsp->bsp2d.nodes.count));
+	csmemset(sphere_fast_bsp2d_roots, 0, BIT_VECTOR_SIZE_IN_BYTES(bsp->bsp2d.nodes.count));
+	stack[stack_count++] = 0;
+	stack[stack_count++] = 0;
+	while (stack_count > 0)
+	{
+		long depth = stack[--stack_count];
+		long node_index = stack[--stack_count];
+		struct bsp3d_node const *node;
+		short child;
+
+		if (node_index >= bsp->bsp3d.nodes.count || depth >= MAXIMUM_BSP3D_TRAVERSAL_DEPTH ||
+			BIT_VECTOR_TEST_FLAG(sphere_fast_bsp3d_marks, node_index))
+		{
+			return FALSE;
+		}
+		BIT_VECTOR_SET_FLAG(sphere_fast_bsp3d_marks, node_index, TRUE);
+		node = (struct bsp3d_node const *)bsp->bsp3d.nodes.address + node_index;
+		if (node->plane_designator < 0 || node->plane_designator >= bsp->bsp3d.planes.count)
+			return FALSE;
+		for (child = 0; child < 2; child++)
+		{
+			long child_index = node->children[child];
+
+			if (!(child_index & LONG_MIN))
+			{
+				if (stack_count + 2 > NUMBEROF(stack))
+					return FALSE;
+				stack[stack_count++] = child_index;
+				stack[stack_count++] = depth + 1;
+			}
+			else if (child_index != NONE && !sphere_fast_check_leaf(bsp, child_index & LONG_MAX))
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+static struct sphere_fast_bsp const *sphere_fast_bsp_get(
+	struct collision_bsp const *bsp)
+{
+	struct sphere_fast_bsp *fast =
+		&sphere_fast_bsps[((uint32_t)(uintptr_t)bsp >> 2) * 2654435761u >> 24];
+
+	if (fast->bsp != bsp || fast->generation != scenario_structure_bsp_generation)
+	{
+		uint64_t start = ps3_timer_now();
+
+		fast->bsp = bsp;
+		fast->generation = scenario_structure_bsp_generation;
+		fast->valid = sphere_fast_check(bsp);
+		/* a structure bsp's check in the log (the timebase: 79.8 MHz) */
+		if (bsp->bsp3d.nodes.count >= 4096)
+		{
+			printf("[halo] collision bsp: %ld nodes checked for the sphere test in %.2f ms: %s\n",
+				bsp->bsp3d.nodes.count, (double)(ps3_timer_now() - start) / 79800.0,
+				fast->valid ? "tested without its checks" : "tested with them");
+		}
+		fast->nodes = bsp->bsp3d.nodes.address;
+		fast->planes = bsp->bsp3d.planes.address;
+		fast->leaves = bsp->leaves.address;
+		fast->references = bsp->bsp2d_references.address;
+		fast->bsp2d_nodes = bsp->bsp2d.nodes.address;
+		fast->surfaces = bsp->surfaces.address;
+		fast->edges = bsp->edges.address;
+		fast->vertices = bsp->vertices.address;
+		if (!fast->valid && !warned_about_collision_bsp_sphere_checks)
+		{
+			error(_error_silent, "a collision bsp fails the sphere test's checks: its sphere tests make them");
+			warned_about_collision_bsp_sphere_checks = TRUE;
+		}
+	}
+
+	return fast->valid ? fast : NULL;
+}
+
+void collision_bsp_sphere_fast_forget(
+	void)
+{
+	csmemset(sphere_fast_bsps, 0, sizeof(sphere_fast_bsps));
+
+	return;
+}
+
+/* fast_vector_intersects_sphere's steps after its p and c: the vertex's delta from the center and its distance
+squared less the radius squared, the same values */
+static __inline boolean sphere_fast_edge_intersects(
+	real delta_x,
+	real delta_y,
+	real delta_z,
+	real c,
+	real_vector3d const *direction)
+{
+	real b;
+	real a;
+	real disc;
+	real neg_a_minus_b;
+
+	if (c < 0.f)
+		return TRUE;
+	b = direction->i*delta_x + direction->j*delta_y + direction->k*delta_z;
+	if (b >= 0.f)
+		return FALSE;
+	a = direction->i*direction->i + direction->j*direction->j + direction->k*direction->k;
+	disc = b * b - a * c;
+	if (disc <= 0.f)
+		return FALSE;
+	neg_a_minus_b = -a - b;
+	if (neg_a_minus_b < 0.f)
+		return TRUE;
+
+	return neg_a_minus_b * neg_a_minus_b < disc;
+}
+
+/* collision_surface_test_sphere: its vertex and edge loops in one walk of the ring (each adds to its own list) */
+static void sphere_fast_surface(
+	struct test_sphere_data *data,
+	struct sphere_fast_bsp const *fast,
+	long surface_index)
+{
+	struct collision_surface const *surface = &fast->surfaces[surface_index];
+	struct collision_edge const *edges = fast->edges;
+	struct collision_vertex const *vertices = fast->vertices;
+	real center_x = data->center->x;
+	real center_y = data->center->y;
+	real center_z = data->center->z;
+	real radius_squared;
+	long first_edge_index = surface->first_edge_index;
+	long edge_index;
+	boolean hit_feature = FALSE;
+
+	if (TEST_FLAG(surface->flags, _collision_surface_breakable_bit))
+	{
+		byte breakable_surface_index = surface->breakable_surface_index;
+
+		if (breakable_surface_index < data->breakable_surface_count &&
+			!BIT_VECTOR_TEST_FLAG(
+				(long const *)data->breakable_surface_flags,
+				breakable_surface_index))
+		{
+			return;
+		}
+	}
+
+	radius_squared = data->radius * data->radius;
+	edge_index = first_edge_index;
+	do
+	{
+		struct collision_edge const *edge = &edges[edge_index];
+		boolean reverse = edge->surface_indices[1] == surface_index;
+		long vertex_index = edge->vertex_indices[reverse];
+		struct collision_vertex const *vertex0 = &vertices[vertex_index];
+		struct collision_vertex const *vertex1 = &vertices[edge->vertex_indices[!reverse]];
+		real delta_x = vertex0->point.x - center_x;
+		real delta_y = vertex0->point.y - center_y;
+		real delta_z = vertex0->point.z - center_z;
+		real distance_squared =
+			delta_x * delta_x +
+			delta_y * delta_y +
+			delta_z * delta_z;
+		real_vector3d edge_vector;
+
+		if (distance_squared <= radius_squared)
+		{
+			add_feature(
+				&data->result->vertex_count,
+				data->result->vertex_indices,
+				vertex_index);
+			hit_feature = TRUE;
+		}
+		vector_from_points3d(&vertex0->point, &vertex1->point, &edge_vector);
+		if (sphere_fast_edge_intersects(delta_x, delta_y, delta_z, distance_squared - radius_squared, &edge_vector))
+		{
+			add_feature(
+				&data->result->edge_count,
+				data->result->edge_indices,
+				edge_index);
+			hit_feature = TRUE;
+		}
+
+		edge_index = edge->edge_indices[reverse];
+	}
+	while (edge_index != first_edge_index);
+
+	if (!hit_feature)
+	{
+		edge_index = first_edge_index;
+		do
+		{
+			struct collision_edge const *edge = &edges[edge_index];
+			boolean reverse = edge->surface_indices[1] == surface_index;
+			struct collision_vertex const *vertex0 = &vertices[edge->vertex_indices[reverse]];
+			struct collision_vertex const *vertex1 = &vertices[edge->vertex_indices[!reverse]];
+			real_point2d point0;
+			real_point2d point1;
+			real_vector2d vector0;
+			real_vector2d vector1;
+
+			project_point3d(
+				&vertex0->point,
+				data->projection_axis,
+				data->projection_sign,
+				&point0);
+			project_point3d(
+				&vertex1->point,
+				data->projection_axis,
+				data->projection_sign,
+				&point1);
+			vector_from_points2d(&data->center2d, &point0, &vector0);
+			vector_from_points2d(&data->center2d, &point1, &vector1);
+			if (cross_product2d(&vector0, &vector1) < 0.f)
+				return;
+
+			edge_index = edge->edge_indices[reverse];
+		}
+		while (edge_index != first_edge_index);
+	}
+
+	add_feature(
+		&data->result->surface_count,
+		data->result->surface_indices,
+		surface_index);
+
+	return;
+}
+
+static void bsp2d_test_sphere_fast(
+	struct test_sphere_data *data,
+	struct sphere_fast_bsp const *fast,
+	long child_index)
+{
+	while (!(child_index & LONG_MIN))
+	{
+		struct bsp2d_node const *node = &fast->bsp2d_nodes[child_index];
+		real distance = plane2d_distance_to_point(&node->plane, &data->center2d);
+		boolean reaches_first_child = distance <= data->radius;
+		boolean reaches_second_child = distance >= -data->radius;
+
+		if (reaches_first_child)
+			bsp2d_test_sphere_fast(data, fast, node->child_indices[0]);
+		if (!reaches_second_child)
+			return;
+
+		child_index = node->child_indices[1];
+	}
+
+	sphere_fast_surface(data, fast, child_index & LONG_MAX);
+
+	return;
+}
+
+static void sphere_fast_leaf(
+	struct test_sphere_data *data,
+	struct sphere_fast_bsp const *fast,
+	long leaf_index)
+{
+	struct collision_leaf const *leaf = &fast->leaves[leaf_index];
+	long reference_index;
+
+	if (data->result->leaf_count < 256)
+	{
+		data->result->leaf_indices[data->result->leaf_count] = leaf_index;
+		data->result->leaf_count++;
+	}
+
+	for (
+		reference_index = leaf->first_bsp2d_reference_index;
+		reference_index <
+			leaf->first_bsp2d_reference_index + leaf->bsp2d_reference_count;
+		reference_index++)
+	{
+		struct bsp2d_reference const *reference = &fast->references[reference_index];
+		short stack_index;
+
+		for (stack_index = 0; stack_index < data->stack_depth; stack_index++)
+		{
+			if (data->plane_stack[stack_index] == reference->plane_designator)
+			{
+				real_plane3d const *plane = &fast->planes[reference->plane_designator & LONG_MAX];
+				real plane_distance = -plane3d_distance_to_point(plane, data->center);
+				real_point3d center_projected_on_plane;
+				real absolute_i;
+				real absolute_j;
+				real absolute_k;
+				short projection;
+
+				center_projected_on_plane.x =
+					plane->n.i * plane_distance + data->center->x;
+				center_projected_on_plane.y =
+					plane->n.j * plane_distance + data->center->y;
+				center_projected_on_plane.z =
+					plane->n.k * plane_distance + data->center->z;
+				absolute_i = fabs(plane->n.i);
+				absolute_j = fabs(plane->n.j);
+				absolute_k = fabs(plane->n.k);
+				if (absolute_k >= absolute_j && absolute_k >= absolute_i)
+					projection = _z;
+				else
+					projection = absolute_j >= absolute_i ? _y : _x;
+				data->projection_axis = projection;
+				data->projection_sign =
+					projection_sign_from_vector3d(&plane->n, projection) !=
+					(reference->plane_designator & LONG_MIN ? TRUE : FALSE);
+				project_point3d(
+					&center_projected_on_plane,
+					data->projection_axis,
+					data->projection_sign,
+					&data->center2d);
+				bsp2d_test_sphere_fast(data, fast, reference->root_index);
+				break;
+			}
+		}
+	}
+
+	return;
+}
+
+/* bsp3d_test_sphere_recursive: `nodes_left` loses the nodes entered (the timer build's count) */
+static void bsp3d_test_sphere_fast(
+	struct test_sphere_data *data,
+	struct sphere_fast_bsp const *fast,
+	long node_index)
+{
+	struct bsp3d_node const *nodes = fast->nodes;
+	real_plane3d const *planes = fast->planes;
+	real_point3d const *center = data->center;
+	real radius = data->radius;
+	long nodes_entered = 0;
+
+	while (!(node_index & LONG_MIN))
+	{
+		struct bsp3d_node const *node = &nodes[node_index];
+		real distance = plane3d_distance_to_point(&planes[node->plane_designator], center);
+		boolean reaches_second_child = distance < radius;
+		boolean child_index = distance > -radius;
+
+		nodes_entered++;
+		if (child_index && reaches_second_child)
+		{
+			data->nodes_left -= nodes_entered;
+			data->plane_stack[data->stack_depth++] =
+				node->plane_designator | LONG_MIN;
+			bsp3d_test_sphere_fast(data, fast, node->children[0]);
+			data->stack_depth--;
+			data->plane_stack[data->stack_depth++] =
+				node->plane_designator & LONG_MAX;
+			bsp3d_test_sphere_fast(data, fast, node->children[1]);
+			data->stack_depth--;
+
+			return;
+		}
+
+		node_index = node->children[child_index];
+	}
+	data->nodes_left -= nodes_entered;
+
+	if (node_index != NONE)
+		sphere_fast_leaf(data, fast, node_index & LONG_MAX);
+
+	return;
+}
+#endif

@@ -19,6 +19,9 @@ upstream halo-ce-universal copy of source/cache/cache_files.c. */
 #include "custom_edition_cache.h" /* port: port/linux/game/custom_edition_cache.c */
 #include "cache_file_formats.h" /* port: CUSTOM_EDITION_TAG_CACHE_BYTES */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
+#ifdef HALO_PS3
+#include "physics/collision_bsp.h" /* port: collision_bsp_sphere_fast_forget */
+#endif
 
 /* ---------- constants */
 
@@ -1421,6 +1424,9 @@ void scenario_structure_bsp_unload(
 		tag_instance->group_tag==STRUCTURE_BSP_TAG);
 	tag_instance->base_address = NULL;
 	cache_file_globals.structure_bsp_header = NULL;
+#ifdef HALO_PS3
+	collision_bsp_sphere_fast_forget(); /* port: (collision_bsp.h) */
+#endif
 
 	return;
 }

@@ -53,6 +53,19 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-25: the 23:35 PKG run on b40 (Matt: "Done"): a clean exit;
+  59.6 / 54.2 fps (34 play windows / the 2 under 56). The pill's bsp
+  sphere test 24.0 to 18.0 us a call (the model said about 18); every
+  caller's structure bsp sphere test 10.0 to 6.8 us. Every bsp checked
+  passed (b40's first: 6.85 ms, once a load). See the Log. Next: Matt's
+  choice. Our listener stopped; UDP 18194 is free.
+- 2026-10-25: step 3 built (Matt: "Yeah sure, go for it"): the bsp
+  sphere test profiled on the PC (the PS3's object under QEMU with a PPE
+  model; b40, a30, d40), then a path without the per-element checks for a
+  bsp that passes all of them, checked once a bsp (`collision_bsp.c`,
+  `cache_files.c`). The model: 26 to 29% fewer cycles a query, the same
+  misses. The same results on all 23 maps' bsps. PKG of 23:35 in
+  `build/ps3_ticks/`. Not tested on the PS3. Not committed. See the Log.
 - 2026-10-25: steps 1 and 2's prefetches taken out (Matt: "Do 1-2
   then."): `collision_bsp.c` and `object_bounds_cache.c` match HEAD again;
   steps 3 and 4 kept. PKG of 22:29 in `build/ps3_ticks/`. Next: step 3 of
@@ -5650,3 +5663,71 @@ then `./build.sh pkg LOG_IP=<address>`.
   prefetch hints in `collision_bsp.c` and `object_bounds_cache.c` removed,
   both files as at HEAD; steps 3 and 4 kept. `check`: 0 `r2off`, `.got`
   0x89e8. PKG of 22:29 in `build/ps3_ticks/`.
+- 2026-10-25: Step 3 (Matt: "Yeah sure, go for it"): the bsp sphere test
+  (`collision_bsp_test_sphere`) profiled on the PC, then made cheaper.
+  - The tool: QEMU 8.2.2 built with plugins (Docker image
+    `ppc64-qemu-plugins:1`) and a plugin that models the PPE: in-order
+    issue with register latencies (int 2, load 5, float 10 cycles), L1D 32
+    KB and L2 512 KB with 128-byte lines (L2 hit 40, memory 450 cycles),
+    gshare branch prediction (23 a miss), load-hit-store (40), D-ERAT;
+    counts by instruction. The build's own `collision_bsp.o` (its text
+    the same as a `-g` build's) and `real_math.o`, linked by
+    powerpc64-linux-gnu-gcc into a harness that maps a map's real bsp
+    (swapped to big-endian) below 4 GB. Queries: biped pill spheres at the
+    scenarios' AI places (firing positions, squads' starts; offsets from
+    ppu-gcc), 14 a tick with 64 KB of other data between and 4 MB between
+    ticks: 4.9 to 8.6 leaves a query (the PS3: 3.4 to 6.6).
+  - Before, a query (b40 / a30 / d40): 15.2 / 24.5 / 20.3 thousand
+    instructions, 20.9 / 30.4 / 25.7 us at 3.2 GHz (the PS3's timer: 24 to
+    25 us on b40); L2 misses 57 / 73 / 63, about 40% of the cycles. Steps
+    (b40): the bsp3d nodes 25%, the vertex loop 25%, the edge loop 20%,
+    the inside loop, the ring checks, the leaf and its references 5% each,
+    the plane stack 4%. The port's checks (`tag_block_get_element_fast`'s
+    on each element, the ring, node, leaf and surface checks) were about
+    half of the instructions. Steps 1 and 2's prefetch, one node ahead,
+    cannot hide a miss of about 450 cycles, so the misses still count (the
+    22:15 run's line "the misses do not set those times" is wrong).
+  - Built (`collision_bsp.c`, a PS3 block): `sphere_fast_check` proves
+    once a bsp that no sphere can fail a check (the blocks as
+    `tag_block_get_element_fast` reads them; the nodes a tree from the
+    root within 128 levels, their planes the bsp's; the leaves and
+    references; each reference's bsp2d a tree; each ring closed within 8
+    edges, its vertices the bsp's); a 256-entry table by bsp and structure
+    bsp generation, forgotten at a structure bsp's unload
+    (`cache_files.c`). Such a bsp is tested by `bsp3d_test_sphere_fast`
+    and its helpers: the same visits and float steps, the elements read
+    straight from the blocks, the vertex and edge loops in one walk (each
+    adds to its own list), the edge test from the vertex's delta and
+    distance (`fast_vector_intersects_sphere`'s steps). The log line
+    `[halo] collision bsp: N nodes checked for the sphere test in X ms`
+    for a structure bsp.
+  - After, the model: 7.2 / 12.0 / 10.7 thousand instructions, 15.3 /
+    21.5 / 19.0 us a query (-26 / -29 / -26%), the same misses. The check:
+    about 14 million cycles (4.4 ms) for b40's first bsp, once a load.
+  - The same results: all 23 maps, 81 structure bsps and 3,592 object
+    bsps (collision models), 3,985 sets, 1.78 million spheres (AI places,
+    floors, random, radius 5 to 40, boundaries: a vertex at exactly the
+    radius, a node's plane exactly the radius away): every result the
+    same; every retail bsp passes the check. 552 bsps with one fault each
+    (an index past its block, cycles, rings, counts): the same results
+    and exits (528 fall back to the checks). Faults put into the new code:
+    6 of 8 found; the other 2 give the same results on retail data (the
+    stack scan's break, a ring of 9 edges).
+  - `check`: 0 `r2off`, `.got` 0x89e8. PKG of 23:35 in
+    `build/ps3_ticks/`. Not tested on the PS3.
+- 2026-10-25: The 23:35 PKG on hardware (b40; Matt: "Done"): the new
+  `[halo] collision bsp` lines show this build (the boot line's 20:27:26
+  is the last folder's `ps3_main.o`), `[ps3] exit 0`. 37 windows; left
+  out the load and the BSP swap (23:56:24). Medians of 34 play windows /
+  the 2 under 56 fps: 59.6 / 54.2 fps, 58.9 on average; the game thread's
+  work 10.7 / 12.6 ms a frame, the RSX 11.25 / 15.05.
+  - The checks: b40's 9,484-node bsp in 2.16 ms, again in 2.11 ms (the
+    switch's first sphere tests come before its generation changes), the
+    34,998-node one in 6.85 ms; all tested without the checks.
+  - A call's cost over all play windows (the 22:15 run first): the pill's
+    bsp sphere test 24.0 to 18.0 us (-25%), its whole sphere query 41.7 to
+    35.2; every caller's structure-bsp-sphere 10.0 to 6.8 us, the ground
+    planes' 4.7 to 3.1, object-bsp-sphere 1.7 to 1.5.
+  - The 12 heaviest windows (ticks of 7 ms or more; medians): a tick 8.1
+    ms: objects 5.38 (units 1.83, node matrices 1.54), ai 1.30; the pill's
+    bsp test 0.23 ms for 11.8 calls.

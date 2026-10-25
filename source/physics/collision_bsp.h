@@ -99,6 +99,11 @@ surfaces (FALSE, reported once, if not) */
 boolean collision_bsp_valid_surface_index(
 	struct collision_bsp const *bsp,
 	long surface_index);
+#ifdef HALO_PS3
+/* port: forgets the bsps checked for the sphere test without its checks (at a structure bsp's unload) */
+void collision_bsp_sphere_fast_forget(
+	void);
+#endif
 short collision_surface_edge_count(
 	struct collision_bsp const *bsp,
 	long surface_index);
