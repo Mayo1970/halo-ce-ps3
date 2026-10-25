@@ -590,12 +590,15 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		t[_ps3_timer_texture_hash], t[_ps3_timer_texture_upload], t[_ps3_timer_draw_colours],
 		t[_ps3_timer_draw_vertices], t[_ps3_timer_draw_indices], t[_ps3_timer_vblank_wait], t[_ps3_timer_flip_wait],
 		t[_ps3_timer_rsx_wait], t[_ps3_timer_spu_wait]);
-	/* the colours: the uniforms built, then the fragment program set with them */
+	/* the colours: the uniforms built, then the fragment program set with them; the stages bound again (the others
+	kept) and the fragment programs looked up again (the others the draw before's), a frame */
 	ps3_log_printf("[time] Direct3D thread's draw state, ms a frame: vertex program found %.2f, targets %.2f, raster "
-		"state %.2f, screen constants %.2f, fragment key %.2f, textures %.2f, fragment program found %.2f, colours %.2f "
-		"(uniforms %.2f, the program set %.2f), vertex program set %.2f, constants %.2f\n", t[_ps3_timer_draw_program],
-		t[_ps3_timer_draw_targets], t[_ps3_timer_draw_raster], t[_ps3_timer_draw_screen], t[_ps3_timer_draw_key],
-		t[_ps3_timer_draw_textures], t[_ps3_timer_draw_fragment], t[_ps3_timer_draw_colours],
+		"state %.2f, screen constants %.2f, fragment key %.2f, textures %.2f (%.1f stages bound), fragment program "
+		"found %.2f (%.1f looked up), colours %.2f (uniforms %.2f, the program set %.2f), vertex program set %.2f, "
+		"constants %.2f\n", t[_ps3_timer_draw_program], t[_ps3_timer_draw_targets], t[_ps3_timer_draw_raster],
+		t[_ps3_timer_draw_screen], t[_ps3_timer_draw_key], t[_ps3_timer_draw_textures],
+		(double)ps3_timer_counts[_ps3_timer_draw_textures] / frames, t[_ps3_timer_draw_fragment],
+		(double)ps3_timer_counts[_ps3_timer_draw_fragment] / frames, t[_ps3_timer_draw_colours],
 		t[_ps3_timer_draw_uniforms], t[_ps3_timer_draw_colours] - t[_ps3_timer_draw_uniforms],
 		t[_ps3_timer_draw_vertex_program], t[_ps3_timer_draw_constants]);
 	/* the loop: the thread's busy time outside its records (the room given back, the SPU's pending tasks) */
@@ -612,13 +615,14 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		}
 		ps3_log_printf("%s; the loop %.2f\n", line, t[_ps3_timer_thread_busy] - records);
 	}
-	/* the draws' record: what the prologue's parts leave of the game thread's draws */
+	/* the draws' record: what the prologue's parts leave of the game thread's draws; its copies of game memory */
 	ps3_log_printf("[time] the game thread's Direct3D draws, ms a frame: %.2f; the prologue: render states %.2f, "
-		"attributes %.2f, targets %.2f, textures %.2f; the draws' record %.2f; constants %.2f\n",
+		"attributes %.2f, targets %.2f, textures %.2f; the draws' record %.2f (%.1f KB copied); constants %.2f\n",
 		t[_ps3_timer_front_draws], t[_ps3_timer_front_states], t[_ps3_timer_front_attributes],
 		t[_ps3_timer_front_targets], t[_ps3_timer_front_textures], t[_ps3_timer_front_draws] -
 		t[_ps3_timer_front_states] - t[_ps3_timer_front_attributes] - t[_ps3_timer_front_targets] -
-		t[_ps3_timer_front_textures], t[_ps3_timer_front_constants]);
+		t[_ps3_timer_front_textures], (double)ps3_timer_counts[_ps3_timer_front_draws] / frames / 1024.0,
+		t[_ps3_timer_front_constants]);
 	spu_game_log(frames, t);
 	if (!ps3_rsx_frames)
 		return;
