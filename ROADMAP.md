@@ -53,6 +53,22 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-26: the 00:26 PKG run on b40 (Matt: "Done."): a clean exit;
+  60.0 / 53.7 fps (32 play windows / the 1 under 56), 5 windows under 59
+  (the last run 11). The texture hash 4.8 to 1.9 ms a frame on median
+  (the most 7.0 to 2.8); the Direct3D SPU's work 10.0 to 7.0 (the most
+  14.6 to 9.9): in the slow windows it now waits 8.6 to 9.3 ms for the
+  flip, no longer a limit. See the Log. Matt works on steps 2 to 5 (the
+  hash's fixed waits, the RSX, the ticks' profiles, the BSP swap's double
+  check); step 1, the checkpoint windows' drop, saved in "Found for later
+  goals". Our listener stopped; UDP 18194 is free.
+- 2026-10-26: the Direct3D SPU's texture hash made faster in place (Matt:
+  "Faster hash in place"): the same values at the same point; a vector
+  path at any alignment and the next 4 KB fetched while the last is
+  hashed (`spu_direct3d.c`). The SPU simulator: 768 cases the same as
+  HEAD's and the definition; 1 MB at offset 4 14.7 to 0.66 cycles a
+  byte, 16-aligned 0.79 to 0.62. PKG of 00:26 in `build/ps3_ticks/`. Not
+  tested on the PS3. Not committed. See the Log.
 - 2026-10-25: the 23:35 PKG run on b40 (Matt: "Done"): a clean exit;
   59.6 / 54.2 fps (34 play windows / the 2 under 56). The pill's bsp
   sphere test 24.0 to 18.0 us a call (the model said about 18); every
@@ -1832,6 +1848,15 @@ the whole tree. No code change.
 
 ## Found for later goals
 
+- The checkpoint windows' drop (found 2026-10-26; Matt: "Save in drop,
+  off"): the window after a checkpoint is the run's slowest, 53.7 fps
+  (00:26 PKG, b40, checkpoint at 00:33:38: its writer 2,467 ms, 1,008 of
+  it waiting for reads) and 54.7 (23:35 PKG, 23:55:19), while the RSX,
+  the Direct3D SPU and the game thread's work are not near their limits
+  there. Cause not looked for yet (the game thread's waits for the cache
+  reads the writer shares the disk with are the first suspect). Matt
+  works on the run's other steps (the hash's fixed waits, the RSX, the
+  ticks' profiles, the BSP swap's double check).
 - G4 pixel data and G5 sound data stay little-endian in the cache file:
   the texture and sound caches read them by file offset. CPU-written texels
   are little-endian too (trap 27). Not converted yet (tool or later code):
@@ -5731,3 +5756,54 @@ then `./build.sh pkg LOG_IP=<address>`.
   - The 12 heaviest windows (ticks of 7 ms or more; medians): a tick 8.1
     ms: objects 5.38 (units 1.83, node matrices 1.54), ai 1.30; the pill's
     bsp test 0.23 ms for 11.8 calls.
+- 2026-10-26: Where the 23:35 run's drops come from (Matt: "To reach
+  stable 60 FPS, anything we can move to the last SPU?"): 5 of the 6 SPUs
+  are in use (mixer, vertices, game, render, Direct3D). In the 11 windows
+  under 59 fps: 6 the RSX's (14 to 16 ms a frame: the dynamic lights'
+  specular 2.5 to 3.8, the particles up to 4.3); 5 of heavy combat with
+  three units near the limit: the game thread (a frame with a tick: 8.5
+  + 11.5 ms), the Direct3D SPU (13 to 15 ms of work a frame, of it the
+  texture hash 4 to 7), the RSX (13 to 14). The `Direct3D: frame` lines:
+  1 to 4 MB of texels hashed a frame, 2 to 67 uploads in 600 frames;
+  about 5 cycles a byte.
+- 2026-10-26: The texture hash made faster in place (Matt: "Faster hash
+  in place"; options were the faster hash, the hash on the free SPU,
+  both). `spu_direct3d.c`'s `texture_hash`: the old one hashed a source
+  not 16-aligned a word at a time from bytes (14.7 cycles a byte in the
+  simulator) and waited for each 4 KB. Now: 64 bytes at a time at any
+  alignment (each quadword from two lines, `spu_shuffle`), the first
+  line fetched alone; the next 4 KB fetched into the other input buffer
+  (`TAG_INPUT` + 1) while one is hashed (the conversions leave both idle
+  at a texture's check); the last words and bytes as before. The same
+  hash values at the same point of the check.
+  - Check (flycastPS3's SPU simulator, the functions taken from HEAD's
+    and the tree's source): 48 sizes (0 to 1 MB + 3) at the 16
+    alignments, 768 cases: HEAD's, the tree's and the definition's
+    (`spu_vertices.h`) hashes all the same. 1 MB: 16-aligned 0.79 to
+    0.62 cycles a byte, offset 4 14.7 to 0.66. 5 faults put into the new
+    code: all found (160 to 465 cases apart each).
+  - `check`: 0 `r2off`, `.got` 0x89e8; the Direct3D SPU image 212,368
+    bytes of LS. PKG of 00:26 in `build/ps3_ticks/`. Not tested on the
+    PS3.
+- 2026-10-26: The 00:26 PKG on hardware (b40; Matt: "Done."): `[ps3] exit
+  0`. 35 windows; left out the load and the BSP swap (00:34:29). Medians
+  of 32 play windows / the 1 under 56 fps: 60.0 / 53.7 fps, 59.4 on
+  average (the 23:35 run 59.0); the game thread's work 11.1 / 12.0 ms a
+  frame, the RSX 9.7 / 12.1.
+  - The texture hash (the Direct3D SPU, ms a frame, medians; the 23:35
+    run first): 4.8 to 1.9 (the most 7.0 to 2.8); its draw state 7.1 to
+    4.0; its work (busy less the flip's and the RSX's waits) 10.0 to 7.0
+    (the most 14.6 to 9.9). By the `Direct3D: frame` lines: 0.7 cycles a
+    byte (the simulator's 0.66) plus about 1.5 ms a frame whatever the
+    bytes (before: 3.9): each check's own waits (its first line, its
+    first 4 KB, its last bytes: each DMA waited for).
+  - The 5 windows under 59 fps: 00:33:43 53.7 (a checkpoint at 00:33:38,
+    its writer 2,467 ms of it 1,008 waiting for reads; the 23:35 run's
+    23:55:25 54.7 had one too), 00:34:13 56.8 (the RSX 13.6: specular 4.5,
+    effects 4.8), 00:35:40 58.6 (a tick frame 9.1 + 8.8 ms on the game
+    thread), 00:33:17 and 00:34:34 (after the load and the swap). The 9
+    heavy windows (ticks of 7 ms or more): 60.0 fps on median (the 23:35
+    run's 12: 59.5).
+  - The BSP swap checked the 34,998-node bsp twice (6.95 and 7.08 ms),
+    the 9,484-node one twice (2.13, 2.16): the switch's first sphere tests
+    come before its generation changes.

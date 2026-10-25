@@ -2530,12 +2530,16 @@ static inline vec_uint4 times_prime(vec_uint4 x)
 }
 
 /* xgpu_texture_hash (spu_vertices.c's hash_task): 16 lanes of FNV-1a on the words in order, the last bytes into lane
-0; 64 bytes at a time while the source is 16-aligned */
+0; 64 bytes at a time at any alignment (two lines shuffled), each 4 KB fetched while the last is hashed */
 static uint64_t texture_hash(uint32_t source, uint32_t size)
 {
-	unsigned char *buffer = inputs[0];
-	uint32_t words[TEXTURE_HASH_LANES], index, done = 0, word_index = 0;
-	vec_uint4 vector_lanes[4];
+	static const vec_uchar16 in_order = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+	static vec_uint4 first_line;
+	uint32_t words[TEXTURE_HASH_LANES], index, done = 64 * (size / 64), word_index = done / 4, piece;
+	uint32_t offset = source & 15, stream = offset ? (source & ~15u) + 16 : source;
+	/* (bytes 0..15 plus the offset: no carry between them) */
+	vec_uchar16 pattern = (vec_uchar16)spu_add((vec_ushort8)in_order, spu_splats((unsigned short)(offset * 0x0101)));
+	vec_uint4 vector_lanes[4], carry = spu_splats(0u);
 
 	for (index = 0; index < 4; index++)
 	{
@@ -2543,25 +2547,50 @@ static uint64_t texture_hash(uint32_t source, uint32_t size)
 
 		vector_lanes[index] = spu_xor(spu_splats(TEXTURE_HASH_BASIS), lane);
 	}
-	if (!(source & 15))
+	if (done && offset)
 	{
-		while (size - done >= 64)
-		{
-			uint32_t piece = (size - done) & ~63u, group;
-			const vec_uint4 *quads;
+		dma_get(&first_line, source & ~15u, 16, TAG_MISC);
+		dma_wait(1 << TAG_MISC);
+		carry = first_line;
+	}
+	for (piece = 0; piece < 2 && piece * 4096 < done; piece++)
+	{
+		mfc_get(inputs[piece], stream + piece * 4096, done - piece * 4096 < 4096 ? done - piece * 4096 : 4096,
+			TAG_INPUT + piece, 0, 0);
+	}
+	for (piece = 0; piece * 4096 < done; piece++)
+	{
+		uint32_t bytes = done - piece * 4096 < 4096 ? done - piece * 4096 : 4096, group;
+		const vec_uint4 *quads = (const vec_uint4 *)inputs[piece & 1];
 
-			if (piece > 4096)
-				piece = 4096;
-			quads = (const vec_uint4 *)fetch(buffer, source + done, piece, TAG_MISC);
-			for (group = 0; group < piece / 64; group++, quads += 4)
+		dma_wait(1 << (TAG_INPUT + (piece & 1)));
+		if (!offset)
+		{
+			for (group = 0; group < bytes / 64; group++, quads += 4)
 			{
 				vector_lanes[0] = times_prime(spu_xor(vector_lanes[0], quads[0]));
 				vector_lanes[1] = times_prime(spu_xor(vector_lanes[1], quads[1]));
 				vector_lanes[2] = times_prime(spu_xor(vector_lanes[2], quads[2]));
 				vector_lanes[3] = times_prime(spu_xor(vector_lanes[3], quads[3]));
 			}
-			done += piece;
-			word_index += piece / 4;
+		}
+		else
+		{
+			for (group = 0; group < bytes / 64; group++, quads += 4)
+			{
+				vec_uint4 next0 = quads[0], next1 = quads[1], next2 = quads[2], next3 = quads[3];
+
+				vector_lanes[0] = times_prime(spu_xor(vector_lanes[0], spu_shuffle(carry, next0, pattern)));
+				vector_lanes[1] = times_prime(spu_xor(vector_lanes[1], spu_shuffle(next0, next1, pattern)));
+				vector_lanes[2] = times_prime(spu_xor(vector_lanes[2], spu_shuffle(next1, next2, pattern)));
+				vector_lanes[3] = times_prime(spu_xor(vector_lanes[3], spu_shuffle(next2, next3, pattern)));
+				carry = next3;
+			}
+		}
+		if ((piece + 2) * 4096 < done)
+		{
+			mfc_get(inputs[piece & 1], stream + (piece + 2) * 4096,
+				done - (piece + 2) * 4096 < 4096 ? done - (piece + 2) * 4096 : 4096, TAG_INPUT + (piece & 1), 0, 0);
 		}
 	}
 	for (index = 0; index < 4; index++)
@@ -2574,7 +2603,7 @@ static uint64_t texture_hash(uint32_t source, uint32_t size)
 	while (done + 4 <= size)
 	{
 		uint32_t piece = size - done < 4096 ? (size - done) & ~3u : 4096;
-		const unsigned char *bytes = (const unsigned char *)fetch(buffer, source + done, piece, TAG_MISC);
+		const unsigned char *bytes = (const unsigned char *)fetch(inputs[0], source + done, piece, TAG_MISC);
 
 		for (index = 0; index < piece; index += 4, word_index++)
 		{
@@ -2587,7 +2616,7 @@ static uint64_t texture_hash(uint32_t source, uint32_t size)
 	}
 	if (done < size)
 	{
-		const unsigned char *bytes = (const unsigned char *)fetch(buffer, source + done, size - done, TAG_MISC);
+		const unsigned char *bytes = (const unsigned char *)fetch(inputs[0], source + done, size - done, TAG_MISC);
 
 		for (index = 0; index < size - done; index++)
 			words[0] = (words[0] ^ bytes[index]) * TEXTURE_HASH_PRIME;
