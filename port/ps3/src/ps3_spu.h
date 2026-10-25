@@ -7,6 +7,7 @@ thread's conversions, the game thread's jobs. The Xbox layer calls it, so fixed-
 #include <stdint.h>
 
 #include "ps3_spu_game.h"
+#include "spu_direct3d.h"
 #include "spu_mixer.h"
 #include "spu_vertices.h"
 
@@ -87,6 +88,20 @@ struct ps3_spu_game_statistics
 
 /* the game SPU's (render 0) or the render SPU's (1) */
 void ps3_spu_game_statistics(int render, struct ps3_spu_game_statistics *statistics);
+
+/* the Direct3D thread's work on an SPU (spu_direct3d.c) from this set-up; 1 when it runs */
+int ps3_spu_direct3d_start(const spu_d3d_setup *setup);
+/* the line the PPE writes (the records published, the answers), and what the SPU puts */
+spu_d3d_bell *ps3_spu_direct3d_bell(void);
+const volatile spu_d3d_echo *ps3_spu_direct3d_echo(void);
+/* an event of the SPU on the service thread's queue (0) or the game thread's (1), at most timeout: 1 if one came;
+the events waiting dropped */
+int ps3_spu_direct3d_wait(int queue, uint32_t timeout_microseconds);
+void ps3_spu_direct3d_drain(int queue);
+/* the SPU's echo from its LS, logged with the reason */
+void ps3_spu_direct3d_report(const char *reason);
+/* the SPU ends after its record (the exit, the display thread's red screen) */
+void ps3_spu_direct3d_stop(void);
 
 /* at the exit */
 void ps3_spu_stop(void);

@@ -44,11 +44,16 @@ uint64_t ps3_rsx_timers[_ps3_timer_count];
 uint64_t ps3_rsx_frame_nanoseconds;
 uint32_t ps3_rsx_frames;
 uint32_t ps3_rsx_draws[_ps3_timer_count];
-uint64_t ps3_draw_stamp_nanoseconds[PS3_DRAW_STAMP_KEYS];
-uint32_t ps3_draw_stamp_draws[PS3_DRAW_STAMP_KEYS];
+uint64_t ps3_draw_stamp_nanoseconds[2][PS3_DRAW_STAMP_KEYS];
+uint32_t ps3_draw_stamp_draws[2][PS3_DRAW_STAMP_KEYS];
+uint64_t ps3_draw_stamp_part_nanoseconds[_ps3_stamp_count];
+uint32_t ps3_draw_stamp_part_draws[_ps3_stamp_count];
 uint32_t ps3_draw_stamp_frames;
 uint32_t ps3_draw_stamp_dropped;
+int ps3_draw_stamps_part = -1;
+int ps3_transparent_origin;
 void (*ps3_timers_shaders_log)(void);
+void (*ps3_timers_direct3d_collect)(void);
 
 /* the game's global_collision_user_names (its "????" as "unknown") and global_collision_function_names
 (collision_usage.c) */
@@ -78,6 +83,21 @@ static const char *const specular_names[] =
 {
 	"lights", "specular lightmaps", "reflection masks", "mirrors", "reflections", "transparent", "fog",
 };
+/* the effects pass's splits on the RSX, as the timers from _ps3_timer_effects_weather */
+static const char *const effects_names[] =
+{
+	"weather", "particles", "contrails", "transparent", "decals", "detail objects",
+};
+/* the effects pass's stamp parts, from _ps3_stamp_effects_rest */
+static const char *const stamp_names[] =
+{
+	"the rest", "weather", "particles", "particle systems", "contrails", "other effect shaders", "model", "generic",
+	"chicago", "water", "glass", "meter", "plasma", "other shaders", "decals", "detail objects",
+};
+
+typedef char names_check[sizeof(stamp_names) / sizeof(stamp_names[0]) == _ps3_stamp_count - _ps3_stamp_effects_rest &&
+	sizeof(effects_names) / sizeof(effects_names[0]) == _ps3_timer_effects_detail - _ps3_timer_effects_weather + 1 ?
+	1 : -1];
 /* the objects' widgets by type, as the timers from _ps3_timer_widget_flag */
 static const char *const widget_names[] =
 {
@@ -97,7 +117,7 @@ static void spu_game_log(uint32_t frames, const double *t)
 {
 	static const char *const names[] =
 	{
-		"copies", "shadows", "weather", "particles", "lights", "visibility", "sprites", "contrails",
+		"copies", "shadows", "weather", "particles", "lights", "visibility", "sprites", "contrails", "interpolation",
 	};
 	static const int kinds[][3] =
 	{
@@ -109,12 +129,13 @@ static void spu_game_log(uint32_t frames, const double *t)
 		{ SPU_GAME_VISIBILITY, 0, 0 },
 		{ SPU_GAME_SPRITES, 0, 0 },
 		{ SPU_GAME_CONTRAILS, 0, 0 },
+		{ SPU_GAME_INTERPOLATION, 0, 0 },
 	};
 	static const int waits[] =
 	{
 		_ps3_timer_spu_game_copy_wait, _ps3_timer_spu_game_shadow_wait, _ps3_timer_spu_game_weather_wait,
 		_ps3_timer_spu_game_particles_wait, _ps3_timer_spu_game_lights_wait, _ps3_timer_spu_game_visibility_wait,
-		_ps3_timer_spu_game_sprites_wait, _ps3_timer_spu_game_contrails_wait,
+		_ps3_timer_spu_game_sprites_wait, _ps3_timer_spu_game_contrails_wait, _ps3_timer_spu_game_interpolation_wait,
 	};
 	struct ps3_spu_game_statistics s, r;
 	char line[1536];
@@ -278,7 +299,7 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 	double frequency = (double)sysGetTimebaseFrequency(), scale = 1000.0 / frequency / frames;
 	double tick_scale = ps3_timer_game_ticks ? 1000.0 / frequency / ps3_timer_game_ticks : 0.0;
 	double rsx_scale = ps3_rsx_frames ? 1.0e-6 / ps3_rsx_frames : 0.0;
-	double t[_ps3_timer_count], k[_ps3_timer_count], r[_ps3_timer_count], frame = elapsed * scale;
+	double t[_ps3_timer_count], k[_ps3_timer_count], r[_ps3_timer_count], frame = elapsed * scale, effects_rest;
 	char line[1024];
 	unsigned long length;
 	int index;
@@ -289,12 +310,15 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		k[index] = ps3_timers[index] * tick_scale;
 		r[index] = ps3_rsx_timers[index] * rsx_scale;
 	}
-	/* the specular part is its splits' */
+	/* the specular part is its splits'; the effects part's RSX time too (the render line adds its CPU parts) */
 	for (index = _ps3_timer_specular_lights; index <= _ps3_timer_specular_fog; index++)
 	{
 		t[_ps3_timer_window_specular] += t[index];
 		r[_ps3_timer_window_specular] += r[index];
 	}
+	effects_rest = r[_ps3_timer_window_effects];
+	for (index = _ps3_timer_effects_weather; index <= _ps3_timer_effects_detail; index++)
+		r[_ps3_timer_window_effects] += r[index];
 	ps3_log_printf("[time] %u frames, %.1f fps, %.1f ms a frame: game ticks %.1f (%.2f a frame, %.1f ms each), "
 		"render %.1f, throttle wait %.1f, present %.1f, rest %.1f\n", (unsigned)frames, 1000.0 / frame, frame,
 		t[_ps3_timer_ticks], (double)ps3_timer_game_ticks / frames,
@@ -345,9 +369,11 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		(double)ps3_timer_counts[_ps3_timer_interpolation_rotations] / frames, t[_ps3_timer_interpolation_blend],
 		(double)ps3_timer_counts[_ps3_timer_interpolation_blend] / frames);
 	ps3_log_printf("[time] particles, ms a frame: particles_update %.2f (their physics %.2f; %.1f particles, %.1f with "
-		"physics), contrails %.2f, particle systems %.2f\n", t[_ps3_timer_particles_update],
-		t[_ps3_timer_particles_physics], (double)ps3_timer_counts[_ps3_timer_particles_update] / frames,
-		(double)ps3_timer_counts[_ps3_timer_particles_physics] / frames, t[_ps3_timer_contrails_update],
+		"physics), the SPU's taken %.2f (%.1f events), contrails %.2f, particle systems %.2f\n",
+		t[_ps3_timer_particles_update], t[_ps3_timer_particles_physics],
+		(double)ps3_timer_counts[_ps3_timer_particles_update] / frames,
+		(double)ps3_timer_counts[_ps3_timer_particles_physics] / frames, t[_ps3_timer_particles_finish],
+		(double)ps3_timer_counts[_ps3_timer_particles_finish] / frames, t[_ps3_timer_contrails_update],
 		t[_ps3_timer_particle_systems_update]);
 	ps3_log_printf("[time] point physics, ms a frame: %.2f (wind %.2f, rays %.2f; of them without surfaces %.2f); %.1f "
 		"calls and %.1f rays a frame (%.1f without surfaces)\n", t[_ps3_timer_point_total], t[_ps3_timer_point_wind],
@@ -647,6 +673,29 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 			(double)ps3_rsx_draws[_ps3_timer_specular_lights + index] / ps3_rsx_frames);
 	}
 	ps3_log_printf("%s\n", line);
+	/* the rest: from the last split to the window's end */
+	length = (unsigned long)snprintf(line, sizeof(line), "[time] effects part on the RSX, ms a frame (draws a frame):");
+	for (index = 0; index <= _ps3_timer_effects_detail - _ps3_timer_effects_weather && length < sizeof(line); index++)
+	{
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f)", index ? "," : "",
+			effects_names[index], r[_ps3_timer_effects_weather + index],
+			(double)ps3_rsx_draws[_ps3_timer_effects_weather + index] / ps3_rsx_frames);
+	}
+	ps3_log_printf("%s, the rest %.2f (%.1f)\n", line, effects_rest,
+		(double)ps3_rsx_draws[_ps3_timer_window_effects] / ps3_rsx_frames);
+	if (ps3_draw_stamp_frames)
+	{
+		length = (unsigned long)snprintf(line, sizeof(line), "[time] effects part's stamped draws by kind, ms a "
+			"stamped frame (draws):");
+		for (index = _ps3_stamp_effects_rest; index < _ps3_stamp_count && length < sizeof(line); index++)
+		{
+			length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %s %.2f (%.1f)",
+				index > _ps3_stamp_effects_rest ? "," : "", stamp_names[index - _ps3_stamp_effects_rest],
+				ps3_draw_stamp_part_nanoseconds[index] * 1.0e-6 / ps3_draw_stamp_frames,
+				(double)ps3_draw_stamp_part_draws[index] / ps3_draw_stamp_frames);
+		}
+		ps3_log_printf("%s\n", line);
+	}
 	if (ps3_timers_shaders_log)
 		ps3_timers_shaders_log();
 }
@@ -659,6 +708,9 @@ void ps3_timers_frame(void)
 
 	if (window_start && ++frames < TIMER_FRAMES)
 		return;
+	/* (the Direct3D SPU's timers since the window's start) */
+	if (ps3_timers_direct3d_collect)
+		ps3_timers_direct3d_collect();
 	if (window_start)
 		timers_log(frames, now - window_start);
 	memset(ps3_timers, 0, sizeof(ps3_timers));
@@ -691,6 +743,8 @@ void ps3_timers_frame(void)
 	memset(ps3_rsx_draws, 0, sizeof(ps3_rsx_draws));
 	memset(ps3_draw_stamp_nanoseconds, 0, sizeof(ps3_draw_stamp_nanoseconds));
 	memset(ps3_draw_stamp_draws, 0, sizeof(ps3_draw_stamp_draws));
+	memset(ps3_draw_stamp_part_nanoseconds, 0, sizeof(ps3_draw_stamp_part_nanoseconds));
+	memset(ps3_draw_stamp_part_draws, 0, sizeof(ps3_draw_stamp_part_draws));
 	ps3_draw_stamp_frames = 0;
 	ps3_draw_stamp_dropped = 0;
 	ps3_timer_game_ticks = 0;

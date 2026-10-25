@@ -1,4 +1,4 @@
-/* SPU_GAME.H: the game thread's jobs on two SPUs (spu_game.c): the checkpoint's copies and the particles' rays; the
+/* SPU_GAME.H: the game thread's jobs on two SPUs (spu_game.c): the checkpoint's copies and the particles' update; the
 render's shadows, weather, lights, visibility, sprites, contrails. The SPU, ps3_spu.c and the game's units share it. */
 
 #ifndef __HALO_PS3_SPU_GAME_H
@@ -23,7 +23,8 @@ render's shadows, weather, lights, visibility, sprites, contrails. The SPU, ps3_
 #define SPU_GAME_VISIBILITY 8
 #define SPU_GAME_SPRITES 9
 #define SPU_GAME_CONTRAILS 10
-#define SPU_GAME_KINDS 11
+#define SPU_GAME_INTERPOLATION 11
+#define SPU_GAME_KINDS 12
 
 /* a job's answer: done, or refused (the PPE does that job) */
 #define SPU_GAME_DONE 1
@@ -265,26 +266,86 @@ typedef struct
 	spu_game_weather_type types[SPU_GAME_WEATHER_TYPES];
 } spu_game_weather;
 
-/* ---------- PARTICLES: the effects' particles' rays (point_physics_update's loop after the forces) */
+/* ---------- PARTICLES: particles_update's loop (particles.c) over a range of the effects' particles: a free one whole
+(its age, frame time, forces and rays); the rest (attached ones, deaths, new sequences, contacts) left to the PPE */
 
-#define SPU_GAME_PARTICLES_MAXIMUM 1024
+/* the datums a job takes, at most */
+#define SPU_GAME_PARTICLES_RANGE 512
+#define SPU_GAME_PARTICLE_DEFINITIONS 128
+#define SPU_GAME_PARTICLE_SEQUENCES 38
+#define SPU_GAME_WIND_PALETTES 32
 
-/* a particle in, its answer out over it */
+/* a particle definition's values the loop reads, with its point physics' and its bitmap's sprite counts by sequence;
+in a slot by its tag index (SPU_GAME_PARTICLE_DEFINITION_SLOT and the 3 after it), NONE: an empty slot */
 typedef struct
 {
-	float position[3];
-	float dt;
-	float velocity[3];
-	float radius;
-	/* in: point_physics' collision flags (_collision_test_*); out: its result flags (_point_physics_*) */
+	int32_t definition_index;
 	uint32_t flags;
-	int32_t leaf_index;
-	int16_t cluster_index;
-	int16_t material_type;
+	float radius_bounds[2];
+	int16_t final_sequence_count;
+	int16_t sequence_count;
+	uint32_t physics_flags;
+	float mass_over_radius_cubed;
+	/* in air, in water */
+	float buoyancy[2];
+	float friction[2];
 	float contact_friction;
-	float collision_normal[3];
 	float elasticity;
-} spu_game_particle;
+	uint16_t sprite_counts[SPU_GAME_PARTICLE_SEQUENCES];
+} spu_game_particle_definition;
+
+#define SPU_GAME_PARTICLE_DEFINITION_SLOT(index) \
+	((((uint32_t)(index) * 2654435761u) >> 16) & (SPU_GAME_PARTICLE_DEFINITIONS - 1))
+
+/* a cluster's wind lookups (wind.c's wind_cluster_lookup): its weather palette entry, and its fog region's in effect
+below the fog plane (has_plane; else in all the cluster) raised by the water's distance, in water if region_water */
+typedef struct
+{
+	float plane[4];
+	float plane_distance;
+	int16_t weather_palette_index;
+	int16_t region_weather_palette_index;
+	int16_t region_water;
+	int16_t has_plane;
+	uint32_t pad;
+} spu_game_cluster_wind;
+
+/* a weather palette entry's wind (scenario_get_current_from_weather_palette's) */
+typedef struct
+{
+	float velocity3d[3];
+	float velocity;
+	float variation_weight;
+	float variation_rate;
+	float damping;
+	int32_t valid;
+} spu_game_wind_palette;
+
+/* a particle the PPE takes (particles_spu_finish): the whole loop there, or a contact (particle_update_physics_contact)
+with its result */
+#define SPU_GAME_PARTICLE_PPE 1
+#define SPU_GAME_PARTICLE_CONTACT 2
+
+typedef struct
+{
+	int32_t particle_index;
+	uint32_t kind;
+	uint32_t collision_flags;
+	int16_t material_type;
+	int16_t pad0;
+	float collision_normal[3];
+	uint32_t pad1;
+} spu_game_particle_event;
+
+/* a job's answer: the particles it updated whole, its events, and the datum it stopped at (its events full; the PPE
+takes the rest of the range) */
+typedef struct
+{
+	volatile uint32_t status;
+	volatile uint32_t updated;
+	volatile uint32_t event_count;
+	volatile int32_t end_index;
+} __attribute__((aligned(16))) spu_game_particles_answer;
 
 /* a cluster's water (collision_cluster_fog_plane's): the plane less the fog's distance; NONE: no water test */
 typedef struct
@@ -321,11 +382,33 @@ typedef struct
 	int32_t material_count;
 	/* _material_water */
 	int32_t water_material_type;
-	/* the particles (spu_game_particle each) and the answer */
-	uint32_t particles;
-	int32_t particle_count;
+	/* the particles' datums (datum_size bytes each) and this job's absolute indices; dt, the ticks it holds */
+	uint32_t datums;
+	int32_t datum_size;
+	int32_t first_index;
+	int32_t end_index;
+	float dt;
+	int32_t update_ticks;
+	/* render.frame_index, and the frame of the oldest tick particles_update keeps */
+	int32_t frame_index;
+	int32_t oldest_tick_frame_index;
+	/* the definitions' slots, the clusters' wind (structure.cluster_count of them), the weather palettes' */
+	uint32_t definitions;
+	uint32_t cluster_wind;
+	uint32_t palettes;
+	int32_t palette_count;
+	/* wind_globals.variance (3 x 64 vectors) and its time as a real */
+	uint32_t variance;
+	float wind_time;
+	/* the air's and water's mass over radius cubed; global_gravity at the ticks' rate squared */
+	float air_mass;
+	float water_mass;
+	float gravity;
+	/* the events (event_capacity of them) and the answer (spu_game_particles_answer) */
+	uint32_t events;
+	int32_t event_capacity;
 	uint32_t answer;
-	uint32_t pad[3];
+	uint32_t pad[2];
 } spu_game_particles;
 
 /* ---------- LIGHTS: a window pass's dynamic lights (structure_render_diffuse_light, _specular_light): each light's
@@ -527,15 +610,59 @@ typedef struct
 	uint32_t pad[3];
 } spu_game_contrails;
 
+/* ---------- INTERPOLATION: render_interpolation_tick's snapshots (render_interpolation.c), but of the objects whose
+records need more memory or draw a correction: the PPE takes those */
+
+typedef struct
+{
+	/* object_header_data's datums (header_size bytes each, header_count of them) and where a datum has its object (a
+	64-bit pointer); where an object has its node matrices' block reference (int16 size, int16 offset) */
+	uint32_t headers;
+	uint32_t header_size;
+	int32_t header_count;
+	uint32_t datum_offset;
+	uint32_t node_matrices_offset;
+	/* a node's bytes and the most a record takes */
+	int32_t node_size;
+	int32_t maximum_nodes;
+	/* the records (record_size bytes each, record_count of them) and their fields */
+	uint32_t records;
+	uint32_t record_size;
+	int32_t record_count;
+	uint16_t object_index_offset;
+	uint16_t tick_offset;
+	uint16_t node_count_offset;
+	uint16_t node_capacity_offset;
+	uint16_t has_previous_offset;
+	uint16_t latest_offset;
+	uint16_t blended_frame_offset;
+	uint16_t correction_offset;
+	uint16_t pending_offset;
+	uint16_t nodes_offset;
+	uint16_t rotations_valid_offset;
+	uint16_t pad0;
+	int32_t previous_tick;
+	int32_t tick;
+	/* the absolute indices (int16) of the objects left to the PPE: answer value, their count */
+	uint32_t deferred;
+	uint32_t answer;
+	/* the objects and nodes the SPU took */
+	int32_t object_count;
+	int32_t node_count;
+	uint32_t pad[2];
+} spu_game_interpolation;
+
 /* the SPU fetches and puts them whole */
 typedef char spu_game_layout_check[(sizeof(spu_game_structure) % 16 == 0 && sizeof(spu_game_shadow) % 16 == 0 &&
 	sizeof(spu_game_weather_sprites) % 16 == 0 && sizeof(spu_game_weather_type) % 16 == 0 &&
-	sizeof(spu_game_weather) % 16 == 0 && sizeof(spu_game_weather) <= 16384 && sizeof(spu_game_particle) == 64 &&
+	sizeof(spu_game_weather) % 16 == 0 && sizeof(spu_game_weather) <= 16384 &&
+	sizeof(spu_game_particle_definition) == 128 && sizeof(spu_game_cluster_wind) == 32 &&
+	sizeof(spu_game_wind_palette) == 32 && sizeof(spu_game_particle_event) == 32 &&
 	sizeof(spu_game_cluster_water) == 32 && sizeof(spu_game_particles) % 16 == 0 && sizeof(spu_game_light) == 64 &&
 	sizeof(spu_game_lights) % 16 == 0 && sizeof(spu_game_visibility_cluster) == 96 &&
 	sizeof(spu_game_visibility) % 16 == 0 && sizeof(spu_game_visibility) <= 16384 &&
 	sizeof(spu_game_sprite_particle) == 64 && sizeof(spu_game_sprite_group) == 160 &&
 	sizeof(spu_game_sprites) % 16 == 0 && sizeof(spu_game_contrail_point) == 32 && sizeof(spu_game_contrail) == 96 &&
-	sizeof(spu_game_contrails) % 16 == 0) ? 1 : -1];
+	sizeof(spu_game_contrails) % 16 == 0 && sizeof(spu_game_interpolation) == 96) ? 1 : -1];
 
 #endif

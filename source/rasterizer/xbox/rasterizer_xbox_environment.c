@@ -363,6 +363,11 @@ struct shader_transparent_water_definition
 static void rasterizer_environment_specular_spot_light_begin(
 	long light_index);
 
+#ifdef HALO_PS3
+/* port: d3d8_rsx.c's */
+void d3d8_light_bounds(const float *center, float half_size);
+#endif
+
 /* ---------- globals */
 
 static struct rasterizer_environment_globals rasterizer_environment_globals;
@@ -1105,6 +1110,10 @@ void _rasterizer_environment_diffuse_light_begin(
 		D3DDevice_SetRenderState(
 			D3DRS_PSCONSTANT0_0,
 			real_rgb_color_to_pixel32(&light->color));
+#ifdef HALO_PS3
+		/* port: its draws light only the distance attenuation's box (stage 2, 0 outside it and at its border) */
+		d3d8_light_bounds(&light->position.x, light->radius);
+#endif
 	}
 	return;
 }
@@ -1271,6 +1280,9 @@ void _rasterizer_environment_diffuse_lights_begin(
 void _rasterizer_environment_diffuse_lights_end(
 	void)
 {
+#ifdef HALO_PS3
+	d3d8_light_bounds(NULL, 0.0f); /* port: (the lights' end) */
+#endif
 	rasterizer_profile_end(_rasterizer_profile_environment_diffuse_lights);
 	return;
 }

@@ -26,6 +26,7 @@ upstream halo-ce-universal copy of source/effects/particles.c. */
 
 #ifdef HALO_PS3
 #include "physics/collisions.h"
+#include "physics/physics.h" /* port: global_gravity */
 #include "ps3_timers.h"
 #include "render/render_particles.h" /* port: render_particles_spu_dispose */
 
@@ -148,6 +149,16 @@ static boolean particle_update_frame_time(
 static boolean particle_update_physics(
 	long particle_index,
 	real dt);
+static void particle_update(
+	long particle_index,
+	real dt);
+#ifdef HALO_PS3
+static void particles_spu_definitions_clear(
+	void);
+static void particles_spu_define(
+	long definition_index,
+	struct particle_definition const *definition);
+#endif
 
 /* ---------- globals */
 
@@ -186,6 +197,9 @@ void particles_initialize_for_new_map(
 	void)
 {
 	data_make_valid(particle_data);
+#ifdef HALO_PS3
+	particles_spu_definitions_clear(); /* port: (particles.c) */
+#endif
 
 	return;
 }
@@ -195,6 +209,7 @@ void particles_dispose_from_old_map(
 {
 #ifdef HALO_PS3
 	particles_spu_forget(); /* port: (particles.c) */
+	particles_spu_definitions_clear();
 	render_particles_spu_dispose(); /* port: (render_particles.c) */
 #endif
 	data_make_invalid(particle_data);
@@ -214,6 +229,9 @@ void particles_dispose(
 void particle_delete(
 	long particle_index)
 {
+#ifdef HALO_PS3
+	particles_spu_finish(); /* port: (particles.c) */
+#endif
 	datum_delete(particle_data, particle_index);
 
 	return;
@@ -224,6 +242,9 @@ void particles_stop_on_first_person_weapon(
 {
 	long particle_index;
 
+#ifdef HALO_PS3
+	particles_spu_finish(); /* port: (particles.c) */
+#endif
 	for (particle_index = data_next_index(particle_data, NONE);
 		particle_index != NONE;
 		particle_index = data_next_index(particle_data, particle_index))
@@ -245,7 +266,7 @@ void particles_disconnect_from_structure_bsp(
 	void)
 {
 #ifdef HALO_PS3
-	particles_spu_forget(); /* port: (particles.c) */
+	particles_spu_finish(); /* port: (particles.c) */
 #endif
 	return;
 }
@@ -255,6 +276,9 @@ void particles_reconnect_to_structure_bsp(
 {
 	long particle_index;
 
+#ifdef HALO_PS3
+	particles_spu_finish(); /* port: (particles.c) */
+#endif
 	for (particle_index = data_next_index(particle_data, NONE);
 		particle_index != NONE;
 		particle_index = data_next_index(particle_data, particle_index))
@@ -578,7 +602,7 @@ static boolean particle_update_frame_time(
 }
 
 /* port: particle_update_physics's end: the rest, the direction, the rotation; and of a free particle its contacts
-first (particle_update_physics_contact): apart for its rays on an SPU (particles_spu_take) */
+first (particle_update_physics_contact): apart for the particles the SPU updates (particles_spu_finish) */
 static boolean particle_update_physics_rest(
 	long particle_index,
 	real dt,
@@ -814,6 +838,9 @@ void particle_new(
 	if (data->definition_index == NONE)
 		return;
 
+#ifdef HALO_PS3
+	particles_spu_finish(); /* port: (particles.c) */
+#endif
 	definition = particle_definition_get(data->definition_index);
 
 	if (data->object_index != NONE)
@@ -850,6 +877,9 @@ void particle_new(
 
 	if (particle_index == NONE)
 		return;
+#ifdef HALO_PS3
+	particles_spu_define(data->definition_index, definition); /* port: (particles.c) */
+#endif
 
 	particle = particle_get(particle_index);
 
@@ -984,183 +1014,297 @@ void particle_new(
 }
 
 #ifdef HALO_PS3
-/* port: the free particles' rays on an SPU (port/ps3/spu/spu_game.c): gathered by particles_update after their forces,
-a job each 64 (made while it gathers the next), taken by the next frame's particles_update first (their contacts then) */
+/* port: particles_update's loop on the game SPU (port/ps3/spu/spu_game.c), a job each SPU_GAME_PARTICLES_RANGE datums,
+made by particles_update and taken before the particles are read again (particles_spu_finish) */
 enum
 {
-	PARTICLES_SPU_BATCH = 64,
-	PARTICLES_SPU_JOBS = SPU_GAME_PARTICLES_MAXIMUM / PARTICLES_SPU_BATCH
+	PARTICLES_SPU_JOBS = HALO_PORT_MAXIMUM_PARTICLES / SPU_GAME_PARTICLES_RANGE,
+	PARTICLES_SPU_EVENTS = 128,
+	PARTICLES_SPU_PROBES = 4
 };
 
 static struct
 {
 	spu_game_particles jobs[PARTICLES_SPU_JOBS];
-	spu_game_answer answers[PARTICLES_SPU_JOBS];
-	spu_game_particle particles[SPU_GAME_PARTICLES_MAXIMUM];
-	long particle_indices[SPU_GAME_PARTICLES_MAXIMUM];
-	unsigned long results[SPU_GAME_PARTICLES_MAXIMUM];
-	unsigned long collision_flags[SPU_GAME_PARTICLES_MAXIMUM];
-	/* the bsp's part of each job (collision_spu_particles) */
-	spu_game_particles parameters;
-	long count;
-	long submitted;
+	spu_game_particles_answer answers[PARTICLES_SPU_JOBS];
+	spu_game_particle_event events[PARTICLES_SPU_JOBS][PARTICLES_SPU_EVENTS];
+	/* the definitions the new particles named (particles_spu_define), emptied with the map */
+	spu_game_particle_definition definitions[SPU_GAME_PARTICLE_DEFINITIONS];
 	long job_count;
 	/* the last job's: the jobs end in order */
 	uint32_t ticket;
 	real dt;
-	boolean gathering;
+	boolean pending;
 } __attribute__((aligned(128))) particles_spu;
+
+/* port: the datum's fields as the SPU reads them (spu_game.c's particle_datum) */
+typedef char particles_spu_layout_check[HALO_PORT_MAXIMUM_PARTICLES % SPU_GAME_PARTICLES_RANGE == 0 &&
+	offsetof(struct particle_datum, last_rendered_frame_index) == 0x10 &&
+	offsetof(struct particle_datum, frame_time) == 0x1C && offsetof(struct particle_datum, sequence_index) == 0x24 &&
+	offsetof(struct particle_datum, direction) == 0x3C &&
+	offsetof(struct particle_datum, translational_velocity) == 0x48 &&
+	offsetof(struct particle_datum, angular_velocity) == 0x58 && SPU_GAME_PARTICLE_DEFINITIONS % 4 == 0 ? 1 : -1];
 
 extern boolean debug_point_physics; /* port: point_physics.c */
 
-/* port: the particles gathered since the last job, as a job of their own */
-static void particles_spu_submit(
-	void)
-{
-	long count = particles_spu.count - particles_spu.submitted;
-	spu_game_particles *job = &particles_spu.jobs[particles_spu.job_count];
-	spu_game_answer *answer = &particles_spu.answers[particles_spu.job_count];
-
-	if (count <= 0 || particles_spu.job_count >= PARTICLES_SPU_JOBS)
-	{
-		return;
-	}
-	*job = particles_spu.parameters;
-	job->particles = PS3_SPU_EA(&particles_spu.particles[particles_spu.submitted]);
-	job->particle_count = count;
-	job->answer = PS3_SPU_EA(answer);
-	answer->status = 0;
-	particles_spu.ticket = ps3_spu_game_submit(SPU_GAME_PARTICLES, sizeof(*job), PS3_SPU_EA(job), 0);
-	particles_spu.submitted = particles_spu.count;
-	particles_spu.job_count++;
-}
-
-/* port: a free particle's update after its frame time: its forces now, its rays and contacts later; FALSE when it is
-not one the SPU takes */
-static boolean particles_spu_gather(
-	long particle_index,
-	real dt)
-{
-	struct particle_datum *particle = particle_get(particle_index);
-	struct particle_definition *definition;
-	struct point_physics_definition *physics;
-	spu_game_particle *entry;
-	unsigned long result;
-	unsigned long collision_flags;
-	real radius;
-
-	if (!particles_spu.gathering || particles_spu.count >= SPU_GAME_PARTICLES_MAXIMUM ||
-		TEST_FLAG(particle->flags, _particle_datum_at_rest_bit) || particle->object_index != NONE)
-	{
-		return FALSE;
-	}
-	definition = particle_definition_get(particle->definition_index);
-	physics = point_physics_definition_get(definition->physics.index);
-	radius = particle_get_radius(particle_index);
-	if (!point_physics_update_begin(physics, &particle->location, &particle->position, &particle->translational_velocity,
-		&radius, dt, &result, &collision_flags))
-	{
-		real_vector3d collision_normal = *global_zero_vector3d;
-
-		particle_update_physics_contact(particle_index, dt, result, &collision_normal, NONE);
-		return TRUE;
-	}
-	entry = &particles_spu.particles[particles_spu.count];
-	entry->position[0] = particle->position.x;
-	entry->position[1] = particle->position.y;
-	entry->position[2] = particle->position.z;
-	entry->dt = dt;
-	entry->velocity[0] = particle->translational_velocity.i;
-	entry->velocity[1] = particle->translational_velocity.j;
-	entry->velocity[2] = particle->translational_velocity.k;
-	entry->radius = radius;
-	entry->flags = collision_flags;
-	entry->leaf_index = particle->location.leaf_index;
-	entry->cluster_index = particle->location.cluster_index;
-	entry->material_type = NONE;
-	entry->contact_friction = physics->contact_friction;
-	entry->elasticity = physics->elasticity;
-	particles_spu.particle_indices[particles_spu.count] = particle_index;
-	particles_spu.results[particles_spu.count] = result;
-	particles_spu.collision_flags[particles_spu.count] = collision_flags;
-	particles_spu.count++;
-	if (particles_spu.count - particles_spu.submitted == PARTICLES_SPU_BATCH)
-	{
-		particles_spu_submit();
-	}
-
-	return TRUE;
-}
-
-/* port: the rays of the particles the last frame gathered, made by the SPU since (no wait), and their contacts: they
-move a frame late */
-static void particles_spu_take(
+static void particles_spu_definitions_clear(
 	void)
 {
 	long index;
 
-	if (!particles_spu.count)
+	for (index = 0; index < SPU_GAME_PARTICLE_DEFINITIONS; index++)
+	{
+		particles_spu.definitions[index].definition_index = NONE;
+	}
+}
+
+/* port: a definition's slot for the SPU, made once; none when its slots are taken (its particles stay the PPE's) */
+static void particles_spu_define(
+	long definition_index,
+	struct particle_definition const *definition)
+{
+	spu_game_particle_definition *slot = NULL;
+	struct point_physics_definition const *physics;
+	struct bitmap_group *bitmap;
+	long probe;
+	long sequence_index;
+
+	for (probe = 0; probe < PARTICLES_SPU_PROBES; probe++)
+	{
+		spu_game_particle_definition *entry = &particles_spu.definitions[
+			(SPU_GAME_PARTICLE_DEFINITION_SLOT(definition_index) + probe) & (SPU_GAME_PARTICLE_DEFINITIONS - 1)];
+
+		if (entry->definition_index == definition_index)
+		{
+			return;
+		}
+		if (entry->definition_index == NONE)
+		{
+			slot = entry;
+			break;
+		}
+	}
+	if (!slot)
 	{
 		return;
 	}
-	/* (a job the SPU did not end, or one it refused, is done here; its answer says which) */
-	ps3_spu_game_wait(particles_spu.ticket);
-	__sync_synchronize();
-	for (index = 0; index < particles_spu.count; index++)
+	physics = point_physics_definition_get(definition->physics.index);
+	bitmap = bitmap_group_get(definition->bitmap.index);
+	memset(slot, 0, sizeof(*slot));
+	slot->flags = definition->flags;
+	slot->radius_bounds[0] = definition->radius_lower_bound;
+	slot->radius_bounds[1] = definition->radius_upper_bound;
+	slot->final_sequence_count = definition->final_sequence_count;
+	slot->sequence_count = (int16_t)PIN(bitmap->sequences.count, 0, SPU_GAME_PARTICLE_SEQUENCES);
+	for (sequence_index = 0; sequence_index < slot->sequence_count; sequence_index++)
 	{
-		long particle_index = particles_spu.particle_indices[index];
-		struct particle_datum *particle = datum_try_and_get(particle_data, particle_index);
-		spu_game_particle const *entry = &particles_spu.particles[index];
-		real_vector3d collision_normal = *global_zero_vector3d;
-		short collision_material_type = NONE;
-		unsigned long collision_flags = particles_spu.results[index];
+		struct bitmap_group_sequence *sequence = TAG_BLOCK_GET_ELEMENT(
+			&bitmap->sequences,
+			sequence_index,
+			struct bitmap_group_sequence);
 
-		if (!particle)
-		{
-			continue;
-		}
-		if (particles_spu.answers[index / PARTICLES_SPU_BATCH].status == SPU_GAME_DONE)
-		{
-			particle->position.x = entry->position[0];
-			particle->position.y = entry->position[1];
-			particle->position.z = entry->position[2];
-			particle->translational_velocity.i = entry->velocity[0];
-			particle->translational_velocity.j = entry->velocity[1];
-			particle->translational_velocity.k = entry->velocity[2];
-			particle->location.leaf_index = entry->leaf_index;
-			particle->location.cluster_index = entry->cluster_index;
-			collision_flags |= entry->flags;
-			collision_normal.i = entry->collision_normal[0];
-			collision_normal.j = entry->collision_normal[1];
-			collision_normal.k = entry->collision_normal[2];
-			collision_material_type = entry->material_type;
-		}
-		else
-		{
-			struct particle_definition *definition = particle_definition_get(particle->definition_index);
-
-			collision_flags |= point_physics_update_end(point_physics_definition_get(definition->physics.index),
-				&particle->location, &particle->position, &particle->translational_velocity, &collision_normal,
-				&collision_material_type, entry->radius, particles_spu.dt, particles_spu.collision_flags[index]);
-		}
-		particle_update_physics_contact(particle_index, particles_spu.dt, collision_flags, &collision_normal,
-			collision_material_type);
+		slot->sprite_counts[sequence_index] = (uint16_t)PIN(sequence->sprites.count, 0, 0xFFFF);
 	}
-	particles_spu.count = 0;
+	slot->physics_flags = physics->flags;
+	slot->mass_over_radius_cubed = physics->runtime_mass_over_radius_cubed;
+	slot->buoyancy[0] = physics->runtime_air_buoyancy_scale;
+	slot->buoyancy[1] = physics->runtime_water_buoyancy_scale;
+	slot->friction[0] = physics->air_friction;
+	slot->friction[1] = physics->water_friction;
+	slot->contact_friction = physics->contact_friction;
+	slot->elasticity = physics->elasticity;
+	slot->definition_index = definition_index;
 }
 
-/* port: the rays not yet taken dropped once the SPU is done with them (their particles stay a frame), before the bsp,
-the map or the game state changes under them */
-void particles_spu_forget(
+/* port: the loop over the datums in [first_index, end_index), here */
+static void particles_update_range(
+	long first_index,
+	long end_index,
+	real dt)
+{
+	long particle_index;
+
+	for (particle_index = data_next_index(particle_data, first_index - 1);
+		particle_index != NONE && (particle_index & 0xFFFF) < end_index;
+		particle_index = data_next_index(particle_data, particle_index))
+	{
+		particle_update(particle_index, dt);
+	}
+}
+
+/* port: the loop on the SPU; FALSE when the SPU cannot take it */
+static boolean particles_spu_submit(
+	real dt)
+{
+	spu_game_particles parameters;
+	long first_index;
+	long count = particle_data->count;
+
+	particles_spu.job_count = 0;
+	particles_spu.ticket = 0;
+	if (!ps3_spu_game_running() || debug_point_physics)
+	{
+		return FALSE;
+	}
+	if (!count)
+	{
+		return TRUE;
+	}
+	if (!collision_spu_particles(&parameters) || !wind_spu_particles(&parameters))
+	{
+		return FALSE;
+	}
+	parameters.datums = PS3_SPU_EA(particle_data->data);
+	parameters.datum_size = particle_data->size;
+	parameters.dt = dt;
+	parameters.update_ticks = particles_update_ticks;
+	parameters.frame_index = render.frame_index;
+	parameters.oldest_tick_frame_index =
+		particles_tick_frame_indices[(particles_tick_frame_head + 1) % NUMBEROF(particles_tick_frame_indices)];
+	parameters.definitions = PS3_SPU_EA(particles_spu.definitions);
+	point_physics_air_and_water_masses(&parameters.air_mass, &parameters.water_mass);
+	parameters.gravity = (global_gravity * TICKS_PER_SECOND) * TICKS_PER_SECOND;
+	parameters.event_capacity = PARTICLES_SPU_EVENTS;
+	particles_spu.dt = dt;
+	for (first_index = 0; first_index < count; first_index += SPU_GAME_PARTICLES_RANGE)
+	{
+		long job_index = particles_spu.job_count++;
+		spu_game_particles *job = &particles_spu.jobs[job_index];
+		spu_game_particles_answer *answer = &particles_spu.answers[job_index];
+		uint32_t ticket;
+
+		*job = parameters;
+		job->first_index = first_index;
+		job->end_index = MIN(first_index + SPU_GAME_PARTICLES_RANGE, count);
+		job->events = PS3_SPU_EA(particles_spu.events[job_index]);
+		job->answer = PS3_SPU_EA(answer);
+		answer->status = 0;
+		/* (a job not made is the PPE's at the take, as one refused) */
+		ticket = ps3_spu_game_submit(SPU_GAME_PARTICLES, sizeof(*job), PS3_SPU_EA(job), 0);
+		if (ticket)
+		{
+			particles_spu.ticket = ticket;
+		}
+	}
+	particles_spu.pending = TRUE;
+
+	return TRUE;
+}
+
+/* port: the SPU's loop taken: the particles it left to the PPE, then what it did not reach */
+void particles_spu_finish(
 	void)
 {
-	if (particles_spu.count)
+	uint64_t ps3_span;
+	long job_index;
+
+	if (!particles_spu.pending)
+	{
+		return;
+	}
+	particles_spu.pending = FALSE;
+	ps3_span = ps3_timer_now();
+	/* (a job the SPU did not end, or one it refused, is done here; its answer says which) */
+	if (particles_spu.ticket)
 	{
 		ps3_spu_game_wait(particles_spu.ticket);
 	}
-	particles_spu.count = 0;
+	__sync_synchronize();
+	for (job_index = 0; job_index < particles_spu.job_count; job_index++)
+	{
+		spu_game_particles const *job = &particles_spu.jobs[job_index];
+		spu_game_particles_answer const *answer = &particles_spu.answers[job_index];
+		long first_index = job->first_index;
+
+		if (answer->status == SPU_GAME_DONE && answer->end_index >= job->first_index &&
+			answer->end_index <= job->end_index && answer->event_count <= PARTICLES_SPU_EVENTS)
+		{
+			uint32_t event_index;
+
+			for (event_index = 0; event_index < answer->event_count; event_index++)
+			{
+				spu_game_particle_event const *event = &particles_spu.events[job_index][event_index];
+
+				if (!datum_try_and_get(particle_data, event->particle_index))
+				{
+					continue;
+				}
+				if (event->kind == SPU_GAME_PARTICLE_CONTACT)
+				{
+					real_vector3d collision_normal;
+
+					collision_normal.i = event->collision_normal[0];
+					collision_normal.j = event->collision_normal[1];
+					collision_normal.k = event->collision_normal[2];
+					particle_update_physics_contact(event->particle_index, particles_spu.dt, event->collision_flags,
+						&collision_normal, event->material_type);
+				}
+				else
+				{
+					particle_update(event->particle_index, particles_spu.dt);
+				}
+			}
+			ps3_timer_counts[_ps3_timer_particles_update] += answer->updated;
+			ps3_timer_counts[_ps3_timer_particles_finish] += answer->event_count;
+			first_index = answer->end_index;
+		}
+		particles_update_range(first_index, job->end_index, particles_spu.dt);
+	}
+	ps3_timer_add(_ps3_timer_particles_finish, ps3_span);
+}
+
+/* port: the SPU's loop dropped once it is done with the particles (a game state loaded over them, the map gone) */
+void particles_spu_forget(
+	void)
+{
+	if (particles_spu.pending && particles_spu.ticket)
+	{
+		ps3_spu_game_wait(particles_spu.ticket);
+	}
+	particles_spu.pending = FALSE;
 }
 #endif
+
+/* port: particles_update's loop body, also for the particles the SPU leaves to the PPE (particles_spu_finish) */
+static void particle_update(
+	long particle_index,
+	real dt)
+{
+	struct particle_datum *particle = particle_get(particle_index);
+	struct particle_definition *definition = particle_definition_get(particle->definition_index);
+	boolean was_new = (particle->age == 0.0f);
+
+	if (render.frame_index - particle->last_rendered_frame_index >
+		MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT &&
+		particle->last_rendered_frame_index < particles_tick_frame_indices[
+			(particles_tick_frame_head + 1) % NUMBEROF(particles_tick_frame_indices)])
+	{
+		datum_delete(particle_data, particle_index);
+	}
+	else
+	{
+		particle->age = dt + particle->age;
+
+		if (particle->age >= particle->lifespan &&
+			!was_new &&
+			!definition->final_sequence_count)
+		{
+			particle_die(particle_index);
+		}
+		else
+		{
+			PS3_PARTICLES_COUNT(_ps3_timer_particles_update); /* port: (the timer build) */
+			if (particle_update_frame_time(particle_index, dt))
+			{
+				PS3_PARTICLES_PHYSICS_BEGIN(); /* port: (the timer build) */
+				particle_update_physics(particle_index, dt);
+				PS3_PARTICLES_PHYSICS_END(); /* port: (the timer build) */
+			}
+		}
+	}
+
+	return;
+}
 
 void particles_update(
 	real dt)
@@ -1169,14 +1313,7 @@ void particles_update(
 
 	profile_enter(particles_update_section);
 #ifdef HALO_PS3
-	particles_spu_take();
-	particles_spu.count = 0;
-	particles_spu.submitted = 0;
-	particles_spu.job_count = 0;
-	particles_spu.ticket = 0;
-	particles_spu.dt = dt;
-	particles_spu.gathering = ps3_spu_game_running() && !debug_point_physics &&
-		collision_spu_particles(&particles_spu.parameters);
+	particles_spu_finish(); /* port: the last frame's, when nothing read the particles since */
 #endif
 
 	{
@@ -1195,52 +1332,16 @@ void particles_update(
 		}
 	}
 
+#ifdef HALO_PS3
+	/* port: the loop on the SPU, taken before the particles are read again (particles_spu_finish) */
+	if (!particles_spu_submit(dt))
+#endif
 	for (particle_index = data_next_index(particle_data, NONE);
 		particle_index != NONE;
 		particle_index = data_next_index(particle_data, particle_index))
 	{
-		struct particle_datum *particle = particle_get(particle_index);
-		struct particle_definition *definition = particle_definition_get(particle->definition_index);
-		boolean was_new = (particle->age == 0.0f);
-
-		if (render.frame_index - particle->last_rendered_frame_index >
-			MAXIMUM_PARTICLE_UNRENDERED_FRAME_COUNT &&
-			particle->last_rendered_frame_index < particles_tick_frame_indices[
-				(particles_tick_frame_head + 1) % NUMBEROF(particles_tick_frame_indices)])
-		{
-			datum_delete(particle_data, particle_index);
-		}
-		else
-		{
-			particle->age = dt + particle->age;
-
-			if (particle->age >= particle->lifespan &&
-				!was_new &&
-				!definition->final_sequence_count)
-			{
-				particle_die(particle_index);
-			}
-			else
-			{
-				PS3_PARTICLES_COUNT(_ps3_timer_particles_update); /* port: (the timer build) */
-				if (particle_update_frame_time(particle_index, dt))
-				{
-					PS3_PARTICLES_PHYSICS_BEGIN(); /* port: (the timer build) */
-#ifdef HALO_PS3
-					/* port: a free particle's rays on an SPU (particles_spu_gather) */
-					if (!particles_spu_gather(particle_index, dt))
-#endif
-					particle_update_physics(particle_index, dt);
-					PS3_PARTICLES_PHYSICS_END(); /* port: (the timer build) */
-				}
-			}
-		}
+		particle_update(particle_index, dt); /* port: the loop's body (particle_update) */
 	}
-
-#ifdef HALO_PS3
-	particles_spu_submit(); /* port: (the last particles gathered) */
-	particles_spu.gathering = FALSE;
-#endif
 
 	profile_exit(particles_update_section);
 

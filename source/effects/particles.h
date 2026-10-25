@@ -179,7 +179,9 @@ void particle_new(
 void particles_update(
 	real dt);
 #ifdef HALO_PS3
-/* port: the free particles' rays from the SPU not yet taken, dropped (particles.c) */
+/* port: the SPU's particles_update taken, before the particles are read; or dropped (particles.c) */
+void particles_spu_finish(
+	void);
 void particles_spu_forget(
 	void);
 #endif

@@ -148,6 +148,12 @@ static const struct config_setting config_settings[] =
 		"The controller's buttons in the menus and messages: \"xbox\" for the\n"
 		"maps' own; the PS3's \"style_a\" (colored circles, white symbols) or\n"
 		"\"style_b\" (black circles, colored symbols)." },
+	{ "display.half_resolution_particles", _config_boolean, "false", "HALO_HALF_RESOLUTION_PARTICLES",
+		_environment_value, _platform_android,
+		"Draw the effects in front of every other transparent surface (the\n"
+		"nearest particles) at half the width and height, then blend them over\n"
+		"the frame: faster with many of them, a little softer; false draws them\n"
+		"as the Xbox does." },
 #endif
 	{ "display.shadow_resolution", _config_integer, "128", "HALO_SHADOW_RESOLUTION", _environment_value,
 		_platform_all,

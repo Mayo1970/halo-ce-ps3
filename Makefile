@@ -247,7 +247,7 @@ BIN2S      := $(PS3DEV)/bin/bin2s
 # no fused multiply-adds: the same float operations as the PPE's mixer (dsound_ps3.c)
 SPU_CFLAGS := -std=gnu99 -O2 -Wall -ffp-contract=off -ffunction-sections -fdata-sections \
               -I$(PSL1GHT)/spu/include -I$(PS3_DIR)/spu
-SPU_PROGRAMS := spu_mixer spu_vertices spu_game
+SPU_PROGRAMS := spu_mixer spu_vertices spu_game spu_direct3d
 SPU_OBJS     := $(patsubst %,$(BUILD)/spu/%.bin.o,$(SPU_PROGRAMS))
 
 $(BUILD)/spu/%.elf: $(PS3_DIR)/spu/%.c $(wildcard $(PS3_DIR)/spu/*.h)

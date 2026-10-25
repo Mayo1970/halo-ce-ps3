@@ -53,6 +53,98 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-25: the lights' bounds built (Matt: "Can we do 1 and 3?": the PC
+  check of the attenuation outside each light, then a scissor and the depth
+  bounds test). The check: only the diffuse lights' draws give exactly 0
+  outside their attenuation box; the point lights' specular does not (the
+  loading screen leaves stage 1's border colour at 0x05050505,
+  `progress_bar.c`: up to 10 / 255, 20 overbright), the spot lights'
+  falloff is the vertex fog. Built for the diffuse lights only: a scissor
+  and the RSX's depth bounds test from the light's box (`d3d8_light_bounds`,
+  both paths). PC checks: see the Log. PKG of 19:54 in
+  `build/ps3_lights/` (the tree of 18:48 and this change). Not tested on
+  the PS3. Not committed.
+- 2026-10-25: proposal 4 of the 17:53 run built (Matt: "Clean up change
+  1."): no KIL where the draw's own alpha test already removes its
+  fragments (`alpha_test_removes`, both paths: the fog's), and the run's
+  29 other new keys in `port/ps3/shader_keys.txt` (386 in the pack). PC
+  checks: see the Log. PKG of 18:48 in `build/ps3_d3d/`. Not tested on
+  the PS3. Not committed. A shader sweep would drop the kill keys:
+  `sweep_d3d.c` does not make the kill mode. Matt ended the session
+  before the run (19:00): our listener stopped, nothing logged; UDP 18194
+  is free.
+- 2026-10-25: the 17:53 PKG run on b40 (Matt: "Done. Check it out. The
+  framerate tanks whenever the shaders or the particles were on screen
+  basically."): a clean exit; 59.9 / 54.25 fps (medians of 68 play
+  windows / the 4 under 56 fps), 59.0 on average: as the 14:43 runs. The
+  drops are the RSX's: 16.2 and 16.8 ms a frame in the slowest windows
+  (the specular part 7.4 / 6.4, of it the lights' specular 4.1 / 3.2;
+  effects 1.9 / 3.1). Step 1's effect cannot be seen (the scenes differ;
+  the specular passes cost about 45 % more a draw, with and without the
+  kill); step 2 was off (its default); step 3 works (0.01 ms a frame on
+  the game thread, the finish 0.07). 31 kill keys translated at draws.
+  Next: Matt's choice among the Log's four proposals. Our listener
+  stopped; UDP 18194 is free.
+- 2026-10-25: proposals 1 to 3 of the 14:43 run built (Matt: "Do 1-3"):
+  (1) the fragments a blend leaves the target unchanged by are killed
+  (alpha 0 by the RSX's alpha test; the add, the premultiplied blend, the
+  multiply, min and max by a KIL in the program: the kill mode in the
+  fragment key), the same picture; (2) `display.half_resolution_particles`
+  (false by default, `config.toml` only): the nearest effects drawn at
+  half width and height, then blended over the frame; (3)
+  `particles_update`'s loop on the game SPU, taken before the particles
+  are read again. PC checks: see the Log. PKG of 17:53 in
+  `build/ps3_d3d/`, run on b40 (the bullet above). Not committed. The kill
+  mode's new keys are translated at draws (logged): put them in
+  `port/ps3/shader_keys.txt` after the run.
+- 2026-10-25: the 14:43 PKG run on b40 (Matt: "Done. I still think the
+  main cost are the particles."): a clean exit; 59.6 / 54.5 fps (medians
+  of 31 play windows / the 2 under 56 fps), 58.6 fps on average (the
+  13:23 run 57.9). Pixel shader 76: 107 to 78 us a draw. The particles on
+  the RSX: 1.2 ms a frame (median), 1.4 in the windows of over 200
+  particles, 3.1 to 3.7 ms (23 to 27 % of the RSX) in 4 of them: about 10
+  draws of large blended sprites, about 300 us each (their shader 5
+  slots, 2 registers: the cost is fill). On the game thread 1.6 ms a
+  frame in those windows (2.2 at 614 particles). The lights pass and the
+  lights' specular on the RSX 4.0 ms in the same windows. The 2 slow
+  windows: one the RSX's (the lights and specular), one the game
+  thread's (18.1 ms of work). Next: Matt's choice among the Log's four
+  proposals. Our listener stopped; UDP 18194 is free.
+- 2026-10-25: proposals 1 to 3 of the 13:23 run built (Matt: "I'd say
+  make 1, 2 and 3"): the effects pass split on the RSX (every frame by
+  step; one frame in eight by kind: particles, particle systems,
+  contrails, the transparent shaders by type), the Direct3D SPU's timers
+  right, and pixel shader 76 (the dynamic lights' specular) at 36
+  instructions, 51 slots and 4 registers (was 39, 58, 7) with the same
+  results. PC checks: see the Log. PKG of 14:43 in `build/ps3_d3d/`, run
+  on b40 (the bullet above). Not committed.
+- 2026-10-25: G10's PKG of 13:23 run on b40 (Matt: "Done. I think the
+  major cost comes from particles and effects"): a clean exit; 59.5 /
+  54.0 fps (medians of the play windows / those under 56 fps). The game
+  thread waits 7.8 ms a frame in present. 5 of the 6 slow windows are the
+  RSX's (14 to 18 ms a frame), 1 the BSP swap. Their RSX time over the
+  median is mostly effects (+3.1 ms) and the specular's dynamic lights
+  (+2.15). The Direct3D SPU's own timers are wrong (`bell_wait` sets the
+  decrementer again). Next: Matt's choice among the Log's four
+  proposals (he chose 1 to 3: the bullet above).
+- 2026-10-25: G10 built (Matt: "Do The Direct3D thread's work on an SPU
+  and render_interpolation_tick"; the probe, step 1, skipped). The
+  records, the draw state and the RSX commands run on an SPU
+  (`spu_direct3d.c`); the PPE's service thread calls its chunks of
+  commands and answers its requests (`d3d8_rsx.c`). The render
+  interpolation's snapshots of a tick run on the game SPU (`spu_game.c`,
+  INTERPOLATION). The dynamic resolution (step 4) is not built. PC checks:
+  the same RSX commands as HEAD's Direct3D thread (`d3dcheck`), the same
+  records as the PPE's walk (`interp`); see the Log. `check` passed. PKG of
+  13:23 in `build/ps3_d3d/`, run on b40 (the bullet above). Not committed;
+  `port/ps3/xbox/hud_hires_rsx.c` (changed) is in no commit: `.gitignore`'s
+  `xbox/` ignores it.
+- 2026-10-25: Matt chose the next goal, G10: the Direct3D thread's work on
+  an SPU, with a dynamic resolution in the SPU's commands (GOALS.md, "G10
+  plan"). Not started; step 1 is a probe of the shared core's cost. The node matrices on an SPU with rounding to nearest
+  (doubles) were estimated again: 0 to 0.2 ms a frame (the PPE waits for
+  each object; only the matrices step, about 0.5 ms a tick, can move).
+  Not built.
 - Handoff (2026-10-24, end of the session; Matt: "Update ROADMAP. I'll
   start a new session."): the next work is still the frame rate in heavy
   combat (b40). The slow windows' game thread: 19.45 ms a frame (51.5 fps
@@ -859,6 +951,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20; on hardware 2026-10-22 the kept boxes crashed the game thread twice (step 627, the transparent sort; cause not found): taken out (Matt: option 2), then a clean run (the weather in the snow 1.27 to 0.86 ms a frame); the stream buffers' blocks (no heap fragments: 22.3 MB free at the end, before 19.3), the sphere query on the kept blocks (13.3 to 10.3 us a call; the same answer: PC check), `render_model_parts` and the shadows timed inside: run on hardware 2026-10-22 (SUCCESS); the SPU candidates written down (the Log); the game thread's jobs on a third SPU (the checkpoint's copies, the shadows' surfaces, the weather, the particles' rays; PC check on the 23 maps): built 2026-10-22, run on hardware 2026-10-22 (the checkpoint 12.9-15.1 to 3.1 ms; the shadows' surfaces 103 to 4.7 us a shadow; the weather 1.2 to 0.05 ms a frame; the particles 3.8 to 2.9 us each); the pixel shaders' copies on the conversions' SPU and the particles' rays taken a frame late: built 2026-10-22 |
 | G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0); file reads in 128 KB calls (the BSP switch's stutter), the decals' batch in one call, the shadows' sort and triangles on the render SPU: built 2026-10-22; the handoff's items 2 to 4 (the generic shaders' definitions kept, the decals' vertices converted by the SPU, the shadows' kept node matrices and parts; Matt skipped 1 and 5): built 2026-10-24, run on hardware 2026-10-24 (the generic definitions all kept; the shadow models 78 to 57 us; the parts' setup never kept); the decals of a layer in one order over its clusters, the shadows' kept node matrices by hash, the transparent sort's model bounds in exact VMX, the server browser's log: built 2026-10-24, run on hardware 2026-10-24 (59.4 / 54.9 fps on median; the browser works: 28 to 34 games; the shadows and the sort no faster); the timers inside the model draws, the Direct3D thread, the node matrices, the render interpolation and the file reads, then the draw prologue's compares, the index ranges, the uniforms and the scissor: run on hardware 2026-10-24 (a draw's Direct3D work on the game thread 6.1 to 4.2 us; 59.6 / 51.5 fps) |
+| G10 The Direct3D thread's work on an SPU, so that the game thread has the PPE's core alone; and a dynamic resolution for the views where the RSX sets the rate (Matt, 2026-10-25) | The plan and the evidence: GOALS.md ("G10 plan"). The Direct3D thread's work on an SPU and the render interpolation's tick on the game SPU: built 2026-10-25 (PC checks: the same RSX commands, the same records), run on hardware 2026-10-25 (b40, a clean exit; 59.5 / 54.0 fps; the game thread waits 7.8 ms a frame; the RSX sets the rate in the heavy windows); the run's proposals 1 to 3 (the effects pass split on the RSX, the SPU's timers, pixel shader 76) built and run on hardware 2026-10-25 (pixel shader 76 107 to 78 us a draw; the particles 1.2 ms a frame on the RSX on median, up to 3.7); that run's proposals 1 to 3 (the unchanged fragments killed, the half resolution particles as a setting, `particles_update` on the game SPU) built 2026-10-25, PKG of 17:53, run on b40 the same day (59.9 / 54.25 fps; the drops the RSX's: the specular part, the effects); the kill's clean-up built 2026-10-25, PKG of 18:48, not tested on the PS3; the dynamic resolution not built |
 
 ## G9 analysis (2026-10-22)
 
@@ -4943,3 +5036,442 @@ then `./build.sh pkg LOG_IP=<address>`.
     record (begin, the pairs, commit) and the timers' reads.
   - The Direct3D thread as in the 23:54 run: draw state 7.97 us
     (textures 2.93, the fragment program found 0.60).
+- 2026-10-25: G10, the Direct3D thread's work on an SPU and the render
+  interpolation's tick (Matt: "Do The Direct3D thread's work on an SPU and
+  render_interpolation_tick"). The probe (step 1) skipped: Matt asked for
+  the work. The dynamic resolution (step 4) not built.
+  - The SPU (`port/ps3/spu/spu_direct3d.c`, `spu_direct3d.h`): the
+    records' loop of `d3d8_rsx.c` (states, textures, shaders, constants,
+    viewport, targets, clears, draws, immediate mode, elements, the
+    timestamps and draw stamps, the present) and the state caches of
+    `ps3_gpu.c`, function for function; the RSX commands written by the SPU
+    in librsx's words into chunks of a 6 MB ring (the host buffer's IO
+    memory past the 1 MB command buffer), each ending in a RETURN. Its
+    floats as the PPE's: each operation in double, rounded once; compares
+    and conversions on the bits. The tables it keeps in main memory:
+    textures (2,048), the vertex cache's arrays (4,096) and index arrays
+    (2,048), pixel shaders (the pack's 357 and 512 more), each with an LS
+    cache.
+  - The PPE (`d3d8_rsx.c`): a service thread calls the published chunks
+    from the command buffer (`ps3_gpu_call_chunks`) and answers the SPU's
+    requests: a texture's upload and its button icon's texture, a
+    placeholder's texture, a render target's memory (and ZCull's state),
+    a pixel or vertex shader translated at a draw, the RSX idle (before
+    the vertex arena is used again, or the ring's room the RSX still
+    reads), the present's start (the flip's slot, the display buffer) and
+    end (the flip, the next frame: `ps3_gpu_present_begin_spu`,
+    `_end_spu`), frees, the vertex arena, the statistics' log. The game
+    thread's records and waits are those of the Direct3D thread (the SPU
+    puts its progress in an echo; an event when the game thread waits).
+    The Direct3D thread stays as the fallback: the SPU not started, or
+    its first chunk (a label) not on the RSX in 200 ms.
+  - `render_interpolation.c`: the tick's walk on the game SPU
+    (`spu_game.c`, INTERPOLATION: the objects' node matrices into their
+    records' next snapshots, 32 objects a round); the objects whose
+    records need more memory or draw a correction are left to the PPE,
+    which takes them after it. The game thread waits for the job.
+  - PC check `d3dcheck` (qemu-ppc64, the method of `ps3-drawcheck-method`):
+    `d3d8_rsx.c`, `ps3_gpu.c` and `ps3_video.c` whole, HEAD's (the PPE
+    thread) and the tree's (the SPU image in flycastPS3's spusim, its
+    events and reservations), over a fake RSX that takes the command
+    buffer at each flush (JUMP, CALL, RETURN followed) and logs each
+    method, and for each draw the hashes of the vertices, indices, pixel
+    shader and textures it reads. A random run of the game's calls
+    (states, the pack's pixel and vertex shaders and some not in it, 2D,
+    cube, volume, P8, DXT and linear textures in and out of the texture
+    cache, Lock 0, palettes, render to texture with two targets on one
+    data, button icons and placeholders, static and copied vertices and
+    indices, immediate mode, decals, clears, viewports, constants,
+    timestamps and stamps, screen width changes, overlays, tag cache
+    loads, stretches without frames): the same logs for 13 seeds × 8,000
+    steps (4,000 to 7,300 draws each), 3 seeds × 24,000 steps (7,400
+    frames: idle textures freed), and with a 1 MB record ring and 256 KB
+    of chunks (the same but the SPU's idle waits at the ring's wraps).
+    Faults: 13 of 14 found (the 14th, single-precision multiplies, gives
+    the same results for the device's values; the image multiplies in
+    double: checked in its code).
+  - Found and fixed by it: `byte_floats` not 16-aligned (a DMA error on
+    the SPU's first transfer); the texture answers (an upload's epoch and
+    the texture cache's flush only when texels were written:
+    `ps3_gpu_textures_written_count`). Not changed (the scenario's
+    excesses; the game is far under them): more than 4,096 arrays or 512
+    pixel shaders translated at draws are drawn without the cache, or not
+    drawn. Also fixed (not seen in a simulator): a table slot fetched or
+    reused while its write's DMA was in flight.
+  - PC check `interp`: the INTERPOLATION job (the SPU image in spusim)
+    against the PPE's walk over 200 random ticks (objects made, deleted
+    and changed, records grown, corrections drawn, a null datum), 6
+    seeds: 0 records apart. About 1,700 SPU cycles an object of 4 nodes
+    (0.3 ms a tick at b40's 595 objects; the PPE 0.93).
+  - Comments over 2 lines: none of ours. `check`: 0 `r2off`, `.got`
+    0x8938. LS: `spu_direct3d` 198 KB, `spu_game` 225 KB. PKG of 13:23 in
+    `build/ps3_d3d/`. Not tested on the PS3. In the log at the start:
+    `[spu] direct3d up` and `Direct3D: the records run on an SPU`.
+- 2026-10-25: The 13:23 PKG (G10: the Direct3D SPU, the interpolation
+  job) on hardware (b40; Matt: "Done. I think the major cost comes from
+  particles and effects"): `[ps3] exit 0`, `[spu] direct3d up`, the
+  records on the SPU (357 pixel shaders in its table), no draw skipped, 0
+  refused, the lowest free main memory 18.0 MB; the same pixel shader not
+  in the pack translated at a draw (`01201140` ...). Medians of 30 play
+  windows (2.6 min) / the 6 under 56 fps: 59.5 / 54.0 fps; average 57.9
+  fps over the play time (the 01:46 run 57.3); 16 of 30 windows at 59.5
+  or more; 324 / 412 draws a frame.
+  - The game thread waits for the Direct3D SPU: present 7.85 / 7.75 ms a
+    frame. Its work: ticks 2.65 / 3.35, render 6.15 / 7.65 (the 23:54
+    run's slow windows: ticks 4.6, render 10.45, almost no wait); its
+    Direct3D draws 0.94 / 1.26 (the 22:23 run's slow windows 2.4). The
+    render interpolation's tick 0.19 ms (0.93 in the 21:32 run; 0.35 in
+    the heaviest window): the job 164 / 167 us, the game thread's wait for
+    it 0.10 ms a frame.
+  - The slow windows: 5 are the RSX's (windows 23, 25, 26, 27, 37: the
+    RSX 14.0 to 18.0 ms a frame; the Direct3D SPU's waits for the RSX 3.1
+    to 5.3 ms a frame, timed by the PPE in `ps3_gpu.c`); 1 is the BSP swap
+    (window 28: `cache001.map`'s 5,386 KB read in 566 ms, the swap 58 ms;
+    the RSX 12.0).
+  - The RSX, ms a frame (all / slow): 10.4 / 17.1. Specular 4.2 / 6.0:
+    its dynamic lights 1.11 / 3.26 (13.6 / 31.9 draws; pixel shader 76,
+    58 slots, 7 registers: 3.4 ms for 27 draws in window 37), reflections
+    1.33 / 1.65, fog 0.79 / 0.77, reflection masks 0.53 / 0.57. Effects
+    0.65 / 3.75 (not split on the RSX: particles, contrails, weather and
+    the transparent shaders together). Lights 0.95 / 1.65, lightmaps 1.4 /
+    1.35, objects 0.9, diffuse 0.85, visibility 0.4, present 0.5. The slow
+    windows' 6.7 ms over the median: effects +3.1, the specular's dynamic
+    lights +2.15, lights +0.7.
+  - The particles (Matt's view): 101 / 334 a frame. The game thread:
+    `particles_update` 0.23 / 0.70 (physics 0.10 / 0.29), the effects
+    pass's particles 0.14 / 0.54, transparent 0.59 / 0.66 (effect groups
+    4.9 / 14.9 a frame); the particles' SPU jobs 2.0 / 5.3 a frame, 74 /
+    89 us each. The heaviest window (37, 618 particles): ticks 6.2 and
+    render 9.4 ms a frame, present wait 2.5; `particles_update` 1.30, the
+    effects pass's particles 1.03; the RSX's effects 5.0. The effects set
+    the rate through the RSX (the effects part, and the dynamic lights the
+    fights add), not through the game thread.
+  - Wrong in the log: the Direct3D SPU's own timers (busy, draw state,
+    records: "busy 45210.2", "textures 544.29" ms a frame). `bell_wait`
+    sets the decrementer again at each 1 ms timeout, so a span over a
+    wait is wrong. Its counts of chunks, bytes and requests add up over
+    the run (not reset each window). The flip's and the RSX's waits are
+    the PPE's (right).
+  - Proposed (for Matt; not built): (1) the RSX's effects part split
+    (particles, contrails, weather, the transparent shaders by type) with
+    stamps, as the specular part has; (2) the Direct3D SPU's timers right
+    (a base that takes the decrementer's new start) and its counts reset
+    each window; (3) a cheaper translated program for pixel shader 76;
+    (4) the dynamic resolution (G10 step 4).
+- 2026-10-25: Proposals 1 to 3 of the 13:23 run (Matt: "I'd say make 1, 2
+  and 3"):
+  - 1, the effects pass on the RSX. Its parts are timestamp splits now
+    (`render.c`: weather, particles, contrails, transparent (the water's
+    groups and the rest), decals, detail objects), so `[time] effects part
+    on the RSX` gives each one's RSX time and draws every frame; the RSX
+    line's effects part is their sum. 64 timestamps a frame (was 48). The
+    draw stamps (one frame in eight) go on through the effects pass, each
+    draw in a part (`ps3_timers.h`'s `_ps3_stamp_*`): the weather, the
+    decals, the detail objects, the rest; a transparent group by its maker
+    (particles, particle systems, contrails: `ps3_transparent_origin`,
+    which `render.c` sets around their submits) or else by its shader's
+    type (`rasterizer_transparent_geometry.c`). `[time] effects part's
+    stamped draws by kind` gives each kind's RSX time; the pixel shaders
+    come in two lists, the specular part's and the effects pass's. A
+    stamp is the pixel shader's key and its part << 10 (`ps3_gpu.c` splits
+    them); `ps3_timers_draw_stamps(part)` takes a part or -1, and a span
+    starts only where the draws were in none. A stamped frame now has
+    reports at the effects pass's draws too: such frames run a little
+    slower (one in eight).
+  - 2, the Direct3D SPU's timers: `timer_now` adds what `bell_wait`'s new
+    decrementer starts took off (`timer_shift`); the counts of chunks,
+    bytes and requests and the requests' wait start again at each
+    600-frame log.
+  - 3, pixel shader 76 (the dynamic lights' specular, 3.4 ms on the RSX
+    for 27 draws in the heaviest window). `ps3_rsx_fp.c`, the same values
+    from fewer registers and instructions, for every program: a write's
+    components computed alike are one (readers read the first); lookups
+    at an input's coordinates just before their first reader; one-
+    component values placed in any component of a register, after the
+    values that keep theirs; a copy of one component into others has its
+    maker write them (its own only if another reads it), so the copy goes;
+    a temporary times 2 as its sum (no constant's slot). Key 76: 39
+    instructions, 58 slots, 7 registers to 36, 51, 4. The pack's 357
+    keys: 8,554 slots to 8,328, 1,700 registers to 1,268.
+  - PC checks. `fp_tool` (scratchpad: the tree's translator against
+    HEAD's, on `tools/ps3_rsx_shader_check.c`'s interpreter): seeds 1, 3,
+    5, 7, 11 and 23, 3,000 to 5,000 random keys each and the pack's, 50 to
+    100 inputs each: 0 results apart bit for bit, 0 kills apart; on each
+    the check tool's checks (cgcomp's encoding, the NV2A's results, no
+    read before a write, R and H apart): 0 failures; random keys 24% fewer
+    registers, 2% fewer slots (4 of 3,357 keys one register more).
+    `KEYS=3000 SEED=7 tools/ps3_rsx_shader_check.sh`: 0 failures, 2.46 R
+    registers on average. `d3dcheck`, the tree's build on its PPE
+    Direct3D thread against its SPU (the scenario's stamps in random
+    parts, on again after each frame as the game's; the timestamp and
+    stamp arrays printed): seeds 1 to 6 × 8,000 steps, the same commands
+    and the same arrays (8 to 11 frames stamped each). Faults found: the
+    part's bits not in the SPU's stamps, a span not started from none;
+    without `timer_shift` the SPU's busy time is 6,728 s in a 42 s run
+    (with it 2.4 s). (A fog split that moves the part is not found: the
+    scenario rarely splits in a stamped frame.)
+  - `check`: 0 `r2off`, `.got` 0x89c0. LS: `spu_direct3d` 198.8 KB. PKG
+    of 14:43 in `build/ps3_d3d/`. Not tested on the PS3.
+- 2026-10-25: The 14:43 PKG on hardware (b40; Matt: "Done. I still think
+  the main cost are the particles."): `[ps3] exit 0`, no draw skipped,
+  the lowest free main memory 17.5 MB; the same pixel shader not in the
+  pack translated at a draw (`01201140` ...). 34 windows; left out: the
+  first (the level's start) and window 23 (the BSP swap: 5,386 KB read
+  in 572 ms). Medians of 31 play windows / the 2 under 56 fps: 59.6 /
+  54.5 fps, 58.6 fps on average over the play time (the 13:23 run 57.9;
+  other play: 2 slow windows, was 5).
+  - The game thread: work (ticks, render, rest) 11.1 / 15.4 ms a frame,
+    present wait 6.0 / 2.95. The RSX: 10.6 / 15.6 ms a frame (lights
+    1.2 / 2.75, specular 3.7 / 5.15, effects 1.2 / 2.15, lightmaps 1.2 /
+    1.75, objects 0.8 / 1.65). Window 9 (54.3 fps) the RSX's (15.4 ms:
+    specular 5.7, lights 2.7); window 33 (54.7 fps, 614 particles) the
+    game thread's (ticks 6.4, render 11.3: 18.1 ms of work, present wait
+    0.2; the RSX 15.8).
+  - Pixel shader 76 (the lights' specular): 107.1 to 77.8 us a draw
+    (medians of the windows with 5 draws a frame or more; the 13:23 run
+    first), 1.5 ms a frame for 21.5 draws.
+  - The effects pass on the RSX: all of it is the transparent groups'
+    draw (`effects part on the RSX`: weather, particles and contrails
+    submit groups; their draws come in `transparent`), 1.22 / 2.14 ms a
+    frame. By kind (stamped frames): particles 1.18 ms a frame (median of
+    all), 1.41 in the 14 windows of over 200 particles; 3.13, 3.68, 3.69
+    and 3.11 ms (23 to 27 % of the RSX's 13.6 to 14.0) in windows 20,
+    26, 28, 29, for 6 to 13 draws (about 300 us each): large blended
+    sprites, a fill cost (pixel shader 70, the particles': 5 slots, 2
+    registers, one texture). Then "other effect shaders" 0.65 ms in
+    windows 26 to 29; contrails, particle systems, generic, chicago,
+    glass each 0.0 to 0.2.
+  - In the 14 windows of over 200 particles (medians): the RSX 13.6 ms,
+    of it the particles 1.41 and the lights pass with the lights'
+    specular 4.04; the game thread 12.4 ms, of it the particles 1.56
+    (`particles_update`, the effects pass's sprites, contrails; 2.24 at
+    614 particles).
+  - The Direct3D SPU's timers now hold (window 33): busy 14.3 ms a frame,
+    the draw state 9.9 of it (the textures' check 7.2: its hash 6.2);
+    the game thread's waits for it 0.2. Its requests' wait 4.0 to 9.9 ms
+    a frame (600-frame logs: the flip's slot).
+  - Proposed (for Matt; not built): (1) the particles' pixels with alpha
+    0 skipped by the RSX's alpha test in alpha-blended draws that write
+    no depth (the same picture; the gain is the sprites' share of alpha
+    0); (2) the particles drawn at half width and height into their own
+    target and blended over the frame (about 2 ms in the heaviest
+    particle windows; softer particles: a setting); (3) `particles_update`
+    on an SPU (visual work, allowed by the SPU rule: about 1 ms of the
+    game thread in heavy windows); (4) the dynamic resolution (G10 step
+    4).
+- 2026-10-25: proposals 1 to 3 of the 14:43 run built (Matt: "Do 1-3").
+  - 1, the fragments a blend leaves the target unchanged by. A draw that
+    blends and writes no depth or stencil (`d3d8_rsx.c`'s
+    `unchanged_fragments`, the SPU's the same): alpha blend and
+    (SRCALPHA, ONE): alpha 0, killed by the RSX's alpha test (GREATER 0)
+    when the draw has no alpha test of its own, else as below; add,
+    reverse subtract, max: the written channels 0; premultiplied (ONE,
+    INVSRCALPHA): those and alpha 0; min, multiply (DESTCOLOR, ZERO): the
+    written channels 1. Those go in the fragment key's kill mode (its
+    padding byte, `RSX_KILL_*`): `ps3_rsx_fp.c` adds a DP4 of the
+    saturated colour's channels squared (a sum of 0 only when each is 0:
+    under 2^-63 it is 0 in an 8-bit target too; no inline constant) and a
+    KIL. The key's text is 16 bytes (15 still read). The blend, depth,
+    stencil, colour mask and alpha test states change the key.
+  - 2, `display.half_resolution_particles` (`port_config.c`, PS3 only;
+    `port/ps3/README.md`). `rasterizer_transparent_geometry.c` finds the
+    run of effects (alpha blend, add, alpha multiply add; not the
+    first-person weapon's) after the last other transparent group, before
+    the first-person weapon's groups. `d3d8_rsx.c`: the record
+    `_record_particles` (both paths); the half targets (colour and depth,
+    tiled) made with the device and with the screen's targets, before
+    them; at the start the colour cleared to transmittance 1 and the depth
+    from the frame's, a texel of four (`ps3_gpu.c`'s depth program: the
+    Z24S8 surface read as A8R8G8B8, its bytes put together, out as R1.z
+    with control 0x0e); the draws into it with the frame's units over half
+    the pixels, the colour's blend as it was and alpha (ZERO, the colour's
+    destination factor), no stencil; at the end the target over the frame
+    (ONE, SRCALPHA; the blit's programs). Separate alpha blend factors in
+    the GPU state. Not known before the run: whether the RSX reads the
+    compressed Z surface as a texture.
+  - 3, `particles_update`'s loop on the game SPU (`spu_game.c`'s PARTICLES
+    job, which took the rays' place): a job a 512 datums, the datums
+    updated in place: the age, the frame time, the forces (the wind by
+    the clusters' table, `wind.c`'s `wind_spu_particles`, made once a bsp;
+    the palettes at each frame), the rays, the rest. To the PPE as events
+    (`particles_spu_finish`): a particle attached to an object, one not
+    rendered for long, a death, a new sequence, a definition without a
+    slot (`particles_spu_define`: 128 slots, filled by `particle_new`), a
+    cluster out of the table (the whole loop there); a contact
+    (`particle_update_physics_contact`). The job runs from
+    `particles_update` to the next read of the particles
+    (`render_particles_gather`, `particle_new`, the game state's save and
+    load, the bsp's switch). The timer line: `the SPU's taken` (the
+    finish's time and events).
+  - PC checks. 1: `fp_tool` (the tree's translator against HEAD's) seed 7,
+    3,000 random keys (a third with a kill mode) and the pack's: 0 check
+    failures, 0 results apart, 36,304 kills where HEAD's colour leaves the
+    target unchanged, none other; `KEYS=3000 SEED=7
+    tools/ps3_rsx_shader_check.sh` (the kill against the NV2A's colour):
+    0 failures; two faults found (99 and 37 failures). 1 and 2:
+    `d3dcheck` (the PPE's Direct3D thread against the SPU's): seeds 1 to
+    6 × 8,000 steps the same commands, also with the kill's blends often
+    and the half particles on and off (3 to 27 half passes a seed; the
+    spare build); with the setting off the PPE's commands are the old
+    ones but the programs' memory 512 bytes on. Faults found: 9 of 9
+    (the kill mode off, a state not changing the key (2), the alpha test
+    off; the half target's alpha, scale, depth coordinates, the alpha
+    factors' compare and value). 3: `spu_game_check` (the real image in
+    spusim on chillout and d40's 11 bsps, against a transcription of the
+    PPE's loop in the SPU's arithmetic): 0 apart (1,692 free datums,
+    3,273 updated on the SPU, 4,481 left to the PPE, 487 contacts); the
+    weather job with `wind_get` shared: 0 apart; 14 of 14 mutations
+    found.
+  - `check`: 0 `r2off`, `.got` 0x89c8. LS: `spu_direct3d` 203.9 KB,
+    `spu_game` 230.1 KB (13.9 KB of stack left in the check). PKG of
+    17:53 in `build/ps3_d3d/`. Not tested on the PS3.
+- 2026-10-25: the run after the 17:53 hand-over (Matt: "Done.") was the
+  14:43 PKG: the particles line has no "the SPU's taken", and no pixel
+  shader was translated for the kill mode (358, 1 at a draw, as before).
+  The boot line's time (13:40:10) cannot tell the two apart:
+  `ps3_main.c` was not compiled again. A second run of the 14:43 build
+  on b40: `[ps3] exit 0`; 36 windows, left out 4 (the level's start), 23
+  and 36 (the BSP swaps). Medians of 29 play windows / the 1 under 56
+  fps: 59.8 / 52.6 fps, 59.2 on average. The slow window 18 (363
+  particles): the RSX 15.0 ms, its effects 5.4, of them the particles'
+  stamped draws 5.5 ms for 9.7 draws; the specular 4.8 (the lights' 2.0
+  for 27 draws).
+- 2026-10-25: The 17:53 PKG on hardware (b40; Matt: "Done. Check it out.
+  The framerate tanks whenever the shaders or the particles were on
+  screen basically."): `[ps3] exit 0`, the lowest free main memory 17.3
+  MB. 75 windows; left out 1 (the level's start), 31 and 43 (the BSP
+  swaps). Medians of 68 play windows / the 4 under 56 fps: 59.9 / 54.25
+  fps, 59.0 on average (the 14:43 runs: 59.6 / 54.5 and 58.6; 59.8 / 52.6
+  and 59.2).
+  - The game thread: work 9.3 / 12.4 ms a frame, present wait 7.5 /
+    6.15. The RSX: 10.95 / 14.75 ms a frame (specular 4.9 / 6.6, effects
+    0.9 / 1.9, lights 1.2 / 1.7, lightmaps 1.15 / 1.25, objects 0.6 /
+    0.65).
+  - Step 2 not seen: `display.half_resolution_particles` was at its
+    default (off; "added ... at its default" in the log).
+  - Step 3: `particles_update` 0.01 ms a frame on the game thread; the
+    finish (`the SPU's taken`) 0.07 ms (median), 0.35 at most; the game
+    SPU's particles job 299 / 318 us a frame, no waits.
+  - Step 1: 31 pixel shaders with a kill mode translated at draws
+    (windows 1 to 56, none in the slow windows). The specular passes cost
+    about 45 % more a draw than in the 14:43 runs (medians of the
+    windows: reflection masks 39.0 us, were 26.0 to 28.7; reflections
+    105.2, were 68.3 to 74.6; fog 51.7, was 34.9 to 35.9; the lights'
+    specular 88.0, was 76.7 to 80.1), also the passes the kill does not
+    change (masks and reflections blend with DESTALPHA). The fog (with
+    the kill) over the masks (without): 1.33, was 1.25 to 1.34. So the
+    scenes had more shiny surface a draw (the lights' specular draws 19.0
+    a frame, were 9.3 to 13.7); a change from step 1 cannot be seen. The
+    fog's own alpha test (GREATER 0) already removes the pixels its kill
+    finds (premultiplied: alpha 0): there the KIL only adds 3
+    instructions.
+  - The slow windows: 73 and 74 the RSX's (16.2 and 16.8 ms a frame:
+    specular 7.4 / 6.4, of it the lights' specular 4.1 ms for 46 draws /
+    3.2 for 28; effects 1.9 / 3.1; lights 2.5 / 2.2; diffuse 1.2 / 2.4).
+    21 (54.9 fps): the RSX 13.3 (specular 6.8; effects 1.9, of it pixel
+    shader 375's large particles 1.84 ms for 2.6 draws). 44 (54.7 fps),
+    after the BSP swap: the RSX 11.2 and the game thread's work 10.7 on
+    average (single slow frames; texture uploads 0.2 ms a frame).
+  - The lights' draws: a light's surfaces are those near its sphere
+    (`structure_visibility_build_surfaces`); a first-person weapon's
+    supersize light takes every visible surface. The draws' alpha serves
+    only their alpha test (GREATER 0; not written, not in the blend);
+    outside the sphere the attenuation texture's border (0) should make
+    it 0 (not checked), removed after the whole program.
+  - Proposed (for Matt; not built): (1) step 2 on the same PKG
+    (`display.half_resolution_particles = true` in `config.toml`); (2) the
+    dynamic resolution (G10 step 4: all the heavy passes; a setting); (3)
+    count on the RSX the lights' and the lights' specular pixels the alpha
+    test removes; if many, a scissor from each light's sphere (the same
+    picture); (4) step 1: no KIL where the draw's own alpha test removes
+    the same pixels (the fog), and the 31 keys in
+    `port/ps3/shader_keys.txt`.
+- 2026-10-25: proposal 4 of the 17:53 run built (Matt: "Clean up change
+  1.").
+  - `d3d8_rsx.c` and `spu_direct3d.c`: `fragment_kill_mode` gives no KIL
+    when its test names alpha and the draw's own alpha test fails the
+    kill's alpha (0, or 255 for the tests of 1): `alpha_test_removes`, as
+    `apply_raster_state` sets the test (function 0 is NEVER; GCM's
+    functions are bits for less, equal, greater). The game's alpha
+    function is GREATER (`_rasterizer_initialize`), so the fog
+    (premultiplied, its test GREATER 0) and the alpha blends with a test
+    of their own lose the KIL; the add without alpha written (the diffuse
+    lights) and the draws without a test keep it. The same picture: the
+    KIL only removed fragments that leave the target unchanged.
+  - `port/ps3/shader_keys.txt`: the run's 31 keys translated at draws but
+    two, as `# levels\b40\b40 PS3 log` lines: 28 with a kill mode and the
+    screen flash's max (`01201140`, translated at a draw in every run).
+    Left out: the fog's (`11180118`, kill `f1`) and the alpha-only kill
+    (`81`), which the clean-up makes impossible. The pack: 386 pixel
+    shaders (was 357), none untranslatable. A shader sweep would drop the
+    kill keys: `tools/ps3_shader_sweep/sweep_d3d.c`'s `draw_key` does not
+    make the kill mode, and its merge replaces every key line.
+  - PC checks. `killtest` (`fragment_kill_mode` and the code it calls
+    taken from `d3d8_rsx.c`, the XDK headers' values, host gcc): 1,200,000
+    states (blends, colour masks, depth writes, alpha tests, functions,
+    references), 0 apart from a plain statement of the rule (660 KILs
+    dropped); the named draws right (fog 00, premultiplied without a test
+    f1, diffuse lights 71, alpha blend with a test 00, multiply RGBA f2,
+    with a test GREATER 255 00); 5 of 5 faults found. `d3dcheck` (the PPE
+    against the SPU, 8,000 steps): seeds 1 to 3 with the kill's blends
+    often and the half particles on, 4 to 6 with the kill's blends often
+    (the spare build), 1 to 6 plain: the same commands and timer arrays
+    (5,312 to 7,280 draws a seed); the SPU without the clean-up and with
+    less and greater swapped: found on seeds 4 to 6. `check`: 0 `r2off`,
+    `.got` 0x89c8. PKG of 18:48 in `build/ps3_d3d/`. Not tested on the
+    PS3.
+- 2026-10-25: the lights' bounds (Matt: "Can we do 1 and 3?"; step 2, the
+  count of the pixels outside, skipped):
+  - PC check of the attenuation (host gcc; the shader check's NV2A
+    interpreters): vertex shaders 49 (diffuse) and 21 (point specular)
+    give the attenuation's coordinates (v0 - L) * 0.5 / r + 0.5, w 1, with
+    `rasterizer_set_frustum_z`'s c[-91].w 0.5 (2,000 of 2,000). The
+    texture (`rasterizer\distance attenuation`, 32x32x32 AY8, 6 levels)
+    is the same in all 24 maps; its face texels are 0; nearest at any
+    level and linear at level 0 stay in the box [0, 1]; linear at the
+    smaller levels reaches 2 boxes' half sizes (the 1x1x1 level, 29). The
+    combiners with the attenuation 0: every fragment has alpha 0 (the
+    alpha test removes it) and RGB 0, diffuse and the 8 point specular
+    variants (2 million inputs each). With the border 0x05050505: diffuse
+    up to 5 / 255, point specular up to 10 / 255 (20 overbright).
+  - The borders: stage 2's (the diffuse lights' attenuation, BORDER, MIN
+    and MIP POINT) is never set (0). Stage 1's (the point specular's
+    attenuation, all LINEAR) is 0x05050505 after any loading screen:
+    `progress_bar_render` sets it and nothing sets it back (the Xbox's
+    look too). So only the diffuse lights' draws are 0 outside the box.
+    The spot specular (vertex shader 41) has no attenuation texture: its
+    falloff is the vertex fog ((v0 - L).forward - inner) * cone, 1.5e-5),
+    interpolated over each triangle: no exact box.
+  - Built (`HALO_PS3` blocks; `RSX_LIGHT_BOUNDS` 1 in `d3d8_rsx.c`):
+    `rasterizer_set_frustum_z` gives the vertex shaders' world to clip
+    columns to `d3d8_light_bounds_transform`;
+    `_rasterizer_environment_diffuse_light_begin` gives the light's
+    position and radius to `d3d8_light_bounds`, `..._diffuse_lights_end`
+    ends them. The game thread finds the box's clip space bounds (the box
+    grown by 1/64 and 1/1024 of a unit, the depth by 2^-12; a corner not in
+    front: any x and y, the depth from 0, to 1 unless every edge's
+    crossing of the eye's plane is below 0) and records them
+    (`_record_light_bounds`). The Direct3D thread and the SPU cut the
+    viewport's scissor to the box's pixels (2 more on each side; an empty
+    one skips the draw) and set the depth bounds test to its stored depths
+    (`ps3_gpu_state`'s `depth_bounds`, `rsxSetDepthBounds`); a clear turns
+    the test off first.
+  - PC check `bounds_check` (host gcc: `light_bounds_find` and
+    `light_bounds_scissor` copied out of `d3d8_rsx.c`, the SPU's
+    `light_bounds_scissor` with its float helpers, vertex shader 49 in the
+    NV2A interpreter): random cameras (a fifth with oblique depth, as a
+    mirror's), lights (an eighth around the camera), viewports, target
+    scales, depth ranges and UI offsets; triangles up to 300 units wide
+    through each box, their pixels' depths and texel coordinates
+    interpolated as the rasterizer does, and points of the box as
+    vertices. 100,000 lights, cameras up to 1,000 units out: 35.8 million
+    pixels drawn, 22.5 million lit, 0 lit outside the scissor or the depth
+    bounds, the SPU's rectangles and depths the same. Faults: 7 of 9 found
+    (no depth margin, no edge test, scissor margin 0, y swapped, around
+    the camera empty, the UI offset left out, the SPU's x1 for x0); not
+    found: the box not grown (a margin for the RSX's rounding, which the
+    check does not model) and the SPU's floor toward zero (only below 0,
+    where the viewport's scissor cuts).
+  - `check`: 0 `r2off`, `.got` 0x89c8. The Direct3D SPU's image 206.8 KB
+    (was 204.2). The earlier session's `d3dcheck` harness is gone: not
+    run. PKG of 19:54 in `build/ps3_lights/`. Not tested on the PS3.

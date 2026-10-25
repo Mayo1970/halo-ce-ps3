@@ -79,12 +79,6 @@ void point_physics_dispose_from_old_map(
 #ifdef HALO_PS3
 /* port: point_physics.c */
 void point_physics_air_and_water_masses(float *air, float *water);
-boolean point_physics_update_begin(struct point_physics_definition const *definition, struct location *location,
-	real_point3d *position, real_vector3d *translational_velocity, real *radius, real dt, unsigned long *result,
-	unsigned long *collision_flags);
-unsigned long point_physics_update_end(struct point_physics_definition const *definition, struct location *location,
-	real_point3d *position, real_vector3d *translational_velocity, real_vector3d *collision_normal,
-	short *collision_material_type, real radius, real dt, unsigned long collision_flags);
 #endif
 real point_physics_definition_get_mass(
 	struct point_physics_definition *definition,

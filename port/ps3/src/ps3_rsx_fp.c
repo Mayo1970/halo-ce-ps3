@@ -763,6 +763,39 @@ static int final_combiner(struct context *context)
 	return _register_sum;
 }
 
+/* the kill mode's test (RSX_KILL_*), 0 when it names no channel or no test */
+static int kill_test(const struct rsx_fragment_key *key)
+{
+	int test = key->kill_mode & 3;
+
+	return (test == RSX_KILL_ZERO || test == RSX_KILL_ONE) && (key->kill_mode >> 4) ? test : 0;
+}
+
+/* the fragments the draw's blend leaves the target unchanged by (kill_mode): the saturated colour's channels it names
+all 0, or all 1 (1 - c all 0). Their squares' sum (no constant) flushes to 0 only under 2^-63: 0 in an 8-bit target */
+static void kill_unchanged(struct context *context, int result)
+{
+	int channels = context->key->kill_mode >> 4, lane, named = 0, lanes[4] = {0, 0, 0, 0};
+	struct rsx_instruction *instruction;
+	struct rsx_source source;
+
+	if (kill_test(context->key) == RSX_KILL_ONE)
+		saturated(emit2(context, _rsx_fp_add, _register_scratch, _rsx_xyzw, negated(temporary(result)), fixed(_k_one)));
+	else
+		saturated(emit1(context, _rsx_fp_mov, _register_scratch, _rsx_xyzw, temporary(result)));
+	for (lane = 0; lane < 4; lane++)
+	{
+		if ((channels >> lane) & 1)
+			lanes[named++] = lane;
+	}
+	for (lane = named; lane > 0 && lane < 4; lane++)
+		lanes[lane] = lanes[named - 1];
+	source = swizzled(temporary(_register_scratch), lanes[0], lanes[1], lanes[2], lanes[3]);
+	instruction = emit2(context, _rsx_fp_dp4, -1, _rsx_x, source, source);
+	instruction->condition_update = 1;
+	kill_if(context, _rsx_condition_equal, 0);
+}
+
 /* does any combiner input read the fog register */
 static int reads_fog(const struct rsx_fragment_key *key, uint32_t combiner_count)
 {
@@ -2112,16 +2145,27 @@ static int forward_instruction(struct optimizer *o, struct rsx_instruction *inst
 		result = *instruction;
 	if (result.destination_type == _rsx_register_temporary)
 	{
+		int copied = 0;
+
 		for (lane = 0; lane < 4; lane++)
 		{
+			int same = 0;
+
 			if (!(result.mask & (1 << lane)))
 				continue;
 			o->versions[destination][lane]++;
-			if (own & (1 << lane))
+			/* a component computed as an earlier one of this write holds its value: readers can read that one */
+			while (same < lane && (!(own & (1 << same) & ~copied) ||
+				memcmp(&expressions[same], &expressions[lane], sizeof(expressions[lane]))))
+				same++;
+			if ((own & (1 << lane)) && same < lane)
+				values[lane] = values[same], copied |= 1 << lane;
+			else if (own & (1 << lane))
 				values[lane].version = o->versions[destination][lane];
 			o->held[destination][lane] = values[lane];
 			o->made[destination][lane] = expressions[lane];
-			o->made[destination][lane].opcode = keyed ? expressions[lane].opcode : _rsx_fp_nop;
+			o->made[destination][lane].opcode = keyed && !(copied & (1 << lane)) ? expressions[lane].opcode :
+				_rsx_fp_nop;
 			o->made_versions[destination][lane] = o->versions[destination][lane];
 		}
 	}
@@ -2325,6 +2369,52 @@ static int absorb(struct optimizer *o)
 	return changed;
 }
 
+/* does the instruction read or write the components in mask of a temporary */
+static int touches(const struct rsx_fragment_key *key, const struct rsx_instruction *instruction, int reg, int mask)
+{
+	int lanes = read_lanes(key, instruction), position, lane;
+
+	if (instruction->destination_type == _rsx_register_temporary &&
+		(instruction->destination & (TEMPORARIES - 1)) == reg && (instruction->mask & mask))
+		return 1;
+	for (position = 0; position < source_count(instruction->opcode); position++)
+	{
+		const struct rsx_source *source = &instruction->source[position];
+
+		if (source->type != _rsx_register_temporary || (source->index & (TEMPORARIES - 1)) != reg)
+			continue;
+		for (lane = 0; lane < 4; lane++)
+		{
+			if ((lanes & (1 << lane)) && (mask & (1 << (source->swizzle[lane] & 3))))
+				return 1;
+		}
+	}
+	return 0;
+}
+
+/* each lookup at an input's coordinates moved to just before the first instruction that reads or writes its texel:
+the texel's register is held for less time */
+static void sink_lookups(struct optimizer *o)
+{
+	uint32_t index, target;
+
+	for (index = o->count; index-- > 0;)
+	{
+		struct rsx_instruction lookup = o->instructions[index];
+
+		if ((lookup.opcode != _rsx_fp_tex && lookup.opcode != _rsx_fp_txp) ||
+			lookup.destination_type != _rsx_register_temporary || lookup.source[0].type != _rsx_register_input)
+			continue;
+		for (target = index + 1; target < o->count && !touches(o->key, &o->instructions[target],
+			lookup.destination & (TEMPORARIES - 1), lookup.mask); target++)
+			;
+		if (target == o->count || target == index + 1)
+			continue;
+		memmove(&o->instructions[index], &o->instructions[index + 1], (target - index - 1) * sizeof(lookup));
+		o->instructions[target - 1] = lookup;
+	}
+}
+
 /* ---------- temporaries */
 
 static int web_root(int *parent, int x)
@@ -2337,29 +2427,70 @@ static int web_root(int *parent, int x)
 	return x;
 }
 
-/* do two webs hold a component at the same time; a write where the other's last read is shares it */
-static int webs_overlap(const int *start, const int *end, int a, int b)
+/* a web's span in a component as placed: a one-component web placed in component placed[web] holds its own
+single[web] there (placed -1: the web keeps its components); 0 if it does not hold the component */
+static int web_span(const int *start, const int *end, const int *single, const int *placed, int web, int lane,
+	int *first, int *final)
 {
-	int lane;
+	int own = placed[web] < 0 ? lane : lane == placed[web] ? single[web] : -1;
+
+	if (own < 0 || end[web * 4 + own] < 0)
+		return 0;
+	*first = start[web * 4 + own];
+	*final = end[web * 4 + own];
+	return 1;
+}
+
+/* do two webs hold a component at the same time, as placed; a write where the other's last read is shares it */
+static int webs_overlap(const int *start, const int *end, const int *single, const int *placed, int a, int b)
+{
+	int lane, a_first, a_final, b_first, b_final;
 
 	for (lane = 0; lane < 4; lane++)
 	{
-		if (end[a * 4 + lane] >= 0 && end[b * 4 + lane] >= 0 && start[a * 4 + lane] < end[b * 4 + lane] &&
-			start[b * 4 + lane] < end[a * 4 + lane])
+		if (web_span(start, end, single, placed, a, lane, &a_first, &a_final) &&
+			web_span(start, end, single, placed, b, lane, &b_first, &b_final) && a_first < b_final && b_first < a_final)
 			return 1;
 	}
 	return 0;
 }
 
+/* does an instruction after the maker but the copy read the web's component */
+static int read_after(const struct optimizer *o, int *parent, const int *reads, uint32_t maker, uint32_t copy, int web,
+	int component)
+{
+	uint32_t index;
+	int position, lane;
+
+	for (index = maker + 1; index < o->count; index++)
+	{
+		const struct rsx_instruction *instruction = &o->instructions[index];
+		int lanes = read_lanes(o->key, instruction);
+
+		for (position = 0; position < source_count(instruction->opcode) && index != copy; position++)
+		{
+			if (instruction->source[position].type != _rsx_register_temporary || reads[index * 3 + position] < 0 ||
+				web_root(parent, reads[index * 3 + position]) != web)
+				continue;
+			for (lane = 0; lane < 4; lane++)
+			{
+				if ((lanes & (1 << lane)) && instruction->source[position].swizzle[lane] == component)
+					return 1;
+			}
+		}
+	}
+	return 0;
+}
+
 /* a web is the writes a read joins, with their reads; each gets the lowest register free in its components
-over its span. A copy whose source ends there joins it and goes. Unchanged on a read of nothing. */
+over its span (a one-component web in any component). A copy whose source ends there joins it and goes. */
 static void allocate(struct optimizer *o)
 {
 	uint32_t count = o->count, index;
 	int16_t writer[TEMPORARIES][4];
 	/* (one translation at a time: fixed, not the heap's) */
-	static int memory[RSX_FP_MAXIMUM_INSTRUCTIONS * 19];
-	int *parent, *webs, *start, *end, *last, *physical, *removed;
+	static int memory[RSX_FP_MAXIMUM_INSTRUCTIONS * 21];
+	int *parent, *webs, *start, *end, *last, *physical, *removed, *single, *placed;
 	int output = -1, web_count = 0, highest = 0, position, lane, web;
 
 	if (count > RSX_FP_MAXIMUM_INSTRUCTIONS)
@@ -2371,9 +2502,11 @@ static void allocate(struct optimizer *o)
 	start = removed + count;
 	end = start + count * 4;
 	last = end + count * 4;
-	/* reads[index * 3 + position]: a write the source reads */
+	single = last + count * 4;
+	placed = single + count;
+	/* reads[index * 3 + position]: a write the source reads (unchanged on a read of nothing) */
 	{
-		int *reads = last + count * 4;
+		int *reads = placed + count;
 
 		memset(writer, 0xff, sizeof(writer));
 		for (index = 0; index < count; index++)
@@ -2478,25 +2611,74 @@ static void allocate(struct optimizer *o)
 
 		for (index = 0; index < count; index++)
 		{
-			const struct rsx_instruction *instruction = &o->instructions[index];
-			const struct rsx_source *source = &instruction->source[0];
-			int from, into;
+			struct rsx_instruction *instruction = &o->instructions[index], copy = *instruction, kept[4];
+			struct rsx_source *source = &instruction->source[0];
+			int from, into, makers[4], spans[3][4], widened = 0, clash = 0, component;
 
 			if (instruction->opcode != _rsx_fp_mov || instruction->saturate || instruction->condition_update ||
 				reads[index * 3] < 0 || source->negate || source->absolute ||
 				(instruction->destination_type != _rsx_register_temporary &&
 				instruction->destination_type != _rsx_register_output))
 				continue;
-			for (lane = 0; lane < 4 && (!(instruction->mask & (1 << lane)) || source->swizzle[lane] == lane); lane++)
-				;
-			if (lane < 4)
-				continue;
 			from = web_root(parent, reads[index * 3]);
 			into = web_root(parent, (int)index);
-			if (from != into)
+			memcpy(spans[0], &start[from * 4], sizeof(spans[0]));
+			memcpy(spans[1], &end[from * 4], sizeof(spans[1]));
+			memcpy(spans[2], &last[from * 4], sizeof(spans[2]));
+			/* a component copied into others, made by an instruction that writes it alone: the maker writes them all
+			(the same value; its own too while another reads it) and the copy reads each in place, if it can then go */
+			for (component = 0; component < 4 && from != into; component++)
 			{
-				int clash = 0;
+				int others = 0, maker = (int)index;
 
+				for (lane = 0; lane < 4; lane++)
+				{
+					if ((instruction->mask & (1 << lane)) && lane != component && source->swizzle[lane] == component)
+						others |= 1 << lane;
+				}
+				while (others && maker-- > 0 && !(o->instructions[maker].destination_type == _rsx_register_temporary &&
+					(o->instructions[maker].destination & (TEMPORARIES - 1)) == (source->index & (TEMPORARIES - 1)) &&
+					(o->instructions[maker].mask & (1 << component))))
+					;
+				/* (a copy that went: what it copied) */
+				while (maker >= 0 && maker < (int)index && removed[maker])
+					maker = reads[maker * 3];
+				for (lane = 0; lane < 4; lane++)
+					clash |= ((others >> lane) & 1) && end[from * 4 + lane] >= 0;
+				if (!others || clash || maker < 0 || o->instructions[maker].mask != 1 << component ||
+					o->instructions[maker].opcode == _rsx_fp_tex || o->instructions[maker].opcode == _rsx_fp_txp ||
+					o->instructions[maker].condition_update || web_root(parent, maker) != from)
+					continue;
+				kept[widened] = o->instructions[maker];
+				makers[widened++] = maker;
+				for (lane = 0; lane < 4; lane++)
+				{
+					if (!(others & (1 << lane)))
+						continue;
+					for (position = 0; position < source_count(kept[widened - 1].opcode) &&
+						per_component(kept[widened - 1].opcode); position++)
+					{
+						o->instructions[maker].source[position].swizzle[lane] =
+							o->instructions[maker].source[position].swizzle[component];
+					}
+					o->instructions[maker].mask |= (uint8_t)(1 << lane);
+					source->swizzle[lane] = (uint8_t)lane;
+					start[from * 4 + lane] = last[from * 4 + lane] = maker;
+					end[from * 4 + lane] = (int)index;
+				}
+				if (!(instruction->mask & (1 << component)) &&
+					!read_after(o, parent, reads, (uint32_t)maker, index, from, component))
+				{
+					o->instructions[maker].mask &= (uint8_t)~(1 << component);
+					start[from * 4 + component] = 0x7fffffff;
+					end[from * 4 + component] = last[from * 4 + component] = -1;
+				}
+			}
+			for (lane = 0; lane < 4 && (!(instruction->mask & (1 << lane)) || source->swizzle[lane] == lane); lane++)
+				;
+			clash = lane < 4;
+			if (from != into && !clash)
+			{
 				for (lane = 0; lane < 4; lane++)
 				{
 					int a = from * 4 + lane, b = into * 4 + lane;
@@ -2509,8 +2691,21 @@ static void allocate(struct optimizer *o)
 					else
 						clash |= start[a] < end[b] && start[b] < end[a];
 				}
-				if (clash)
-					continue;
+			}
+			/* the makers and spans as they were: the copy stays */
+			if (clash && widened)
+			{
+				while (widened--)
+					o->instructions[makers[widened]] = kept[widened];
+				*instruction = copy;
+				memcpy(&start[from * 4], spans[0], sizeof(spans[0]));
+				memcpy(&end[from * 4], spans[1], sizeof(spans[1]));
+				memcpy(&last[from * 4], spans[2], sizeof(spans[2]));
+			}
+			if (clash)
+				continue;
+			if (from != into)
+			{
 				for (lane = 0; lane < 4; lane++)
 				{
 					int a = from * 4 + lane, b = into * 4 + lane;
@@ -2554,24 +2749,56 @@ static void allocate(struct optimizer *o)
 			}
 			webs[slot] = web;
 		}
+		/* the one-component webs: every write one component, the same, of an instruction that can write any (not a
+		lookup's texel, a condition, the colour) */
+		for (index = 0; index < count; index++)
+			single[index] = placed[index] = -1;
+		for (index = 0; index < count; index++)
+		{
+			const struct rsx_instruction *instruction = &o->instructions[index];
+			int mask = instruction->mask, one = mask && !(mask & (mask - 1)) ? lowest_lane(mask) : -2;
+
+			if (removed[index] || (instruction->destination_type != _rsx_register_temporary &&
+				instruction->destination_type != _rsx_register_output))
+				continue;
+			web = web_root(parent, (int)index);
+			if (instruction->destination_type == _rsx_register_output || instruction->opcode == _rsx_fp_tex ||
+				instruction->opcode == _rsx_fp_txp || instruction->condition_update || one < 0)
+				single[web] = -2;
+			else if (single[web] == -1)
+				single[web] = one;
+			else if (single[web] != one)
+				single[web] = -2;
+		}
 		if (output >= 0)
 			physical[web_root(parent, output)] = 0;
-		for (index = 0; index < (uint32_t)web_count; index++)
+		/* the webs that keep their components first, then the one-component webs in the components left */
+		for (index = 0; index < 2 * (uint32_t)web_count; index++)
 		{
-			int choice = 0, slot;
+			int choice = 0, slot, trial = 0;
 
-			web = webs[index];
-			if (output >= 0 && web == web_root(parent, output))
+			web = webs[index % web_count];
+			if ((output >= 0 && web == web_root(parent, output)) ||
+				(single[web] >= 0) != (index >= (uint32_t)web_count))
 				continue;
+			/* a one-component web tries each component of a register, its own first */
+			placed[web] = single[web] >= 0 ? single[web] : -1;
 			for (slot = 0; slot < web_count; slot++)
 			{
 				int other = webs[slot];
 
-				if (other != web && physical[other] == choice && webs_overlap(start, end, web, other))
+				if (other == web || physical[other] != choice ||
+					!webs_overlap(start, end, single, placed, web, other))
+					continue;
+				if (single[web] >= 0 && ++trial < 4)
+					placed[web] = (single[web] + trial) & 3;
+				else
 				{
 					choice++;
-					slot = -1;
+					trial = 0;
+					placed[web] = single[web] >= 0 ? single[web] : -1;
 				}
+				slot = -1;
 			}
 			physical[web] = choice;
 			highest = choice > highest ? choice : highest;
@@ -2589,12 +2816,33 @@ static void allocate(struct optimizer *o)
 				continue;
 			}
 			if (instruction->destination_type == _rsx_register_temporary)
-				instruction->destination = (uint8_t)physical[web_root(parent, (int)index)];
+			{
+				web = web_root(parent, (int)index);
+				instruction->destination = (uint8_t)physical[web];
+				/* a web placed in another component: the write's, and the lane its sources are read in */
+				if (placed[web] >= 0 && placed[web] != single[web])
+				{
+					for (position = 0; position < source_count(instruction->opcode) &&
+						per_component(instruction->opcode); position++)
+						instruction->source[position].swizzle[placed[web]] =
+							instruction->source[position].swizzle[single[web]];
+					instruction->mask = (uint8_t)(1 << placed[web]);
+				}
+			}
 			for (position = 0; position < source_count(instruction->opcode); position++)
 			{
-				if (instruction->source[position].type == _rsx_register_temporary)
-					instruction->source[position].index = (uint16_t)(reads[index * 3 + position] < 0 ? 0 :
-						physical[web_root(parent, reads[index * 3 + position])]);
+				struct rsx_source *source = &instruction->source[position];
+				int lanes = read_lanes(o->key, instruction);
+
+				if (source->type != _rsx_register_temporary)
+					continue;
+				web = reads[index * 3 + position] < 0 ? -1 : web_root(parent, reads[index * 3 + position]);
+				source->index = (uint16_t)(web < 0 ? 0 : physical[web]);
+				for (lane = 0; lane < 4 && web >= 0 && placed[web] >= 0 && placed[web] != single[web]; lane++)
+				{
+					if ((lanes & (1 << lane)) && source->swizzle[lane] == single[web])
+						source->swizzle[lane] = (uint8_t)placed[web];
+				}
 			}
 		}
 	}
@@ -2642,6 +2890,7 @@ static uint32_t optimize(const struct rsx_fragment_key *key, struct rsx_instruct
 		if (!changed)
 			break;
 	}
+	sink_lookups(o);
 	allocate(o);
 	return o->count;
 }
@@ -2894,6 +3143,40 @@ static int expand_clamps(struct rsx_instruction *instructions, uint32_t *count, 
 	return 1;
 }
 
+/* a temporary times 2 as its sum with itself: the same value without the constant's slot */
+static void doubles_as_sums(struct rsx_instruction *instructions, uint32_t count)
+{
+	uint32_t index;
+
+	for (index = 0; index < count; index++)
+	{
+		struct rsx_instruction *instruction = &instructions[index];
+		int position, lane, fits;
+
+		if (instruction->opcode != _rsx_fp_mul || instruction->uniform != RSX_NO_UNIFORM)
+			continue;
+		for (position = 0; position < 2; position++)
+		{
+			const struct rsx_source *number = &instruction->source[position];
+
+			if (number->type != _rsx_register_constant || number->absolute ||
+				instruction->source[1 - position].type != _rsx_register_temporary)
+				continue;
+			for (lane = 0, fits = 1; lane < 4 && fits; lane++)
+			{
+				fits = !(instruction->mask & (1 << lane)) ||
+					instruction->constant[number->swizzle[lane] & 3] * (number->negate ? -1.0f : 1.0f) == 2.0f;
+			}
+			if (!fits)
+				continue;
+			instruction->opcode = _rsx_fp_add;
+			instruction->source[position] = instruction->source[1 - position];
+			memcpy(instruction->constant, fixed_constant, sizeof(instruction->constant));
+			break;
+		}
+	}
+}
+
 /* the stages texture_stage gives a texel (a sampler, or a mode that needs none) */
 static int stage_active(const struct rsx_fragment_key *key, int stage)
 {
@@ -2962,11 +3245,14 @@ void rsx_fragment_key_clean(struct rsx_fragment_key *key)
 		key->fog_enable = 0;
 	if (!key->fog_enable || key->fog_table_mode > 3)
 		key->fog_table_mode = 0;
-	key->padding = 0;
+	if (!kill_test(key))
+		key->kill_mode = 0;
+	/* (bits 2 and 3 are not read) */
+	key->kill_mode &= 0xf3;
 }
 
-/* the key's fields in the text's order: 39 words, then 15 bytes */
-static void key_fields(const struct rsx_fragment_key *key, const uint32_t *words[39], const uint8_t *bytes[15])
+/* the key's fields in the text's order: 39 words, then 16 bytes */
+static void key_fields(const struct rsx_fragment_key *key, const uint32_t *words[39], const uint8_t *bytes[16])
 {
 	int index;
 
@@ -2993,6 +3279,7 @@ static void key_fields(const struct rsx_fragment_key *key, const uint32_t *words
 	bytes[12] = &key->fog_enable;
 	bytes[13] = &key->fog_table_mode;
 	bytes[14] = &key->texture_scaled;
+	bytes[15] = &key->kill_mode;
 }
 
 static char *hex_write(char *text, uint32_t value, int digits)
@@ -3005,7 +3292,7 @@ static char *hex_write(char *text, uint32_t value, int digits)
 void rsx_fragment_key_text(const struct rsx_fragment_key *key, char text[RSX_FRAGMENT_KEY_TEXT])
 {
 	const uint32_t *words[39];
-	const uint8_t *bytes[15];
+	const uint8_t *bytes[16];
 	int index;
 
 	key_fields(key, words, bytes);
@@ -3014,31 +3301,40 @@ void rsx_fragment_key_text(const struct rsx_fragment_key *key, char text[RSX_FRA
 		text = hex_write(text, *words[index], 8);
 		*text++ = ' ';
 	}
-	for (index = 0; index < 15; index++)
+	for (index = 0; index < 16; index++)
 	{
 		text = hex_write(text, *bytes[index], 2);
-		*text++ = index < 14 ? ' ' : 0;
+		*text++ = index < 15 ? ' ' : 0;
 	}
+}
+
+static int hex_digit(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	return c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
 }
 
 int rsx_fragment_key_parse(const char *text, struct rsx_fragment_key *key)
 {
 	const uint32_t *words[39];
-	const uint8_t *bytes[15];
+	const uint8_t *bytes[16];
 	int index, digits;
 
 	memset(key, 0, sizeof(*key));
 	key_fields(key, words, bytes);
-	for (index = 0; index < 39 + 15; index++)
+	for (index = 0; index < 39 + 16; index++)
 	{
 		uint32_t value = 0;
 
 		while (*text == ' ' || *text == '\t')
 			text++;
+		/* (the 16th byte, the kill mode, may be left out) */
+		if (index == 39 + 15 && hex_digit(*text) < 0)
+			break;
 		for (digits = 0; digits < (index < 39 ? 8 : 2); digits++, text++)
 		{
-			int digit = *text >= '0' && *text <= '9' ? *text - '0' : *text >= 'a' && *text <= 'f' ? *text - 'a' + 10 :
-				*text >= 'A' && *text <= 'F' ? *text - 'A' + 10 : -1;
+			int digit = hex_digit(*text);
 
 			if (digit < 0)
 				return -1;
@@ -3087,10 +3383,13 @@ int rsx_fragment_program_instructions(const struct rsx_fragment_key *key,
 
 	instruction = saturated(emit1(&context, _rsx_fp_mov, _register_color, _rsx_xyzw, temporary(result)));
 	instruction->destination_type = _rsx_register_output;
+	if (kill_test(key))
+		kill_unchanged(&context, result);
 	if (!context.overflow)
 	{
 		context.count = optimize(key, instructions, context.count);
 		context.overflow = !expand_clamps(instructions, &context.count, maximum);
+		doubles_as_sums(instructions, context.count);
 #if HALF_PRECISION
 		if (!context.overflow)
 			half_precision(key, instructions, context.count);

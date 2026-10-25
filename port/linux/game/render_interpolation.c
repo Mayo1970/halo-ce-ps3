@@ -52,6 +52,9 @@ unsigned long config_changes(void);
 #include <string.h>
 
 #ifdef HALO_PS3
+#include <stddef.h>
+
+#include "ps3_spu_game.h"
 #include "ps3_timers.h"
 #endif
 
@@ -388,6 +391,138 @@ static real distance_squared(real_point3d const *a, real_point3d const *b)
 
 /* ---------- ticks */
 
+/* the object's snapshot of the tick (render_interpolation_tick's walk) */
+static void object_snapshot(long object_index, struct object_datum *object, long previous_tick)
+{
+	long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(object_index);
+	struct interpolated_object *record;
+	short node_count = (short)(object->object.node_matrices.size / (short)sizeof(real_matrix4x3));
+	boolean continuing;
+#ifdef HALO_PS3
+	uint64_t ps3_span = ps3_timer_now(); /* port: (the timer build: the walk is the rest of the tick's) */
+#endif
+
+	if (absolute_index >= MAXIMUM_INTERPOLATED_OBJECTS)
+		return;
+	record = &interpolated_objects[absolute_index];
+	if (node_count <= 0 || node_count > MAXIMUM_INTERPOLATED_NODES)
+	{
+		record->object_index = NONE;
+		return;
+	}
+	if (record->node_capacity < node_count)
+	{
+		real_matrix4x3 *nodes = realloc(record->nodes, 3 * node_count * sizeof(real_matrix4x3));
+		struct interpolation_rotation *rotations;
+
+		if (!nodes)
+		{
+			record->object_index = NONE;
+			return;
+		}
+		record->nodes = nodes;
+		rotations = realloc(record->rotations, 2 * node_count * sizeof(struct interpolation_rotation));
+		if (!rotations)
+		{
+			record->object_index = NONE;
+			return;
+		}
+		record->rotations = rotations;
+		record->node_capacity = node_count;
+		record->object_index = NONE; /* the old snapshots moved */
+	}
+	continuing = record->object_index == object_index &&
+		record->node_count == node_count &&
+		record->tick == previous_tick;
+	if (continuing)
+	{
+		record->latest ^= 1;
+		correction_advance(&record->correction, &record->correction_pending);
+	}
+	else
+	{
+		record->correction = *global_zero_vector3d;
+		record->correction_pending = *global_zero_vector3d;
+	}
+	memcpy(
+		record->nodes + record->latest * record->node_capacity,
+		object_get_node_matrices(object_index),
+		node_count * sizeof(real_matrix4x3));
+	record->rotations_valid[record->latest] = FALSE;
+	record->object_index = object_index;
+	record->node_count = node_count;
+	record->tick = interpolation_tick;
+	record->has_previous = continuing;
+	record->blended_frame = NONE;
+#ifdef HALO_PS3
+	/* port: (the timer build) */
+	ps3_timer_add(_ps3_timer_interpolation_objects, ps3_span);
+	ps3_timer_counts[_ps3_timer_interpolation_objects]++;
+	ps3_timer_counts[_ps3_timer_interpolation_nodes] += (uint32_t)node_count;
+#endif
+}
+
+#ifdef HALO_PS3
+/* port: the snapshots on the game SPU (spu_game.c), but of the objects whose records need more memory or draw a
+correction: those here after it, in the walk's order */
+static struct
+{
+	spu_game_interpolation job;
+	spu_game_answer answer;
+	int16_t deferred[MAXIMUM_INTERPOLATED_OBJECTS];
+} __attribute__((aligned(128))) snapshots_spu;
+
+/* FALSE with the SPU off: the walk is the PPE's */
+static boolean object_snapshots_spu(long previous_tick)
+{
+	spu_game_interpolation *job = &snapshots_spu.job;
+	uint32_t ticket;
+	long index;
+
+	memset(job, 0, sizeof(*job));
+	job->headers = PS3_SPU_EA(object_header_data->data);
+	job->header_size = (uint32_t)object_header_data->size;
+	job->header_count = object_header_data->count;
+	job->datum_offset = (uint32_t)offsetof(struct object_header_datum, datum);
+	job->node_matrices_offset = (uint32_t)offsetof(struct object_datum, object.node_matrices);
+	job->node_size = (int32_t)sizeof(real_matrix4x3);
+	job->maximum_nodes = MAXIMUM_INTERPOLATED_NODES;
+	job->records = PS3_SPU_EA(interpolated_objects);
+	job->record_size = (uint32_t)sizeof(struct interpolated_object);
+	job->record_count = MAXIMUM_INTERPOLATED_OBJECTS;
+	job->object_index_offset = (uint16_t)offsetof(struct interpolated_object, object_index);
+	job->tick_offset = (uint16_t)offsetof(struct interpolated_object, tick);
+	job->node_count_offset = (uint16_t)offsetof(struct interpolated_object, node_count);
+	job->node_capacity_offset = (uint16_t)offsetof(struct interpolated_object, node_capacity);
+	job->has_previous_offset = (uint16_t)offsetof(struct interpolated_object, has_previous);
+	job->latest_offset = (uint16_t)offsetof(struct interpolated_object, latest);
+	job->blended_frame_offset = (uint16_t)offsetof(struct interpolated_object, blended_frame);
+	job->correction_offset = (uint16_t)offsetof(struct interpolated_object, correction);
+	job->pending_offset = (uint16_t)offsetof(struct interpolated_object, correction_pending);
+	job->nodes_offset = (uint16_t)offsetof(struct interpolated_object, nodes);
+	job->rotations_valid_offset = (uint16_t)offsetof(struct interpolated_object, rotations_valid);
+	job->previous_tick = previous_tick;
+	job->tick = interpolation_tick;
+	job->deferred = PS3_SPU_EA(snapshots_spu.deferred);
+	job->answer = PS3_SPU_EA(&snapshots_spu.answer);
+	snapshots_spu.answer.status = 0;
+	ticket = ps3_spu_game_submit(SPU_GAME_INTERPOLATION, sizeof(*job), PS3_SPU_EA(job), 0);
+	if (!ticket || !ps3_spu_game_wait(ticket) || snapshots_spu.answer.status != SPU_GAME_DONE)
+		return FALSE;
+	ps3_timer_counts[_ps3_timer_interpolation_objects] += (uint32_t)job->object_count;
+	ps3_timer_counts[_ps3_timer_interpolation_nodes] += (uint32_t)job->node_count;
+	for (index = 0; index < (long)snapshots_spu.answer.value && index < MAXIMUM_INTERPOLATED_OBJECTS; index++)
+	{
+		long absolute_index = snapshots_spu.deferred[index];
+		struct object_header_datum *header = (struct object_header_datum *)((byte *)object_header_data->data +
+			object_header_data->size * absolute_index);
+
+		object_snapshot(DATUM_INDEX_NEW(absolute_index, header->identifier), header->datum, previous_tick);
+	}
+	return TRUE;
+}
+#endif
+
 void render_interpolation_tick(void)
 {
 	struct object_iterator iterator;
@@ -418,77 +553,14 @@ void render_interpolation_tick(void)
 		for (index = 0; index < MAXIMUM_INTERPOLATED_OBJECTS; index++)
 			interpolated_objects[index].object_index = NONE;
 	}
+#ifdef HALO_PS3
+	if (object_snapshots_spu(previous_tick)) /* port: the walk on the game SPU */
+		return;
+#endif
 
 	object_iterator_new(&iterator, _object_mask_all, 0);
 	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL)
-	{
-		long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.index);
-		struct interpolated_object *record;
-		short node_count = (short)(object->object.node_matrices.size / (short)sizeof(real_matrix4x3));
-		boolean continuing;
-#ifdef HALO_PS3
-		uint64_t ps3_span = ps3_timer_now(); /* port: (the timer build: the walk is the rest of the tick's) */
-#endif
-
-		if (absolute_index >= MAXIMUM_INTERPOLATED_OBJECTS)
-			continue;
-		record = &interpolated_objects[absolute_index];
-		if (node_count <= 0 || node_count > MAXIMUM_INTERPOLATED_NODES)
-		{
-			record->object_index = NONE;
-			continue;
-		}
-		if (record->node_capacity < node_count)
-		{
-			real_matrix4x3 *nodes = realloc(record->nodes, 3 * node_count * sizeof(real_matrix4x3));
-			struct interpolation_rotation *rotations;
-
-			if (!nodes)
-			{
-				record->object_index = NONE;
-				continue;
-			}
-			record->nodes = nodes;
-			rotations = realloc(record->rotations, 2 * node_count * sizeof(struct interpolation_rotation));
-			if (!rotations)
-			{
-				record->object_index = NONE;
-				continue;
-			}
-			record->rotations = rotations;
-			record->node_capacity = node_count;
-			record->object_index = NONE; /* the old snapshots moved */
-		}
-		continuing = record->object_index == iterator.index &&
-			record->node_count == node_count &&
-			record->tick == previous_tick;
-		if (continuing)
-		{
-			record->latest ^= 1;
-			correction_advance(&record->correction, &record->correction_pending);
-		}
-		else
-		{
-			record->correction = *global_zero_vector3d;
-			record->correction_pending = *global_zero_vector3d;
-		}
-		memcpy(
-			record->nodes + record->latest * record->node_capacity,
-			object_get_node_matrices(iterator.index),
-			node_count * sizeof(real_matrix4x3));
-		record->rotations_valid[record->latest] = FALSE;
-		record->object_index = iterator.index;
-		record->node_count = node_count;
-		record->tick = interpolation_tick;
-		record->has_previous = continuing;
-		record->blended_frame = NONE;
-#ifdef HALO_PS3
-		/* port: (the timer build) */
-		ps3_timer_add(_ps3_timer_interpolation_objects, ps3_span);
-		ps3_timer_counts[_ps3_timer_interpolation_objects]++;
-		ps3_timer_counts[_ps3_timer_interpolation_nodes] += (uint32_t)node_count;
-#endif
-	}
+		object_snapshot(iterator.index, object, previous_tick);
 }
 
 /* a new map (game.c): its objects take the indices of the last one's, and

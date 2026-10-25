@@ -36,6 +36,7 @@ upstream halo-ce-universal copy of source/saved games/game_state.c. */
 void object_bounds_cache_invalidate(void);
 #ifdef HALO_PS3
 /* port: particles.c's */
+void particles_spu_finish(void);
 void particles_spu_forget(void);
 #endif
 
@@ -97,6 +98,10 @@ static game_state_before_save_proc before_save_procs[] =
 	dummy,
 	/* port: the host's vehicle home table follows the saved object handles. */
 	coop_vehicles_before_save,
+#ifdef HALO_PS3
+	/* port: the particles the SPU updates are whole */
+	particles_spu_finish,
+#endif
 };
 
 static game_state_before_load_proc before_load_procs[] =
@@ -108,7 +113,7 @@ static game_state_before_load_proc before_load_procs[] =
 	/* port: (the objects are put back: object_bounds_cache.c) */
 	object_bounds_cache_invalidate,
 #ifdef HALO_PS3
-	/* port: the particles' rays from the SPU are of the state before */
+	/* port: the particles the SPU updates are of the state before */
 	particles_spu_forget,
 #endif
 };

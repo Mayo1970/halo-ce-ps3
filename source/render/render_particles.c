@@ -130,6 +130,9 @@ static short render_particles_gather(
 	short local_player_index = render.local_player_index;
 	long particle_index;
 
+#ifdef HALO_PS3
+	particles_spu_finish(); /* port: the SPU's particles_update (particles.c) */
+#endif
 	if (local_player_index == NONE ||
 		!local_player_is_first_person(local_player_index))
 	{

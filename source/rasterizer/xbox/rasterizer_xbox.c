@@ -336,6 +336,11 @@ static void rasterizer_filthy_bitmap_defaults_initialize(
 void SetupSmartStates(
 	void);
 
+#ifdef HALO_PS3
+/* port: d3d8_rsx.c's */
+void d3d8_light_bounds_transform(const float *columns);
+#endif
+
 /* ---------- globals */
 
 /* January keeps this object's private Direct3D state in one contiguous owner (name by convention);
@@ -2429,6 +2434,10 @@ void rasterizer_set_frustum_z(
 		-96,
 		vertex_constants,
 		8);
+#ifdef HALO_PS3
+	/* port: the lights' bounds project with the vertex shaders' transform */
+	d3d8_light_bounds_transform(&vertex_constants[0][0]);
+#endif
 	return;
 }
 

@@ -185,6 +185,16 @@ times the bitmaps' size into `port/assets/buttons/ps3`, and the Makefile
 embeds those (`embed`: swizzled A8R8G8B8 with every mip level). A bitmap
 whose pixels are not the English maps' (its CRC) keeps its own.
 
+`display.half_resolution_particles` in `config.toml` (false by default, no
+row) draws the nearest effects at half the width and height, then blends
+them over the frame. `rasterizer_transparent_geometry.c` finds them: the
+effects that alpha blend, add or alpha multiply add, after the last other
+transparent surface and before the first-person weapon's. `d3d8_rsx.c` and
+`ps3_gpu.c` draw them into a target of half the screen's size. Its colour
+holds the effects' colour, its alpha the frame's transmittance, and its
+depth the frame's, one texel of each four (the Z24S8 surface read as
+A8R8G8B8).
+
 At 60 frames per second the sounds update at the ticks' rate, as on the Xbox
 (`main.c`, `game.c`). A sound source that has not moved keeps its
 obstruction, a ray from the camera, for up to 4 ticks (`game_sound.c`).

@@ -73,7 +73,7 @@ void point_physics_dispose_from_old_map(
 }
 
 #ifdef HALO_PS3
-/* port: the air's and water's masses, for the SPU's weather (weather_particle_systems.c) */
+/* port: the air's and water's masses, for the SPU's weather and particles (weather_particle_systems.c, particles.c) */
 void point_physics_air_and_water_masses(
 	float *air,
 	float *water)
@@ -91,7 +91,7 @@ real point_physics_definition_get_mass(
 }
 
 /* port: point_physics_update's forces (the wind, the medium, gravity, friction): its result so far and the rays'
-flags; apart for the effects' particles' rays on an SPU (particles.c) */
+flags; the effects' particles' on an SPU as well (spu_game.c's particle_forces) */
 static unsigned long point_physics_update_forces(
 	unsigned long flags,
 	struct point_physics_definition const *definition,
@@ -350,51 +350,6 @@ unsigned long point_physics_update(
 
 	return result;
 }
-
-#ifdef HALO_PS3
-/* port: point_physics_update with no force, its rays left for an SPU (particles.c): its checks and forces, the result
-so far, the rays' flags, the radius it takes. FALSE with no rays to make (a dt of 0: the result is all) */
-boolean point_physics_update_begin(
-	struct point_physics_definition const *definition,
-	struct location *location,
-	real_point3d *position,
-	real_vector3d *translational_velocity,
-	real *radius,
-	real dt,
-	unsigned long *result,
-	unsigned long *collision_flags)
-{
-	match_assert_valid_real_point3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 185, position);
-	match_assert_valid_real_vector3d("c:\\halo\\SOURCE\\physics\\point_physics.c", 186, translational_velocity);
-	*radius = point_physics_radius(*radius);
-	*result = 0;
-	*collision_flags = 0;
-	if (dt == 0.0f)
-	{
-		return FALSE;
-	}
-	*result = point_physics_update_forces(0, definition, location, NONE, position, translational_velocity, NULL, *radius,
-		dt, collision_flags);
-
-	return TRUE;
-}
-
-/* port: and its rays here, when the SPU did not make them */
-unsigned long point_physics_update_end(
-	struct point_physics_definition const *definition,
-	struct location *location,
-	real_point3d *position,
-	real_vector3d *translational_velocity,
-	real_vector3d *collision_normal,
-	short *collision_material_type,
-	real radius,
-	real dt,
-	unsigned long collision_flags)
-{
-	return point_physics_update_rays(0, definition, location, position, translational_velocity, collision_normal,
-		collision_material_type, radius, dt, collision_flags);
-}
-#endif
 
 struct point_physics_definition *point_physics_definition_interpolate(
 	struct point_physics_definition const *physics1,

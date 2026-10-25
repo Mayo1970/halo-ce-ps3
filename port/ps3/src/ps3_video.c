@@ -243,7 +243,8 @@ int ps3_video_widescreen(void)
 	return widescreen;
 }
 
-void ps3_video_begin_frame(void)
+/* until a display buffer is free for the next frame */
+void ps3_video_wait_slot(void)
 {
 	unsigned waited = 0;
 
@@ -260,7 +261,30 @@ void ps3_video_begin_frame(void)
 			break;
 		}
 	}
+}
+
+void ps3_video_begin_frame(void)
+{
+	if (!ready)
+		return;
+	ps3_video_wait_slot();
 	set_render_target(current_buffer);
+}
+
+/* set_render_target's surface of the next display buffer, for commands the SPU writes */
+void ps3_video_display_target(u32 *target_offset, u32 *target_pitch, u32 *target_depth, u32 *target_depth_pitch)
+{
+	*target_offset = color_offset[current_buffer];
+	*target_pitch = pitch;
+	*target_depth = depth_offset;
+	*target_depth_pitch = width * 4;
+}
+
+/* the host buffer past the command buffer: IO-mapped main memory the RSX reads */
+void *ps3_video_spare(u32 *bytes)
+{
+	*bytes = ready ? HOST_BUFFER_SIZE - COMMAND_BUFFER_SIZE : 0;
+	return ready ? (unsigned char *)host_buffer + COMMAND_BUFFER_SIZE : NULL;
 }
 
 void ps3_video_clear(unsigned argb)

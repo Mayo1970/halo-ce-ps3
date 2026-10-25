@@ -33,10 +33,17 @@ enum
 #define PS3_TRANSPARENT_SPAN(span) ((span) = ps3_timer_now())
 #define PS3_TRANSPARENT_ADD(timer, span) ((void)ps3_timer_add((timer), (span)))
 #define PS3_TRANSPARENT_COUNT(timer, count) (ps3_timer_counts[(timer)] += (uint32_t)(count))
+/* port: (the timer build) a new group's maker; a group's draws' stamp part, and the part before the groups again */
+#define PS3_TRANSPARENT_ORIGIN(group_index) (ps3_group_origins[(group_index)] = (unsigned char)ps3_transparent_origin)
+#define PS3_TRANSPARENT_STAMPS(group) ps3_transparent_stamps(group)
+#define PS3_TRANSPARENT_STAMPS_END() ps3_transparent_stamps_end()
 #else
 #define PS3_TRANSPARENT_SPAN(span) ((void)0)
 #define PS3_TRANSPARENT_ADD(timer, span) ((void)0)
 #define PS3_TRANSPARENT_COUNT(timer, count) ((void)0)
+#define PS3_TRANSPARENT_ORIGIN(group_index) ((void)0)
+#define PS3_TRANSPARENT_STAMPS(group) ((void)0)
+#define PS3_TRANSPARENT_STAMPS_END() ((void)0)
 #endif
 
 /* ---------- structures */
@@ -88,6 +95,16 @@ static void rasterizer_sort_external(
 #ifdef HALO_PS3
 static int ps3_transparent_timer(
 	struct transparent_geometry_group const *group);
+static void ps3_transparent_stamps(
+	struct transparent_geometry_group const *group);
+static void ps3_transparent_stamps_end(
+	void);
+static void ps3_particles_half_run(
+	short *first,
+	short *end);
+/* port: d3d8_rsx.c's, port_config.c's */
+int d3d8_particles_half(int on);
+int config_boolean(const char *name);
 #endif
 
 /* ---------- globals */
@@ -101,6 +118,12 @@ static long transparent_geometry_group_count = 0;
 static long transparent_geometry_group_count2 = 0;
 static short *transparent_geometry_group_sorted_indices = NULL;
 static short transparent_geometry_next_group_sorted_index = 0;
+#ifdef HALO_PS3
+/* port: (the timer build) each group's maker's stamp part (0: its shader's type); the stamp part before the groups,
+-1 while none of them changed it */
+static unsigned char ps3_group_origins[RASTERIZER_MAXIMUM_TRANSPARENT_GEOMETRY_GROUPS];
+static int ps3_stamps_part_before = -1;
+#endif
 
 
 /* ---------- public code */
@@ -287,6 +310,7 @@ struct transparent_geometry_group *rasterizer_transparent_geometry_new_group(
 		group = transparent_geometry_groups + group_index;
 		group->sorted_index = group_index;
 		transparent_geometry_group_count = group_index + 1;
+		PS3_TRANSPARENT_ORIGIN(group_index); /* port: (the timer build) */
 	}
 
 	return group;
@@ -491,6 +515,11 @@ void rasterizer_transparent_geometry_draw(
 	if (transparent_geometry_group_count > 0)
 	{
 		boolean first_person_flag = FALSE;
+#ifdef HALO_PS3
+		short ps3_half_first = NONE;
+		short ps3_half_end = NONE;
+		boolean ps3_half_on = FALSE;
+#endif
 
 		if (water)
 		{
@@ -509,12 +538,28 @@ void rasterizer_transparent_geometry_draw(
 		rasterizer_transparent_geometry_groups_begin();
 		PS3_TRANSPARENT_ADD(_ps3_timer_transparent_begin_end, ps3_span); /* port: (the timer build) */
 		rasterizer_debug_options.transparent_pixel_counter_active = FALSE;
+#ifdef HALO_PS3
+		/* port: display.half_resolution_particles' run of effects (d3d8_rsx.c draws them at half resolution) */
+		if (!water)
+			ps3_particles_half_run(&ps3_half_first, &ps3_half_end);
+#endif
 		while (transparent_geometry_group_index < transparent_geometry_group_count)
 		{
 			struct transparent_geometry_group *group =
 				transparent_geometry_groups +
 				transparent_geometry_group_sorted_indices[
 					transparent_geometry_group_index];
+
+#ifdef HALO_PS3
+			/* port: its start, and its end (blended over the frame) before the first-person weapon's groups */
+			if (transparent_geometry_group_index == ps3_half_first)
+				ps3_half_on = d3d8_particles_half(TRUE) != 0;
+			if (ps3_half_on && transparent_geometry_group_index == ps3_half_end)
+			{
+				d3d8_particles_half(FALSE);
+				ps3_half_on = FALSE;
+			}
+#endif
 
 			if (water)
 			{
@@ -557,12 +602,18 @@ void rasterizer_transparent_geometry_draw(
 					!first_person_flag);
 			}
 
+			PS3_TRANSPARENT_STAMPS(group); /* port: (the timer build) */
 			PS3_TRANSPARENT_SPAN(ps3_span); /* port: (the timer build) */
 			rasterizer_transparent_geometry_group_draw(group, FALSE);
 			PS3_TRANSPARENT_ADD(ps3_transparent_timer(group), ps3_span); /* port: (the timer build) */
 			PS3_TRANSPARENT_COUNT(ps3_transparent_timer(group), 1); /* port: (the timer build) */
 			transparent_geometry_group_index++;
 		}
+#ifdef HALO_PS3
+		if (ps3_half_on)
+			d3d8_particles_half(FALSE); /* port: (the run's end) */
+#endif
+		PS3_TRANSPARENT_STAMPS_END(); /* port: (the timer build) */
 
 		if (!water && global_window_parameters.window_index != NONE)
 		{
@@ -594,5 +645,81 @@ static int ps3_transparent_timer(
 
 	return _ps3_timer_transparent_effect + (type >= 0 && type < (short)sizeof(timers) ? timers[type] :
 		_ps3_timer_transparent_other - _ps3_timer_transparent_effect);
+}
+
+/* port: (the timer build) while the effects pass's draws are stamped, a group's draws in its maker's part, else in its
+shader type's */
+static void ps3_transparent_stamps(
+	struct transparent_geometry_group const *group)
+{
+	int part = ps3_group_origins[group - transparent_geometry_groups];
+
+	if (ps3_draw_stamps_part < _ps3_stamp_effects_rest)
+		return;
+	if (!part)
+		part = _ps3_stamp_effect + ps3_transparent_timer(group) - _ps3_timer_transparent_effect;
+	if (part == ps3_draw_stamps_part)
+		return;
+	if (ps3_stamps_part_before < 0)
+		ps3_stamps_part_before = ps3_draw_stamps_part;
+	ps3_timers_draw_stamps(part);
+}
+
+static void ps3_transparent_stamps_end(
+	void)
+{
+	if (ps3_stamps_part_before >= 0)
+		ps3_timers_draw_stamps(ps3_stamps_part_before);
+	ps3_stamps_part_before = -1;
+}
+
+/* port: an effect whose blend d3d8_rsx.c's half target takes: alpha blend, add, alpha multiply add */
+static boolean ps3_particles_half_group(
+	struct transparent_geometry_group const *group)
+{
+	enum
+	{
+		_shader_type_effect = 1
+	};
+	short blend;
+
+	if (!group->shader || group->shader->base.type != _shader_type_effect ||
+		TEST_FLAG(group->geometry_flags, _rasterizer_geometry_first_person_bit))
+	{
+		return FALSE;
+	}
+	blend = ((struct shader_effect_definition const *)group->shader)->framebuffer_blend_function;
+
+	return blend == 0 || blend == 3 || blend == 7;
+}
+
+/* port: the groups left from the first-person weapon's on (*end), and before them the run of effects after every
+other group (*first, NONE for none) */
+static void ps3_particles_half_run(
+	short *first,
+	short *end)
+{
+	short index;
+
+	*first = NONE;
+	*end = (short)transparent_geometry_group_count;
+	if (!config_boolean("display.half_resolution_particles"))
+		return;
+	for (index = transparent_geometry_group_index; index < transparent_geometry_group_count; index++)
+	{
+		if (TEST_FLAG(transparent_geometry_groups[transparent_geometry_group_sorted_indices[index]].geometry_flags,
+			_rasterizer_geometry_first_person_bit))
+		{
+			*end = index;
+			break;
+		}
+	}
+	for (index = *end; index > transparent_geometry_group_index &&
+		ps3_particles_half_group(transparent_geometry_groups + transparent_geometry_group_sorted_indices[index - 1]);
+		index--)
+	{
+	}
+	if (index < *end)
+		*first = index;
 }
 #endif

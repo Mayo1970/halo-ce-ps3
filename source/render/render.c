@@ -268,8 +268,10 @@ static uint64_t ps3_timer_window_d3d;
 /* port: a part of a split, timed on the CPU alone (the RSX's stamp stays the split's) */
 #define PS3_TIMER_PART(timer) ((void)(ps3_timer_window = ps3_timer_add((timer), ps3_timer_window)), \
 	PS3_TIMER_D3D_ADD(timer))
-/* port: the draws stamped on the RSX by pixel shader from here (1) or not (0) */
-#define PS3_TIMER_DRAW_STAMPS(on) ps3_timers_draw_stamps(on)
+/* port: the draws stamped on the RSX by pixel shader from here in a part (_ps3_stamp_*) or not (-1); the part of the
+transparent groups made from here (0: their shader's type) */
+#define PS3_TIMER_DRAW_STAMPS(part) ps3_timers_draw_stamps(part)
+#define PS3_TRANSPARENT_ORIGIN(part) ((void)(ps3_transparent_origin = (part)))
 /* port: the interface pass's share of the game thread's Direct3D draws and constants (d3d8_rsx.c's frame timers) */
 static uint64_t ps3_interface_draws, ps3_interface_constants;
 #define PS3_TIMER_INTERFACE_BEGIN() ((void)(ps3_interface_draws = ps3_timers[_ps3_timer_front_draws], \
@@ -281,7 +283,8 @@ static uint64_t ps3_interface_draws, ps3_interface_constants;
 #define PS3_TIMER_WINDOW_BEGIN() ((void)0)
 #define PS3_TIMER_SPLIT(timer) ((void)0)
 #define PS3_TIMER_PART(timer) ((void)0)
-#define PS3_TIMER_DRAW_STAMPS(on) ((void)0)
+#define PS3_TIMER_DRAW_STAMPS(part) ((void)0)
+#define PS3_TRANSPARENT_ORIGIN(part) ((void)0)
 #define PS3_TIMER_INTERFACE_BEGIN() ((void)0)
 #define PS3_TIMER_INTERFACE_END() ((void)0)
 #endif
@@ -425,7 +428,7 @@ static void render_window(
 		PS3_TIMER_PART(_ps3_timer_diffuse_decals);
 		PS3_TIMER_SPLIT(_ps3_timer_window_diffuse);
 
-		PS3_TIMER_DRAW_STAMPS(1);
+		PS3_TIMER_DRAW_STAMPS(_ps3_stamp_specular_lights);
 		PS3_WINDOW_STEP(16);
 		lights_render_specular();
 		PS3_TIMER_SPLIT(_ps3_timer_specular_lights);
@@ -447,24 +450,32 @@ static void render_window(
 		PS3_WINDOW_STEP(22);
 		structure_render_fog();
 		PS3_TIMER_SPLIT(_ps3_timer_specular_fog);
-		PS3_TIMER_DRAW_STAMPS(0);
+		PS3_TIMER_DRAW_STAMPS(_ps3_stamp_effects_rest);
 		PS3_WINDOW_STEP(23);
 		game_engine_post_rasterize_objects();
 		PS3_WINDOW_STEP(24);
+		PS3_TIMER_DRAW_STAMPS(_ps3_stamp_weather);
 		weather_particle_systems_render();
-		PS3_TIMER_PART(_ps3_timer_effects_weather);
+		PS3_TIMER_SPLIT(_ps3_timer_effects_weather);
+		PS3_TIMER_DRAW_STAMPS(_ps3_stamp_effects_rest);
 		PS3_WINDOW_STEP(25);
+		PS3_TRANSPARENT_ORIGIN(_ps3_stamp_particles);
 		render_particles();
+		PS3_TRANSPARENT_ORIGIN(_ps3_stamp_particle_systems);
 		particle_systems_render();
-		PS3_TIMER_PART(_ps3_timer_effects_particles);
+		PS3_TRANSPARENT_ORIGIN(0);
+		PS3_TIMER_SPLIT(_ps3_timer_effects_particles);
 		PS3_WINDOW_STEP(26);
+		PS3_TRANSPARENT_ORIGIN(_ps3_stamp_contrails);
 		render_contrails_normal();
-		PS3_TIMER_PART(_ps3_timer_effects_contrails);
+		PS3_TRANSPARENT_ORIGIN(0);
+		PS3_TIMER_SPLIT(_ps3_timer_effects_contrails);
 		PS3_WINDOW_STEP(27);
 		rasterizer_transparent_geometry_draw(TRUE);
-		PS3_TIMER_PART(_ps3_timer_effects_transparent);
+		PS3_TIMER_SPLIT(_ps3_timer_effects_transparent);
 
 		PS3_WINDOW_STEP(28);
+		PS3_TIMER_DRAW_STAMPS(_ps3_stamp_decals);
 		rasterizer_decals_begin(_decal_layer_water);
 		for (rendered_cluster_index = 0;
 			rendered_cluster_index < render.rendered_cluster_count;
@@ -473,17 +484,20 @@ static void render_window(
 			rasterizer_decals_draw(rendered_cluster_get(rendered_cluster_index)->cluster_index);
 		}
 		rasterizer_decals_end();
-		PS3_TIMER_PART(_ps3_timer_effects_decals);
+		PS3_TIMER_SPLIT(_ps3_timer_effects_decals);
 
 		PS3_WINDOW_STEP(29);
+		PS3_TIMER_DRAW_STAMPS(_ps3_stamp_detail);
 		structure_render_detail_objects();
-		PS3_TIMER_PART(_ps3_timer_effects_detail);
+		PS3_TIMER_SPLIT(_ps3_timer_effects_detail);
+		PS3_TIMER_DRAW_STAMPS(_ps3_stamp_effects_rest);
 		PS3_WINDOW_STEP(30);
 		rasterizer_transparent_geometry_draw(FALSE);
 		PS3_WINDOW_STEP(31);
 		rasterizer_transparent_geometry_stop();
-		PS3_TIMER_PART(_ps3_timer_effects_transparent);
+		PS3_TIMER_SPLIT(_ps3_timer_effects_transparent);
 		PS3_TIMER_SPLIT(_ps3_timer_window_effects);
+		PS3_TIMER_DRAW_STAMPS(-1);
 		PS3_TIMER_INTERFACE_BEGIN();
 		PS3_WINDOW_STEP(32);
 		structure_render_fog_screen();
