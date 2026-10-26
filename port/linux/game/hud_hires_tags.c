@@ -78,6 +78,7 @@ void hud_hires_tags_loaded(long scenario_index);
 void hud_hires_tags_unloaded(void);
 long hud_hires_asset_at(unsigned long address, long width, long height);
 struct bitmap_data const *hud_hires_sprite_bitmap(struct bitmap_data const *bitmap, short sequence_index);
+boolean hud_hires_sprite_stencil(struct bitmap_data const *drawn, struct bitmap_data const *bitmap);
 
 #include "custom_edition_hud_buttons.h"
 
@@ -366,6 +367,17 @@ struct bitmap_data const *hud_hires_sprite_bitmap(
 	}
 
 	return bitmap;
+}
+
+/* whether a sprite drawn from `drawn` (hud_hires_sprite_bitmap's) is a PS3 stencil: those all take the message's
+colour, not the Xbox buttons' own (green A, red B, yellow Y) */
+boolean hud_hires_sprite_stencil(struct bitmap_data const *drawn, struct bitmap_data const *bitmap)
+{
+#ifdef HALO_PS3
+	return drawn != bitmap;
+#else
+	return FALSE;
+#endif
 }
 
 /* whether the bitmap at address that `asset` stands for is a Custom Edition

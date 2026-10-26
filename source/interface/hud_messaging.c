@@ -358,6 +358,7 @@ static void render_state_text(
 boolean hud_hires_button_draw(struct icon_hud_element_definition const *icon,
 	rectangle2d *cursor, pixel32 color);
 struct bitmap_data const *hud_hires_sprite_bitmap(struct bitmap_data const *bitmap, short sequence_index);
+boolean hud_hires_sprite_stencil(struct bitmap_data const *drawn, struct bitmap_data const *bitmap);
 
 static void render_state_bitmap(
 	rectangle2d *bounds,
@@ -422,6 +423,7 @@ static void render_state_bitmap(
 	long bitmap_group_index = hud_globals->messaging.messaging_icons.index;
 	long frame_index = 0;
 	struct bitmap_data const *bitmap = NULL;
+	struct bitmap_data const *drawn; /* port */
 	real_rectangle2d const *clip = NULL;
 	real scale;
 	point2d point;
@@ -444,19 +446,22 @@ static void render_state_bitmap(
 	if (bitmap && _texture_cache_bitmap_get_hardware_format(
 		(struct bitmap_data *)bitmap, FALSE, TRUE))
 	{
-		bitmap = hud_hires_sprite_bitmap(bitmap, icon->sequence_index);
+		/* port: a PS3 button stencil takes the message's colour (hud_hires_sprite_stencil) */
+		drawn = hud_hires_sprite_bitmap(bitmap, icon->sequence_index);
 		scale = local_player_count() > 1 ? 0.75f : 1.0f;
 		point.x = (short)(icon->offset.x * scale + cursor_bounds->x0);
 		point.y = (short)(cursor_bounds->y1 - icon->offset.y * scale);
 		hud_draw_bitmap_direct(
-			bitmap,
+			drawn,
 			_hud_corner_bottom_left,
 			&point,
 			clip,
 			scale,
 			0.0f,
-			TEST_FLAG(icon->flags, _hud_icon_use_color_bit) ? icon->color : color,
+			TEST_FLAG(icon->flags, _hud_icon_use_color_bit) &&
+				!hud_hires_sprite_stencil(drawn, bitmap) ? icon->color : color,
 			FALSE);
+		bitmap = drawn;
 		if (TEST_FLAG(icon->flags, _hud_icon_absolute_width_bit))
 			cursor_bounds->x0 = (short)(icon->width_offset * scale + point.x);
 		else if (clip)

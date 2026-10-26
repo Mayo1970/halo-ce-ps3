@@ -45,10 +45,10 @@ RAISE = 2.7
 
 # the HUD's message icons (the HUD globals' messaging icons, the menus' are hud_msg_icons_sm): its A, B, X and Y
 # sprites, from bitmap 0 of every Xbox map (its CRC); the places of their ovals measured on its alpha, as
-# hud_msg_icons_sm's give theirs
+# hud_msg_icons_sm's give theirs; size: the circles a little smaller than the Xbox ovals beside the prompts' text
 PS3_SHEETS = [
     {"name": "hud_msg_icons__0", "tag": "ui\\hud\\bitmaps\\combined\\hud_msg_icons", "bitmap": 0, "width": 128,
-     "height": 128, "crc": 1457896459, "sprites": [
+     "height": 128, "crc": 1457896459, "size": 0.85, "sprites": [
          {"sequence": 0, "cell": [48, 72, 72, 101], "svg": "a_butn.svg", "place": [1.0787, 1.051, 1.399]},
          {"sequence": 1, "cell": [0, 72, 24, 102], "svg": "b_butn.svg", "place": [1.08, 1.134, 1.403]},
          {"sequence": 2, "cell": [100, 40, 124, 70], "svg": "x_butn.svg", "place": [1.0608, 1.418, 1.39]},
@@ -120,7 +120,7 @@ def build(arguments) -> None:
                 centre = (left + x + scale * CENTRE[0], top + y + scale * CENTRE[1])
                 radius = min(scale * (XBOX_RADII[0] * XBOX_RADII[1]) ** 0.5, (right - left) / 2 - 0.5,
                              (bottom - top) / 2 - 0.5)
-                size = radius / PS3_RADIUS
+                size = radius * xbox.get("size", 1.0) / PS3_RADIUS
                 moved = (f"translate({centre[0] - size * CENTRE[0]:.4f} {centre[1] - size * CENTRE[1]:.4f}) "
                          f"scale({size:.4f})")
                 area = f'x="{left}" y="{top}" width="{right - left}" height="{bottom - top}"'

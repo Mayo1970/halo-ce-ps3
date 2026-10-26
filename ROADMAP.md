@@ -6067,3 +6067,10 @@ then `./build.sh pkg LOG_IP=<address>`.
     frames); 11:56:24 57.3, a checkpoint (its writer 1,789 ms, 373 waiting
     for reads). The 5 heavy windows (ticks of 7 ms or more, 8.0 ms on
     median): 60.0 fps on median (the 09:52 run's 4: 58.5).
+  - The upscale's cost (Matt: "What's the cost of the upscale filter?"):
+    about 0.6 ms of RSX time a frame drawn smaller, from the interface
+    part (the windows' 0.13 ms plus 0.59 times their share of scaled
+    frames; 0.6 to 0.8 ms in the windows all scaled, 0.1 in those whole);
+    0.2 ms a frame over the run. A sharper filter (4 to 5 texels a pixel)
+    estimated at 1 to 2 ms, not built. Matt: "It's okay for now. We're
+    doing good. I'll focus on something else."
