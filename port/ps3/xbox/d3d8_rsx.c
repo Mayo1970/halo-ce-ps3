@@ -259,7 +259,8 @@ enum
 	_record_label,
 	/* (both's) */
 	_record_particles,
-	_record_light_bounds
+	_record_light_bounds,
+	_record_scale
 };
 
 /* the timer build's records by type (_ps3_timer_record_wrap on) */
@@ -413,6 +414,9 @@ static long ui_offset;
 static void render_targets_evict(void);
 static BOOL particles_targets(void);
 static void particles_targets_free(void);
+static BOOL scaled_target(void);
+static void scaled_target_free(void);
+static void scaled_target_commit(void);
 
 static void screen_mode_choose(long *width, float scale[2])
 {
@@ -498,7 +502,11 @@ long halo_screen_commit(void)
 		render_targets_evict();
 		if (config_boolean("display.half_resolution_particles"))
 			particles_targets();
+		if (config_boolean("display.dynamic_resolution"))
+			scaled_target();
 	}
+	else
+		scaled_target_commit();
 	return screen_width;
 }
 
@@ -873,6 +881,7 @@ static void render_targets_evict(void)
 			ps3_gpu_target_free(spu.targets[index].memory, spu.targets[index].bytes);
 		spu.target_count = 0;
 		particles_targets_free();
+		scaled_target_free();
 		ps3_host_lock_leave(spu.gpu_lock);
 		screen = record_begin(_record_screen, sizeof(*screen), 0, 0);
 		if (screen)
@@ -898,6 +907,7 @@ static void render_targets_evict(void)
 		}
 	}
 	particles_targets_free();
+	scaled_target_free();
 	render_target_generation++;
 	texture_epoch++;
 }
@@ -923,17 +933,70 @@ static struct
 	void *color_memory, *depth_memory;
 	uint32_t color_bytes, depth_bytes;
 	spu_d3d_record_particles targets;
-	/* the Direct3D thread's: on between the records, with the frame's targets it began on; bound, the last bind's */
+	/* the Direct3D thread's: on between the records, with the frame's targets it began on; bound, the last bind's; the
+	half targets' part drawn, half of the frame's surface */
 	BOOL on, bound;
 	spu_d3d_record_particles half;
 	struct render_target *main_color, *main_depth;
+	unsigned long width, height;
 } particles;
+
+/* the dynamic resolution (display.dynamic_resolution; render.c): the screen's 3D view drawn into a target of the
+screen's size at a scale the RSX's time chose (ps3_gpu_dynamic_scale), then scaled up over the screen for the HUD */
+static struct
+{
+	/* the game's thread's: the view's target, made with the device, freed with the screen's targets */
+	void *memory;
+	uint32_t bytes;
+	spu_d3d_record_scale target;
+	/* the Direct3D thread's: on between the records; the screen's colour and depth its first bind found, the view's
+	size and pixels a unit at the scale */
+	BOOL on;
+	spu_d3d_record_scale view;
+	float factor;
+	struct render_target *color, *depth;
+	unsigned long width, height;
+	float scale[2];
+} scaled;
 
 /* the targets the last bind_targets found */
 static struct
 {
 	struct render_target *color, *depth;
 } targets_bound;
+
+/* the surface a colour target and depth draw into: between the scale records the screen's colour is the view's
+target at the scale (TRUE) */
+static BOOL target_surface(struct render_target *color, struct render_target *depth, struct ps3_gpu_surface *surface)
+{
+	BOOL smaller = scaled.on && color->data == scaled.view.data && !color->depth;
+
+	surface->depth_offset = depth->offset;
+	surface->depth_pitch = depth->pitch;
+	surface->smaller = (uint32_t)smaller;
+	if (!smaller)
+	{
+		surface->color_offset = color->offset;
+		surface->color_pitch = color->pitch;
+		surface->width = (uint16_t)color->width;
+		surface->height = (uint16_t)color->height;
+		return FALSE;
+	}
+	if (!scaled.width)
+	{
+		scaled.scale[0] = color->scale[0] * scaled.factor;
+		scaled.scale[1] = color->scale[1] * scaled.factor;
+		scaled.width = (unsigned long)scaled_pixel((float)color->units_width, scaled.scale[0]);
+		scaled.height = (unsigned long)scaled_pixel((float)color->units_height, scaled.scale[1]);
+		scaled.color = color;
+		scaled.depth = depth;
+	}
+	surface->color_offset = scaled.view.color_offset;
+	surface->color_pitch = scaled.view.color_pitch;
+	surface->width = (uint16_t)scaled.width;
+	surface->height = (uint16_t)scaled.height;
+	return TRUE;
+}
 
 /* the RSX surface for the current targets; FALSE if there is nothing to draw into. The lookups are kept while the
 surfaces' words stay: every draw binds. */
@@ -948,6 +1011,7 @@ static BOOL bind_targets(BOOL *has_depth)
 	} last;
 	struct render_target *color, *depth;
 	struct ps3_gpu_surface surface;
+	const float *scale;
 
 	if (last.valid && last.generation == render_target_generation &&
 		!memcmp(last.targets, device.targets, sizeof(last.targets)))
@@ -986,6 +1050,7 @@ bind:
 	targets_bound.color = color;
 	targets_bound.depth = depth;
 	particles.bound = particles.on && color == particles.main_color && depth == particles.main_depth;
+	scale = target_surface(color, depth, &surface) ? scaled.scale : color->scale;
 	if (particles.bound)
 	{
 		/* the frame's units over the half target's pixels */
@@ -993,30 +1058,25 @@ bind:
 		surface.color_pitch = particles.half.color_pitch;
 		surface.depth_offset = particles.half.depth_offset;
 		surface.depth_pitch = particles.half.depth_pitch;
-		surface.width = (uint16_t)particles.half.width;
-		surface.height = (uint16_t)particles.half.height;
+		surface.width = (uint16_t)particles.width;
+		surface.height = (uint16_t)particles.height;
+		surface.smaller = 0;
 		ps3_gpu_set_surface(&surface);
 		device.target_width = color->units_width;
 		device.target_height = color->units_height;
-		device.target_scale[0] = color->scale[0] * 0.5f;
-		device.target_scale[1] = color->scale[1] * 0.5f;
-		device.target_pixel_width = particles.half.width;
-		device.target_pixel_height = particles.half.height;
+		device.target_scale[0] = scale[0] * 0.5f;
+		device.target_scale[1] = scale[1] * 0.5f;
+		device.target_pixel_width = particles.width;
+		device.target_pixel_height = particles.height;
 		return TRUE;
 	}
-	surface.color_offset = color->offset;
-	surface.color_pitch = color->pitch;
-	surface.depth_offset = depth->offset;
-	surface.depth_pitch = depth->pitch;
-	surface.width = (uint16_t)color->width;
-	surface.height = (uint16_t)color->height;
 	ps3_gpu_set_surface(&surface);
 	device.target_width = color->units_width;
 	device.target_height = color->units_height;
-	device.target_scale[0] = color->scale[0];
-	device.target_scale[1] = color->scale[1];
-	device.target_pixel_width = color->width;
-	device.target_pixel_height = color->height;
+	device.target_scale[0] = scale[0];
+	device.target_scale[1] = scale[1];
+	device.target_pixel_width = surface.width;
+	device.target_pixel_height = surface.height;
 	return TRUE;
 }
 
@@ -1083,7 +1143,7 @@ int d3d8_particles_half(int on)
 depth the frame's; nothing when the frame's targets are not the screen's */
 static void particles_begin(const spu_d3d_record_particles *half)
 {
-	struct ps3_gpu_surface surface;
+	struct ps3_gpu_surface surface, frame;
 	BOOL has_depth;
 
 	if (particles.on || !bind_targets(&has_depth) || !has_depth ||
@@ -1093,16 +1153,20 @@ static void particles_begin(const spu_d3d_record_particles *half)
 	particles.half = *half;
 	particles.main_color = targets_bound.color;
 	particles.main_depth = targets_bound.depth;
+	/* (half of the frame's surface: the view's at its scale) */
+	target_surface(particles.main_color, particles.main_depth, &frame);
+	particles.width = (frame.width + 1UL) / 2;
+	particles.height = (frame.height + 1UL) / 2;
 	surface.color_offset = half->color_offset;
 	surface.color_pitch = half->color_pitch;
 	surface.depth_offset = half->depth_offset;
 	surface.depth_pitch = half->depth_pitch;
-	surface.width = (uint16_t)half->width;
-	surface.height = (uint16_t)half->height;
+	surface.width = (uint16_t)particles.width;
+	surface.height = (uint16_t)particles.height;
+	surface.smaller = 0;
 	ps3_gpu_set_surface(&surface);
-	ps3_gpu_clear(0xf2, 0xff000000u, 0, 0, 0, half->width, half->height);
-	ps3_gpu_particles_depth(particles.main_depth->offset, particles.main_depth->pitch, particles.main_depth->width,
-		particles.main_depth->height);
+	ps3_gpu_clear(0xf2, 0xff000000u, 0, 0, 0, (uint32_t)particles.width, (uint32_t)particles.height);
+	ps3_gpu_particles_depth(particles.main_depth->offset, particles.main_depth->pitch, frame.width, frame.height);
 }
 
 /* the half target's colour over the frame's: theirs plus the frame's times the transmittance */
@@ -1114,15 +1178,121 @@ static void particles_end(void)
 		return;
 	particles.on = FALSE;
 	particles.bound = FALSE;
-	surface.color_offset = particles.main_color->offset;
-	surface.color_pitch = particles.main_color->pitch;
-	surface.depth_offset = particles.main_depth->offset;
-	surface.depth_pitch = particles.main_depth->pitch;
-	surface.width = (uint16_t)particles.main_color->width;
-	surface.height = (uint16_t)particles.main_color->height;
+	target_surface(particles.main_color, particles.main_depth, &surface);
 	ps3_gpu_set_surface(&surface);
-	ps3_gpu_particles_composite(particles.half.color_offset, particles.half.color_pitch, particles.half.width,
-		particles.half.height);
+	ps3_gpu_particles_composite(particles.half.color_offset, particles.half.color_pitch, (uint32_t)particles.width,
+		(uint32_t)particles.height);
+}
+
+/* the game's thread: the view's target for the screen's size, made with the device and again with the screen's;
+FALSE without it */
+static BOOL scaled_target(void)
+{
+	uint32_t width = (uint32_t)scaled_pixel((float)halo_screen_width(), screen_scale[0]);
+	uint32_t height = (uint32_t)scaled_pixel((float)SCREEN_HEIGHT, screen_scale[1]);
+
+	if (scaled.memory)
+		return TRUE;
+	memset(&scaled.target, 0, sizeof(scaled.target));
+	scaled.memory = ps3_gpu_target_allocate(width, height, 0, 1, 0, &scaled.target.color_offset,
+		&scaled.target.color_pitch, &scaled.bytes);
+	if (!scaled.memory)
+	{
+		platform_log("Direct3D: no RSX memory for the dynamic resolution's %ux%u target", (unsigned)width,
+			(unsigned)height);
+		return FALSE;
+	}
+	platform_log("Direct3D: the dynamic resolution's target: %ux%u", (unsigned)width, (unsigned)height);
+	return TRUE;
+}
+
+/* (with the Direct3D thread idle: no view is drawn into it) */
+static void scaled_target_free(void)
+{
+	if (scaled.memory)
+		ps3_gpu_target_free(scaled.memory, scaled.bytes);
+	scaled.memory = NULL;
+	scaled.on = FALSE;
+}
+
+/* the game's thread, between frames: the target for the setting turned on (EXTRA OPTIONS' DYNAMIC RESOLUTION), made
+with the Direct3D thread idle */
+static void scaled_target_commit(void)
+{
+	if (scaled.memory || !device.created || !device.gpu_ready || !config_boolean("display.dynamic_resolution"))
+		return;
+	direct3d_drain();
+	spu_chunks_wait();
+	scaled_target();
+}
+
+/* render.c: the primary window's 3D view from its clear (1) to before the HUD (0), at the scale the RSX's time chose;
+FALSE when it is drawn whole */
+int d3d8_dynamic_resolution(int on)
+{
+	spu_d3d_record_scale *payload;
+	uint32_t eighths;
+
+	if (!on)
+	{
+		record_begin(_record_scale, 0, 0, 0);
+		record_commit();
+		return TRUE;
+	}
+	if (!device.gpu_ready || !config_boolean("display.dynamic_resolution"))
+		return FALSE;
+	/* (a whole view's record, 8 eighths, marks its frame as a measure of the scale; the target is made between
+	frames, halo_screen_commit) */
+	eighths = ps3_gpu_dynamic_scale();
+	if (!scaled.memory)
+		eighths = 8;
+	payload = record_begin(_record_scale, sizeof(*payload), 1, 0);
+	if (!payload)
+		return FALSE;
+	*payload = scaled.target;
+	payload->data = device.back_buffer.Data;
+	payload->eighths = eighths;
+	record_commit();
+	return eighths < 8;
+}
+
+/* the Direct3D thread: the frame's scale for ps3_gpu.c's measure; under 8 eighths, the screen's colour drawn into the
+view's target at the scale until scale_end */
+static void scale_begin(const spu_d3d_record_scale *view)
+{
+	if (view->eighths >= 1 && view->eighths <= 8)
+		ps3_gpu_frame_scale(view->eighths);
+	if (scaled.on || view->eighths < 1 || view->eighths > 7)
+		return;
+	scaled.on = TRUE;
+	scaled.view = *view;
+	scaled.factor = view->eighths / 8.0f;
+	scaled.color = scaled.depth = NULL;
+	scaled.width = scaled.height = 0;
+	texture_epoch++;
+}
+
+/* the view's target over the whole screen's colour; its depth stays the view's, which the HUD does not test */
+static void scale_end(void)
+{
+	struct ps3_gpu_surface surface;
+
+	if (!scaled.on)
+		return;
+	scaled.on = FALSE;
+	texture_epoch++;
+	if (!scaled.width)
+		return;
+	surface.color_offset = scaled.color->offset;
+	surface.color_pitch = scaled.color->pitch;
+	surface.depth_offset = scaled.depth->offset;
+	surface.depth_pitch = scaled.depth->pitch;
+	surface.width = (uint16_t)scaled.color->width;
+	surface.height = (uint16_t)scaled.color->height;
+	surface.smaller = 0;
+	ps3_gpu_set_surface(&surface);
+	ps3_gpu_scale_up(scaled.view.color_offset, scaled.view.color_pitch, (uint32_t)scaled.width,
+		(uint32_t)scaled.height);
 }
 
 /* a draw into the half target: the colour blended as into the frame's, the alpha (the transmittance) times the
@@ -1763,24 +1933,27 @@ static void stage_bind(int stage)
 	if (target)
 	{
 		struct xgpu_texture_description description;
+		/* (the screen's colour drawn smaller so far: the view's target at its scale) */
+		BOOL smaller = scaled.on && scaled.width && target == scaled.color;
+		const float *scale = smaller ? scaled.scale : target->scale;
 
 		/* a rendered target: its surface, linear, its one level */
 		xgpu_texture_describe(texture->format, texture->size, &description);
-		bound->offset = target->offset;
-		bound->pitch = target->pitch;
-		bound->width = (uint16_t)target->width;
-		bound->height = (uint16_t)target->height;
+		bound->offset = smaller ? scaled.view.color_offset : target->offset;
+		bound->pitch = smaller ? scaled.view.color_pitch : target->pitch;
+		bound->width = (uint16_t)(smaller ? scaled.width : target->width);
+		bound->height = (uint16_t)(smaller ? scaled.height : target->height);
 		bound->depth = 1;
 		bound->format = GCM_TEXTURE_FORMAT_A8R8G8B8 | GCM_TEXTURE_FORMAT_LIN |
 			(description.linear ? GCM_TEXTURE_FORMAT_UNRM : 0);
 		bound->levels = 1;
 		bound->dimension = GCM_TEXTURE_DIMS_2D;
 		/* the game's texel coordinates are in its units; the pixels are the screen's scale (ps3_rsx_fp.c) */
-		if (description.linear && (target->scale[0] != 1.0f || target->scale[1] != 1.0f))
+		if (description.linear && (scale[0] != 1.0f || scale[1] != 1.0f))
 		{
 			stage_binds[stage].scaled = (uint8_t)(1 << stage);
-			device.texture_scale[stage][0] = target->scale[0];
-			device.texture_scale[stage][1] = target->scale[1];
+			device.texture_scale[stage][0] = scale[0];
+			device.texture_scale[stage][1] = scale[1];
 		}
 	}
 	else
@@ -4608,6 +4781,12 @@ static void record_execute(const struct record *record)
 		if (light_bounds.on)
 			light_bounds.bounds = *(const spu_d3d_record_light_bounds *)payload;
 		break;
+	case _record_scale:
+		if (record->a)
+			scale_begin(payload);
+		else
+			scale_end();
+		break;
 	default:
 		break;
 	}
@@ -5036,6 +5215,7 @@ typedef char spu_records_check[(int)_record_present == (int)_spu_d3d_record_pres
 	(int)_record_screen == (int)_spu_d3d_record_screen && (int)_record_tag_cache == (int)_spu_d3d_record_tag_cache &&
 	(int)_record_label == (int)_spu_d3d_record_label && (int)_record_particles == (int)_spu_d3d_record_particles &&
 	(int)_record_light_bounds == (int)_spu_d3d_record_light_bounds &&
+	(int)_record_scale == (int)_spu_d3d_record_scale &&
 	sizeof(struct record) == sizeof(spu_d3d_record) && sizeof(struct record_draw) == sizeof(spu_d3d_record_draw) &&
 	sizeof(struct record_elements) == sizeof(spu_d3d_record_elements) &&
 	sizeof(struct stage_texture) == sizeof(spu_d3d_stage_texture) &&
@@ -5684,6 +5864,8 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void 
 		halo_screen_width();
 		if (device.gpu_ready && config_boolean("display.half_resolution_particles"))
 			particles_targets();
+		if (device.gpu_ready && config_boolean("display.dynamic_resolution"))
+			scaled_target();
 		device.created = TRUE;
 		ps3_timers_shaders_log = shaders_log;
 		ps3_timers_direct3d_collect = spu_timers_collect;
@@ -6007,6 +6189,8 @@ static void present_run(void)
 		struct surface_words words;
 		struct render_target *back_buffer;
 
+		/* (a view the game left smaller is scaled up for the frame) */
+		scale_end();
 		surface_words_read(&device.back_buffer, &words);
 		back_buffer = render_target_get(&words, FALSE);
 		if (back_buffer)

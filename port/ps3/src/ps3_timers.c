@@ -44,6 +44,9 @@ uint64_t ps3_rsx_timers[_ps3_timer_count];
 uint64_t ps3_rsx_frame_nanoseconds;
 uint32_t ps3_rsx_frames;
 uint32_t ps3_rsx_draws[_ps3_timer_count];
+uint32_t ps3_rsx_scale_frames[9];
+uint64_t ps3_rsx_scale_nanoseconds[9];
+uint32_t ps3_rsx_scale_changes;
 uint64_t ps3_draw_stamp_nanoseconds[2][PS3_DRAW_STAMP_KEYS];
 uint32_t ps3_draw_stamp_draws[2][PS3_DRAW_STAMP_KEYS];
 uint64_t ps3_draw_stamp_part_nanoseconds[_ps3_stamp_count];
@@ -704,6 +707,19 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		r[_ps3_timer_window_lightmaps], r[_ps3_timer_window_lights], r[_ps3_timer_window_diffuse],
 		r[_ps3_timer_window_specular], r[_ps3_timer_window_effects], r[_ps3_timer_window_interface],
 		r[_ps3_timer_window_end], r[_ps3_timer_rsx_after], r[_ps3_timer_present]);
+	if (ps3_rsx_scale_frames[0] < ps3_rsx_frames || ps3_rsx_scale_changes)
+	{
+		length = (unsigned long)snprintf(line, sizeof(line), "[time] dynamic resolution, frames (the windows' RSX ms "
+			"a frame) by the view's scale:");
+		for (index = 8; index >= 5 && length < sizeof(line); index--)
+		{
+			length += (unsigned long)snprintf(line + length, sizeof(line) - length, "%s %u/8 %u (%.1f)",
+				index < 8 ? "," : "", (unsigned)index, (unsigned)ps3_rsx_scale_frames[index],
+				ps3_rsx_scale_frames[index] ? ps3_rsx_scale_nanoseconds[index] * 1.0e-6 / ps3_rsx_scale_frames[index] :
+				0.0);
+		}
+		ps3_log_printf("%s; %u changes\n", line, (unsigned)ps3_rsx_scale_changes);
+	}
 	length = (unsigned long)snprintf(line, sizeof(line), "[time] specular part, ms a frame: game thread:");
 	for (index = 0; index <= _ps3_timer_specular_fog - _ps3_timer_specular_lights && length < sizeof(line); index++)
 	{
@@ -785,6 +801,9 @@ void ps3_timers_frame(void)
 	ps3_rsx_frame_nanoseconds = 0;
 	ps3_rsx_frames = 0;
 	memset(ps3_rsx_draws, 0, sizeof(ps3_rsx_draws));
+	memset(ps3_rsx_scale_frames, 0, sizeof(ps3_rsx_scale_frames));
+	memset(ps3_rsx_scale_nanoseconds, 0, sizeof(ps3_rsx_scale_nanoseconds));
+	ps3_rsx_scale_changes = 0;
 	memset(ps3_draw_stamp_nanoseconds, 0, sizeof(ps3_draw_stamp_nanoseconds));
 	memset(ps3_draw_stamp_draws, 0, sizeof(ps3_draw_stamp_draws));
 	memset(ps3_draw_stamp_part_nanoseconds, 0, sizeof(ps3_draw_stamp_part_nanoseconds));

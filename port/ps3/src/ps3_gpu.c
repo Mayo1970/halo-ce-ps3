@@ -206,6 +206,18 @@ static spu_d3d_draw_stamps draw_stamps __attribute__((aligned(128)));
 typedef char stamps_check[TIMESTAMP_PARTS == SPU_D3D_TIMESTAMP_PARTS && DRAW_STAMPS == SPU_D3D_DRAW_STAMPS &&
 	TIMESTAMP_REPORT_BASE == 256 && DRAW_STAMP_REPORT_BASE == 512 && FRAME_LABEL == 64 ? 1 : -1];
 
+/* display.dynamic_resolution's scale in eighths (d3d8_rsx.c), from the RSX's time in the windows of frames drawn at it:
+an eighth less over DYNAMIC_DOWN; an eighth more when that time grown with the pixels stays under DYNAMIC_UP */
+#define DYNAMIC_DOWN_NANOSECONDS 14000000.0
+#define DYNAMIC_UP_NANOSECONDS 12500000.0
+#define DYNAMIC_SMALLEST 5
+static struct
+{
+	volatile uint32_t eighths;
+	uint32_t frames;
+	double recent, settled;
+} dynamic = { 8, 0, 0.0, 0.0 };
+
 static void timestamps_read(void);
 static void draw_stamps_read(void);
 
@@ -655,8 +667,9 @@ void ps3_gpu_clear(uint32_t flags, uint32_t argb, uint32_t depth_stencil, uint32
 	if ((mask & GCM_CLEAR_Z) && zcull_surface())
 	{
 		/* the whole depth surface: ZCull starts again from it; a part (a split-screen window, a smaller colour
-		target's) leaves its data stale */
-		if (!x && !y && width >= zcull_width && height >= zcull_height)
+		target's) leaves its data stale. The smaller view draws in its part alone until the next clear. */
+		if (!x && !y && ((width >= zcull_width && height >= zcull_height) ||
+			(surface.smaller && width >= surface.width && height >= surface.height)))
 		{
 			rsxSetClearZCullSurface(context, GCM_TRUE, GCM_FALSE);
 			zcull_valid = 1;
@@ -1440,6 +1453,61 @@ void ps3_gpu_particles_composite(uint32_t color_offset, uint32_t color_pitch, ui
 	caches_invalidate();
 }
 
+/* ---------- the dynamic resolution (d3d8_rsx.c) */
+
+uint32_t ps3_gpu_dynamic_scale(void)
+{
+	return dynamic.eighths;
+}
+
+void ps3_gpu_frame_scale(uint32_t eighths)
+{
+	stamps[frame_index % 3].eighths = eighths;
+}
+
+void ps3_gpu_scale_up(uint32_t color_offset, uint32_t color_pitch, uint32_t width, uint32_t height)
+{
+	struct ps3_gpu_state next;
+
+	if (!ready || !surface_valid || !width || !height)
+		return;
+	surface_state(&next);
+	next.color_mask = GCM_COLOR_MASK_R | GCM_COLOR_MASK_G | GCM_COLOR_MASK_B | GCM_COLOR_MASK_A;
+	ps3_gpu_set_state(&next);
+	ps3_gpu_set_vertex_program(&blit.vertex);
+	fragment_program_load(blit.fragment_offset, 0x40, 2, 1, 1);
+	surface_texture(color_offset, color_pitch, width, height, GCM_TEXTURE_LINEAR);
+	surface_quad(0.0f, 0.0f, 1.0f, 1.0f);
+	caches_invalidate();
+}
+
+/* a finished frame's time in its windows at its scale (0: the scale not used), for the frames after */
+static void dynamic_scale_update(uint64_t window, uint32_t eighths)
+{
+	uint32_t now = dynamic.eighths;
+
+	if (eighths > 8)
+		return;
+	ps3_rsx_scale_frames[eighths]++;
+	ps3_rsx_scale_nanoseconds[eighths] += window;
+	/* (the frames drawn before the last change are not its measure) */
+	if (eighths != now)
+		return;
+	dynamic.recent = dynamic.frames ? dynamic.recent + ((double)window - dynamic.recent) / 4.0 : (double)window;
+	dynamic.settled = dynamic.frames ? dynamic.settled + ((double)window - dynamic.settled) / 16.0 : (double)window;
+	dynamic.frames++;
+	if (now > DYNAMIC_SMALLEST && dynamic.frames >= 4 && dynamic.recent > DYNAMIC_DOWN_NANOSECONDS)
+		now--;
+	else if (now < 8 && dynamic.frames >= 60 &&
+		dynamic.settled * (now + 1) * (now + 1) < DYNAMIC_UP_NANOSECONDS * now * now)
+		now++;
+	else
+		return;
+	dynamic.eighths = now;
+	dynamic.frames = 0;
+	ps3_rsx_scale_changes++;
+}
+
 /* 1 when the system's overlay dropped the resident programs */
 static int frame_begin(void)
 {
@@ -1572,11 +1640,11 @@ void ps3_gpu_stop_drawing(void)
 }
 
 /* the frame before last's timestamps (the RSX has finished it): each part ends at its split, from the split before;
-and the frame's time */
+and the frame's time, and its time in the windows (the dynamic resolution's measure) */
 static void timestamps_read(void)
 {
 	uint32_t set = (frame_index + 1) % 3, index;
-	uint64_t previous = 0, first = 0;
+	uint64_t previous = 0, first = 0, window = 0;
 
 	for (index = 0; index < stamps[set].count; index++)
 	{
@@ -1584,8 +1652,14 @@ static void timestamps_read(void)
 
 		if (index)
 		{
-			ps3_rsx_timers[stamps[set].parts[index]] += now > previous ? now - previous : 0;
-			ps3_rsx_draws[stamps[set].parts[index]] += stamps[set].draws[index];
+			uint64_t time = now > previous ? now - previous : 0;
+			uint32_t part = stamps[set].parts[index];
+
+			ps3_rsx_timers[part] += time;
+			ps3_rsx_draws[part] += stamps[set].draws[index];
+			if (part != _ps3_timer_rsx_previous && part != _ps3_timer_rsx_before && part != _ps3_timer_rsx_after &&
+				part != _ps3_timer_present)
+				window += time;
 		}
 		else
 			first = now;
@@ -1595,8 +1669,10 @@ static void timestamps_read(void)
 	{
 		ps3_rsx_frame_nanoseconds += previous > first ? previous - first : 0;
 		ps3_rsx_frames++;
+		dynamic_scale_update(window, stamps[set].eighths);
 	}
 	stamps[set].count = 0;
+	stamps[set].eighths = 0;
 }
 
 /* the stamped frame's draws, once the RSX has finished it: each from the stamp before (a span's first starts it) */

@@ -6,8 +6,14 @@ in its order, so the PC builds' floats; and memory streams. Fixed-width types on
 
 #include <stdint.h>
 
-/* 1 when VMX gives the scalar results (VSCR's NJ off and checked on denormals, at the first call); 0: use the scalar code */
-int ps3_vmx_exact(void);
+/* 1 when VMX gives the scalar results (VSCR's NJ off and checked on denormals, at the first call); 0: the scalar code.
+Inline: a call's frame and its save and restore (a load-hit-store) cost more than the check (ps3_vmx_exact_check) */
+extern int ps3_vmx_exact_state;
+int ps3_vmx_exact_check(void);
+static inline int ps3_vmx_exact(void)
+{
+	return ps3_vmx_exact_state >= 0 ? ps3_vmx_exact_state : ps3_vmx_exact_check();
+}
 /* fast_vector_intersects_sphere (real_math.c) for count spheres (x, y, z, radius, 16-byte aligned), four at once: bit i
 set when the segment from point along direction misses sphere i; count up to 32 */
 uint32_t ps3_vmx_segment_misses_spheres(const float *const *spheres, uint32_t count, const float *point,

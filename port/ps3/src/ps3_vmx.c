@@ -7,8 +7,8 @@ rounding, as the scalar multiply); adds and subtracts round to nearest as the PC
 #include <altivec.h>
 #include <string.h>
 
-/* -1 until the first call compares VMX with the FPU */
-static int exact = -1;
+/* -1 until the first call compares VMX with the FPU (ps3_vmx_exact, inline in ps3_vmx.h) */
+int ps3_vmx_exact_state = -1;
 
 static inline vector float product(vector float a, vector float b)
 {
@@ -23,17 +23,17 @@ static inline void java_mode(void)
 	__asm__ volatile("mtvscr %0" : : "v"(zero) : "memory");
 }
 
-int ps3_vmx_exact(void)
+int ps3_vmx_exact_check(void)
 {
 	/* denormal products, sums and inputs, and signed zeros */
 	static const float a_values[4] __attribute__((aligned(16))) = { 1e-20f, 1.5e-39f, -0.0f, 3.0e-39f };
 	static const float b_values[4] __attribute__((aligned(16))) = { 1e-20f, 0.75f, 1.0f, -2.5e-39f };
 	const float *a = a_values, *b = b_values;
 	union { vector float v; uint32_t words[4]; } products, sums;
-	int lane;
+	int lane, exact;
 
-	if (exact >= 0)
-		return exact;
+	if (ps3_vmx_exact_state >= 0)
+		return ps3_vmx_exact_state;
 	/* (the compiler cannot fold what it cannot see) */
 	__asm__("" : "+r"(a), "+r"(b));
 	java_mode();
@@ -51,6 +51,7 @@ int ps3_vmx_exact(void)
 	}
 	ps3_log_printf("[vmx] %s\n", exact ? "exact: VSCR's NJ off, the denormals as the FPU's" :
 		"not exact (denormals differ): the scalar code");
+	ps3_vmx_exact_state = exact;
 	return exact;
 }
 

@@ -879,6 +879,8 @@ typedef struct
 	uint32_t depth_pitch;
 	uint16_t width;
 	uint16_t height;
+	/* ps3_gpu.h's: the screen's view drawn smaller (a depth clear of all of it is ZCull's whole) */
+	uint32_t smaller;
 } gpu_surface;
 
 /* rsxSetSurface of ps3_gpu.c's description: A8R8G8B8 into target 0 (the MRT slots 1 to 3 at the same offset, pitch 64),
@@ -1444,7 +1446,8 @@ static struct
 	uint32_t draws[TIMESTAMP_PARTS];
 	uint32_t count;
 	uint32_t frame;
-	uint32_t pad[2];
+	uint32_t eighths;
+	uint32_t pad;
 } stamps __attribute__((aligned(16)));
 static uint32_t part_draws;
 static struct
@@ -1508,7 +1511,7 @@ static void gpu_set_surface(const gpu_surface *target)
 {
 	if (surface_valid && target->color_offset == surface.color_offset && target->color_pitch == surface.color_pitch &&
 		target->depth_offset == surface.depth_offset && target->depth_pitch == surface.depth_pitch &&
-		target->width == surface.width && target->height == surface.height)
+		target->width == surface.width && target->height == surface.height && target->smaller == surface.smaller)
 		return;
 	surface = *target;
 	surface_valid = 1;
@@ -1577,7 +1580,8 @@ static void gpu_clear(uint32_t flags, uint32_t argb, uint32_t depth_stencil, uin
 	rsx_clear_surface(mask);
 	if ((mask & GCM_CLEAR_Z) && zcull_surface())
 	{
-		if (!x && !y && width >= zcull_width && height >= zcull_height)
+		if (!x && !y && ((width >= zcull_width && height >= zcull_height) ||
+			(surface.smaller && width >= surface.width && height >= surface.height)))
 		{
 			rsx_clear_zcull_surface(1, 0);
 			zcull_valid = 1;
@@ -2352,12 +2356,56 @@ static struct
 	BOOL on, bound;
 	spu_d3d_record_particles half;
 	render_target *main_color, *main_depth;
+	uint32_t width, height;
 } particles;
+
+/* d3d8_rsx.c's scaled (the Direct3D thread's part) */
+static struct
+{
+	BOOL on;
+	spu_d3d_record_scale view;
+	float factor;
+	render_target *color, *depth;
+	uint32_t width, height;
+	float scale[2];
+} scaled;
 
 static struct
 {
 	render_target *color, *depth;
 } targets_bound;
+
+/* d3d8_rsx.c's target_surface */
+static BOOL target_surface(render_target *color, render_target *depth, gpu_surface *next)
+{
+	BOOL smaller = scaled.on && color->data == scaled.view.data && !color->depth;
+
+	next->depth_offset = depth->offset;
+	next->depth_pitch = depth->pitch;
+	next->smaller = (uint32_t)smaller;
+	if (!smaller)
+	{
+		next->color_offset = color->offset;
+		next->color_pitch = color->pitch;
+		next->width = (uint16_t)color->width;
+		next->height = (uint16_t)color->height;
+		return FALSE;
+	}
+	if (!scaled.width)
+	{
+		scaled.scale[0] = f_mul(color->scale[0], scaled.factor);
+		scaled.scale[1] = f_mul(color->scale[1], scaled.factor);
+		scaled.width = (uint32_t)scaled_pixel(f_from_u32(color->units_width), scaled.scale[0]);
+		scaled.height = (uint32_t)scaled_pixel(f_from_u32(color->units_height), scaled.scale[1]);
+		scaled.color = color;
+		scaled.depth = depth;
+	}
+	next->color_offset = scaled.view.color_offset;
+	next->color_pitch = scaled.view.color_pitch;
+	next->width = (uint16_t)scaled.width;
+	next->height = (uint16_t)scaled.height;
+	return TRUE;
+}
 
 static BOOL bind_targets(BOOL *has_depth)
 {
@@ -2370,6 +2418,7 @@ static BOOL bind_targets(BOOL *has_depth)
 	} last;
 	render_target *color, *depth;
 	gpu_surface next;
+	float scale[2];
 
 	if (last.valid && last.generation == render_target_generation &&
 		!memcmp(last.targets, device.targets, sizeof(last.targets)))
@@ -2407,36 +2456,41 @@ bind:
 	targets_bound.color = color;
 	targets_bound.depth = depth;
 	particles.bound = particles.on && color == particles.main_color && depth == particles.main_depth;
+	if (target_surface(color, depth, &next))
+	{
+		scale[0] = scaled.scale[0];
+		scale[1] = scaled.scale[1];
+	}
+	else
+	{
+		scale[0] = color->scale[0];
+		scale[1] = color->scale[1];
+	}
 	if (particles.bound)
 	{
 		next.color_offset = particles.half.color_offset;
 		next.color_pitch = particles.half.color_pitch;
 		next.depth_offset = particles.half.depth_offset;
 		next.depth_pitch = particles.half.depth_pitch;
-		next.width = (uint16_t)particles.half.width;
-		next.height = (uint16_t)particles.half.height;
+		next.width = (uint16_t)particles.width;
+		next.height = (uint16_t)particles.height;
+		next.smaller = 0;
 		gpu_set_surface(&next);
 		device.target_width = color->units_width;
 		device.target_height = color->units_height;
-		device.target_scale[0] = f_mul(color->scale[0], 0.5f);
-		device.target_scale[1] = f_mul(color->scale[1], 0.5f);
-		device.target_pixel_width = particles.half.width;
-		device.target_pixel_height = particles.half.height;
+		device.target_scale[0] = f_mul(scale[0], 0.5f);
+		device.target_scale[1] = f_mul(scale[1], 0.5f);
+		device.target_pixel_width = particles.width;
+		device.target_pixel_height = particles.height;
 		return TRUE;
 	}
-	next.color_offset = color->offset;
-	next.color_pitch = color->pitch;
-	next.depth_offset = depth->offset;
-	next.depth_pitch = depth->pitch;
-	next.width = (uint16_t)color->width;
-	next.height = (uint16_t)color->height;
 	gpu_set_surface(&next);
 	device.target_width = color->units_width;
 	device.target_height = color->units_height;
-	device.target_scale[0] = color->scale[0];
-	device.target_scale[1] = color->scale[1];
-	device.target_pixel_width = color->width;
-	device.target_pixel_height = color->height;
+	device.target_scale[0] = scale[0];
+	device.target_scale[1] = scale[1];
+	device.target_pixel_width = next.width;
+	device.target_pixel_height = next.height;
 	return TRUE;
 }
 
@@ -2529,17 +2583,27 @@ static inline vec_uint4 times_prime(vec_uint4 x)
 		(vec_short8)low)));
 }
 
+/* a piece of texture_hash's stream (4 KB, the last shorter) after its input buffer's first 16 bytes, with the line
+before it (back 16: the shuffle's first line); the last with the lines up to the end (the last bytes) */
+static inline void texture_hash_fetch(uint32_t stream, uint32_t end, uint32_t back, uint32_t piece, uint32_t pieces)
+{
+	uint32_t first = stream + piece * 4096, bytes = piece + 1 == pieces ? end - first : 4096;
+
+	mfc_get(inputs[piece & 1] + 16 - back, first - back, bytes + back, TAG_INPUT + (piece & 1), 0, 0);
+}
+
 /* xgpu_texture_hash (spu_vertices.c's hash_task): 16 lanes of FNV-1a on the words in order, the last bytes into lane
-0; 64 bytes at a time at any alignment (two lines shuffled), each 4 KB fetched while the last is hashed */
+0; 64 bytes at a time at any alignment, 4 KB fetches (the first line and last bytes in them) while one is hashed */
 static uint64_t texture_hash(uint32_t source, uint32_t size)
 {
 	static const vec_uchar16 in_order = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
-	static vec_uint4 first_line;
 	uint32_t words[TEXTURE_HASH_LANES], index, done = 64 * (size / 64), word_index = done / 4, piece;
-	uint32_t offset = source & 15, stream = offset ? (source & ~15u) + 16 : source;
+	uint32_t pieces = (done + 4095) / 4096, rest = size - done, offset = source & 15, back = offset ? 16 : 0;
+	uint32_t stream = offset ? (source & ~15u) + 16 : source, end = (source + size + 15) & ~15u;
 	/* (bytes 0..15 plus the offset: no carry between them) */
 	vec_uchar16 pattern = (vec_uchar16)spu_add((vec_ushort8)in_order, spu_splats((unsigned short)(offset * 0x0101)));
-	vec_uint4 vector_lanes[4], carry = spu_splats(0u);
+	vec_uint4 vector_lanes[4];
+	const unsigned char *tail = inputs[0] + 16 + offset;
 
 	for (index = 0; index < 4; index++)
 	{
@@ -2547,51 +2611,48 @@ static uint64_t texture_hash(uint32_t source, uint32_t size)
 
 		vector_lanes[index] = spu_xor(spu_splats(TEXTURE_HASH_BASIS), lane);
 	}
-	if (done && offset)
+	/* (under 64 bytes: their lines alone) */
+	if (!pieces && rest)
+		mfc_get(inputs[0] + 16, source & ~15u, end - (source & ~15u), TAG_INPUT, 0, 0);
+	for (piece = 0; piece < 2 && piece < pieces; piece++)
+		texture_hash_fetch(stream, end, back, piece, pieces);
+	/* (a loop for each alignment: no branch between the pieces of one) */
+	for (piece = 0; !offset && piece < pieces; piece++)
 	{
-		dma_get(&first_line, source & ~15u, 16, TAG_MISC);
-		dma_wait(1 << TAG_MISC);
-		carry = first_line;
-	}
-	for (piece = 0; piece < 2 && piece * 4096 < done; piece++)
-	{
-		mfc_get(inputs[piece], stream + piece * 4096, done - piece * 4096 < 4096 ? done - piece * 4096 : 4096,
-			TAG_INPUT + piece, 0, 0);
-	}
-	for (piece = 0; piece * 4096 < done; piece++)
-	{
-		uint32_t bytes = done - piece * 4096 < 4096 ? done - piece * 4096 : 4096, group;
-		const vec_uint4 *quads = (const vec_uint4 *)inputs[piece & 1];
+		uint32_t groups = (done - piece * 4096 < 4096 ? done - piece * 4096 : 4096) / 64, group;
+		const vec_uint4 *quads = (const vec_uint4 *)(inputs[piece & 1] + 16);
 
 		dma_wait(1 << (TAG_INPUT + (piece & 1)));
-		if (!offset)
+		for (group = 0; group < groups; group++, quads += 4)
 		{
-			for (group = 0; group < bytes / 64; group++, quads += 4)
-			{
-				vector_lanes[0] = times_prime(spu_xor(vector_lanes[0], quads[0]));
-				vector_lanes[1] = times_prime(spu_xor(vector_lanes[1], quads[1]));
-				vector_lanes[2] = times_prime(spu_xor(vector_lanes[2], quads[2]));
-				vector_lanes[3] = times_prime(spu_xor(vector_lanes[3], quads[3]));
-			}
+			vector_lanes[0] = times_prime(spu_xor(vector_lanes[0], quads[0]));
+			vector_lanes[1] = times_prime(spu_xor(vector_lanes[1], quads[1]));
+			vector_lanes[2] = times_prime(spu_xor(vector_lanes[2], quads[2]));
+			vector_lanes[3] = times_prime(spu_xor(vector_lanes[3], quads[3]));
 		}
-		else
-		{
-			for (group = 0; group < bytes / 64; group++, quads += 4)
-			{
-				vec_uint4 next0 = quads[0], next1 = quads[1], next2 = quads[2], next3 = quads[3];
+		if (__builtin_expect(piece + 2 < pieces, 1))
+			texture_hash_fetch(stream, end, back, piece + 2, pieces);
+	}
+	for (piece = 0; offset && piece < pieces; piece++)
+	{
+		uint32_t groups = (done - piece * 4096 < 4096 ? done - piece * 4096 : 4096) / 64, group;
+		const vec_uint4 *quads = (const vec_uint4 *)(inputs[piece & 1] + 16);
+		vec_uint4 carry;
 
-				vector_lanes[0] = times_prime(spu_xor(vector_lanes[0], spu_shuffle(carry, next0, pattern)));
-				vector_lanes[1] = times_prime(spu_xor(vector_lanes[1], spu_shuffle(next0, next1, pattern)));
-				vector_lanes[2] = times_prime(spu_xor(vector_lanes[2], spu_shuffle(next1, next2, pattern)));
-				vector_lanes[3] = times_prime(spu_xor(vector_lanes[3], spu_shuffle(next2, next3, pattern)));
-				carry = next3;
-			}
-		}
-		if ((piece + 2) * 4096 < done)
+		dma_wait(1 << (TAG_INPUT + (piece & 1)));
+		carry = quads[-1];
+		for (group = 0; group < groups; group++, quads += 4)
 		{
-			mfc_get(inputs[piece & 1], stream + (piece + 2) * 4096,
-				done - (piece + 2) * 4096 < 4096 ? done - (piece + 2) * 4096 : 4096, TAG_INPUT + (piece & 1), 0, 0);
+			vec_uint4 next0 = quads[0], next1 = quads[1], next2 = quads[2], next3 = quads[3];
+
+			vector_lanes[0] = times_prime(spu_xor(vector_lanes[0], spu_shuffle(carry, next0, pattern)));
+			vector_lanes[1] = times_prime(spu_xor(vector_lanes[1], spu_shuffle(next0, next1, pattern)));
+			vector_lanes[2] = times_prime(spu_xor(vector_lanes[2], spu_shuffle(next1, next2, pattern)));
+			vector_lanes[3] = times_prime(spu_xor(vector_lanes[3], spu_shuffle(next2, next3, pattern)));
+			carry = next3;
 		}
+		if (__builtin_expect(piece + 2 < pieces, 1))
+			texture_hash_fetch(stream, end, back, piece + 2, pieces);
 	}
 	for (index = 0; index < 4; index++)
 	{
@@ -2600,27 +2661,20 @@ static uint64_t texture_hash(uint32_t source, uint32_t size)
 		words[4 * index + 2] = spu_extract(vector_lanes[index], 2);
 		words[4 * index + 3] = spu_extract(vector_lanes[index], 3);
 	}
-	while (done + 4 <= size)
+	/* the last bytes: in the last piece's buffer, after its stream's (or alone) */
+	if (pieces)
+		tail = inputs[(pieces - 1) & 1] + 16 + (source + done - (stream + (pieces - 1) * 4096));
+	else if (rest)
+		dma_wait(1 << TAG_INPUT);
+	for (index = 0; index + 4 <= rest; index += 4, word_index++)
 	{
-		uint32_t piece = size - done < 4096 ? (size - done) & ~3u : 4096;
-		const unsigned char *bytes = (const unsigned char *)fetch(inputs[0], source + done, piece, TAG_MISC);
+		uint32_t word = (uint32_t)tail[index] << 24 | (uint32_t)tail[index + 1] << 16 | (uint32_t)tail[index + 2] << 8 |
+			tail[index + 3];
 
-		for (index = 0; index < piece; index += 4, word_index++)
-		{
-			uint32_t word = (uint32_t)bytes[index] << 24 | (uint32_t)bytes[index + 1] << 16 |
-				(uint32_t)bytes[index + 2] << 8 | bytes[index + 3];
-
-			words[word_index & 15] = (words[word_index & 15] ^ word) * TEXTURE_HASH_PRIME;
-		}
-		done += piece;
+		words[word_index & 15] = (words[word_index & 15] ^ word) * TEXTURE_HASH_PRIME;
 	}
-	if (done < size)
-	{
-		const unsigned char *bytes = (const unsigned char *)fetch(inputs[0], source + done, size - done, TAG_MISC);
-
-		for (index = 0; index < size - done; index++)
-			words[0] = (words[0] ^ bytes[index]) * TEXTURE_HASH_PRIME;
-	}
+	for (; index < rest; index++)
+		words[0] = (words[0] ^ tail[index]) * TEXTURE_HASH_PRIME;
 	texture_hashed_bytes += size;
 	return texture_hash_finish(words, size);
 }
@@ -3024,21 +3078,23 @@ static void stage_bind(int stage)
 	if (target)
 	{
 		texture_description d;
+		BOOL smaller = scaled.on && scaled.width && target == scaled.color;
+		const float *scale = smaller ? scaled.scale : target->scale;
 
 		texture_describe(texture->format, texture->size, &d);
-		bound->offset = target->offset;
-		bound->pitch = target->pitch;
-		bound->width = (uint16_t)target->width;
-		bound->height = (uint16_t)target->height;
+		bound->offset = smaller ? scaled.view.color_offset : target->offset;
+		bound->pitch = smaller ? scaled.view.color_pitch : target->pitch;
+		bound->width = (uint16_t)(smaller ? scaled.width : target->width);
+		bound->height = (uint16_t)(smaller ? scaled.height : target->height);
 		bound->depth = 1;
 		bound->format = GCM_TEXTURE_FORMAT_A8R8G8B8 | GCM_TEXTURE_FORMAT_LIN | (d.linear ? GCM_TEXTURE_FORMAT_UNRM : 0);
 		bound->levels = 1;
 		bound->dimension = GCM_TEXTURE_DIMS_2D;
-		if (d.linear && (!f_eq(target->scale[0], 1.0f) || !f_eq(target->scale[1], 1.0f)))
+		if (d.linear && (!f_eq(scale[0], 1.0f) || !f_eq(scale[1], 1.0f)))
 		{
 			stage_binds[stage].scaled = (uint8_t)(1 << stage);
-			device.texture_scale[stage][0] = target->scale[0];
-			device.texture_scale[stage][1] = target->scale[1];
+			device.texture_scale[stage][0] = scale[0];
+			device.texture_scale[stage][1] = scale[1];
 		}
 	}
 	else
@@ -5233,7 +5289,7 @@ static void particles_composite(uint32_t color_offset, uint32_t color_pitch, uin
 /* d3d8_rsx.c's particles_begin */
 static void particles_begin(const spu_d3d_record_particles *half)
 {
-	gpu_surface next;
+	gpu_surface next, frame;
 	BOOL has_depth;
 
 	if (particles.on || !bind_targets(&has_depth) || !has_depth ||
@@ -5243,16 +5299,19 @@ static void particles_begin(const spu_d3d_record_particles *half)
 	particles.half = *half;
 	particles.main_color = targets_bound.color;
 	particles.main_depth = targets_bound.depth;
+	target_surface(particles.main_color, particles.main_depth, &frame);
+	particles.width = (frame.width + 1u) / 2;
+	particles.height = (frame.height + 1u) / 2;
 	next.color_offset = half->color_offset;
 	next.color_pitch = half->color_pitch;
 	next.depth_offset = half->depth_offset;
 	next.depth_pitch = half->depth_pitch;
-	next.width = (uint16_t)half->width;
-	next.height = (uint16_t)half->height;
+	next.width = (uint16_t)particles.width;
+	next.height = (uint16_t)particles.height;
+	next.smaller = 0;
 	gpu_set_surface(&next);
-	gpu_clear(0xf2, 0xff000000u, 0, 0, 0, half->width, half->height);
-	particles_depth(particles.main_depth->offset, particles.main_depth->pitch, particles.main_depth->width,
-		particles.main_depth->height);
+	gpu_clear(0xf2, 0xff000000u, 0, 0, 0, particles.width, particles.height);
+	particles_depth(particles.main_depth->offset, particles.main_depth->pitch, frame.width, frame.height);
 }
 
 static void particles_end(void)
@@ -5263,15 +5322,55 @@ static void particles_end(void)
 		return;
 	particles.on = FALSE;
 	particles.bound = FALSE;
-	next.color_offset = particles.main_color->offset;
-	next.color_pitch = particles.main_color->pitch;
-	next.depth_offset = particles.main_depth->offset;
-	next.depth_pitch = particles.main_depth->pitch;
-	next.width = (uint16_t)particles.main_color->width;
-	next.height = (uint16_t)particles.main_color->height;
+	target_surface(particles.main_color, particles.main_depth, &next);
 	gpu_set_surface(&next);
-	particles_composite(particles.half.color_offset, particles.half.color_pitch, particles.half.width,
-		particles.half.height);
+	particles_composite(particles.half.color_offset, particles.half.color_pitch, particles.width, particles.height);
+}
+
+/* d3d8_rsx.c's scale_begin */
+static void scale_begin(const spu_d3d_record_scale *view)
+{
+	if (view->eighths >= 1 && view->eighths <= 8)
+		stamps.eighths = view->eighths;
+	if (scaled.on || view->eighths < 1 || view->eighths > 7)
+		return;
+	memset(&scaled, 0, sizeof(scaled));
+	scaled.on = TRUE;
+	scaled.view = *view;
+	scaled.factor = f_div(f_from_u32(view->eighths), 8.0f);
+	texture_epoch++;
+}
+
+/* d3d8_rsx.c's scale_end with ps3_gpu_scale_up */
+static void scale_end(void)
+{
+	vertex_program_info blit;
+	gpu_state next;
+	gpu_surface whole;
+
+	if (!scaled.on)
+		return;
+	scaled.on = FALSE;
+	texture_epoch++;
+	if (!scaled.width)
+		return;
+	whole.color_offset = scaled.color->offset;
+	whole.color_pitch = scaled.color->pitch;
+	whole.depth_offset = scaled.depth->offset;
+	whole.depth_pitch = scaled.depth->pitch;
+	whole.width = (uint16_t)scaled.color->width;
+	whole.height = (uint16_t)scaled.color->height;
+	whole.smaller = 0;
+	gpu_set_surface(&whole);
+	surface_state(&next);
+	next.color_mask = GCM_COLOR_MASK_R | GCM_COLOR_MASK_G | GCM_COLOR_MASK_B | GCM_COLOR_MASK_A;
+	gpu_set_state(&next);
+	blit_program(&blit);
+	gpu_set_vertex_program(&blit);
+	rsx_fragment_program_location(setup.blit_fragment_offset, 0x40, 2, 1, 1);
+	surface_texture(scaled.view.color_offset, scaled.view.color_pitch, scaled.width, scaled.height, GCM_TEXTURE_LINEAR);
+	surface_quad(0.0f, 0.0f, 1.0f, 1.0f);
+	caches_invalidate();
 }
 
 /* the counters and timers, at each present (the PPE logs them every STATISTICS_FRAMES frames and adds the timers to
@@ -5296,6 +5395,8 @@ static void present_run(const spu_d3d_record_present *present)
 	spu_d3d_response *answer;
 	uint32_t index, finished, log_gpu;
 
+	/* (a view the game left smaller is scaled up for the frame) */
+	scale_end();
 	answer = request(_spu_d3d_request_present_begin, 0);
 	if (quitting)
 		return;
@@ -5339,6 +5440,7 @@ static void present_run(const spu_d3d_record_present *present)
 		placeholders[index].asset = (int32_t)answer->words[6 + 2 * index];
 	}
 	stamps.count = 0;
+	stamps.eighths = 0;
 	caches_invalidate();
 	/* the chunks' room the RSX can still read: from the first frame it has not finished */
 	frame_starts[frame_index % SPU_D3D_FRAMES] = chunk_start;
@@ -5457,6 +5559,7 @@ static void record_execute(const spu_d3d_record *record, uint64_t position)
 		zcull_bound = 0;
 		zcull_offset = 0;
 		surface_valid = 0;
+		scaled.on = FALSE;
 		break;
 	}
 	case _spu_d3d_record_tag_cache:
@@ -5490,6 +5593,12 @@ static void record_execute(const spu_d3d_record *record, uint64_t position)
 		light_bounds.on = record->a != 0;
 		if (light_bounds.on)
 			memcpy(&light_bounds.bounds, payload, sizeof(light_bounds.bounds));
+		break;
+	case _spu_d3d_record_scale:
+		if (record->a)
+			scale_begin(payload);
+		else
+			scale_end();
 		break;
 	default:
 		break;

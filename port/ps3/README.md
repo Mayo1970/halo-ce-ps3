@@ -161,8 +161,8 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 
 SETTINGS in the main menu opens a screen of two items (`menu_tags.c`,
 `xbox_settings_wire`): PLAYER PROFILES, the Xbox's profile screens, and
-EXTRA OPTIONS. EXTRA OPTIONS has three rows, at the places of ADVANCED
-CONTROLS' first three. A or START keeps the changes in `config.toml`, and
+EXTRA OPTIONS. EXTRA OPTIONS has four rows, at the places of ADVANCED
+CONTROLS' first four. A or START keeps the changes in `config.toml`, and
 they apply from the next frame; B goes back without them.
 
 | Row | Values | Setting |
@@ -170,6 +170,7 @@ they apply from the next frame; B goes back without them.
 | WIDESCREEN | ON (the default): 852x480 of the game, drawn at 1280x720 over the whole display. OFF: the Xbox's 640x480, drawn at 960x720 in the middle | `display.screen_width`: 0 for the display's shape, 640 for 4:3 |
 | FRAME RATE | 60 (the default): a frame at each refresh, blended between the game's 30 ticks a second (`port/linux/game/render_interpolation.c`). 30: a frame a tick, as on the Xbox | `display.interpolation`: true or false |
 | BUTTON ICONS | XBOX: the maps' own buttons. STYLE A (the default): the PS3's, colored circles with white symbols. STYLE B: black circles with colored symbols | `display.button_icons`: `"xbox"`, `"style_a"` or `"style_b"` |
+| DYNAMIC RESOLUTION | ON: in heavy scenes the 3D view is drawn smaller, then scaled up under the HUD (below). OFF (the default): always whole | `display.dynamic_resolution`: true or false |
 
 The button icons (`xbox/hud_hires_rsx.c`) stand for the menus' button
 bitmaps (`a_butn`, `b_butn`, `x_butn`, `y_butn` and the small A and B) and
@@ -194,6 +195,23 @@ transparent surface and before the first-person weapon's. `d3d8_rsx.c` and
 holds the effects' colour, its alpha the frame's transmittance, and its
 depth the frame's, one texel of each four (the Z24S8 surface read as
 A8R8G8B8).
+
+`display.dynamic_resolution` (DYNAMIC RESOLUTION, false by default) draws
+the 3D view smaller while the RSX is too slow for 60 frames per second.
+`ps3_gpu.c` reads the RSX's time in each frame's windows (its
+timestamps, two frames on): when the last frames average over 14 ms, the
+next frames draw the view an eighth smaller (7/8, 6/8, then 5/8 of 1280x720
+at most); when the frames at a scale would stay under 12.5 ms with an
+eighth more of width and height (the time times the scale's square), an
+eighth larger. `render.c` marks the primary window's 3D view, from its
+clear to the lens flares, with one window only (no split screen).
+`d3d8_rsx.c` and `spu_direct3d.c` draw the screen's colour into a target of
+the screen's size at the scale (the depth stays the screen's, in its top
+left), with the scissors, clears, half resolution particles and the
+screen's texture (active camouflage, the sun's glow) at the scale; then
+they scale it up over the screen, filtered, before the HUD and the menus.
+`[time] dynamic resolution` gives the frames at each scale, with the RSX's
+ms a frame in the windows, and the changes.
 
 At 60 frames per second the sounds update at the ticks' rate, as on the Xbox
 (`main.c`, `game.c`). A sound source that has not moved keeps its
