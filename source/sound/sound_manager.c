@@ -1303,6 +1303,39 @@ static long looping_sound_new(
 	return looping_sound_index;
 }
 
+#ifdef HALO_PS3
+/* port: the music's looping sound parts in the log ([music]), to find two tracks heard at once on the PS3 */
+static void ps3_music_log(
+	char const *event,
+	long sound_index)
+{
+	static char const *const types[] = { "impulse", "start", "loop", "stopping", "stop" };
+	struct sound_datum *sound = sound_get(sound_index);
+	long other_index;
+	short playing = 0;
+
+	if (sound->type == _sound_impulse ||
+		sound_definition_get(sound->definition_index)->sound_class != _sound_class_music)
+		return;
+	/* (and how many other music parts play on a channel now) */
+	for (other_index = data_next_index(sound_data, NONE); other_index != NONE;
+		other_index = data_next_index(sound_data, other_index))
+	{
+		struct sound_datum *other = sound_get(other_index);
+
+		playing += other_index != sound_index && other->type != _sound_impulse &&
+			other->playing_channel_index != NONE &&
+			sound_definition_get(other->definition_index)->sound_class == _sound_class_music;
+	}
+	error(_error_silent, "[music] %lu ms: %s %s (%s, looping sound %lx, channel %d; %d other music parts play)",
+		system_milliseconds(), event, tag_get_name(sound->definition_index), types[sound->type % NUMBER_OF_SOUND_TYPES],
+		(unsigned long)sound->source_identifier, sound->playing_channel_index, playing);
+}
+#define PS3_MUSIC_LOG(event, sound_index) ps3_music_log((event), (sound_index))
+#else
+#define PS3_MUSIC_LOG(event, sound_index) ((void)0)
+#endif
+
 static boolean sound_set_definition_end(
 	long sound_index)
 {
@@ -1313,6 +1346,7 @@ static boolean sound_set_definition_end(
 	SET_FLAG(sound->flags, _sound_waiting_for_cache_bit, TRUE);
 	sound->definition_index = sound->next_definition_index;
 	sound->next_definition_index = NONE;
+	PS3_MUSIC_LOG("goes on to", sound_index); /* port: (the PS3's music log) */
 	sound->pitch_range_index = sound_definition_find_pitch_range_by_pitch(
 		definition,
 		sound->pitch,
@@ -1437,6 +1471,7 @@ static long update_potentially_audible_looping_sound(
 					TRUE,
 					FALSE);
 				looping_sound->component_sound_count++;
+				PS3_MUSIC_LOG("starts", sound_index); /* port: (the PS3's music log) */
 			}
 		}
 	}
@@ -1696,6 +1731,7 @@ static void sound_start_fade(
 	{
 		struct sound_datum *sound = sound_get(fade_out_sound_index);
 
+		PS3_MUSIC_LOG("fades out", fade_out_sound_index); /* port: (the PS3's music log) */
 		sound->fade_interpolation_start =
 			sound_calculate_fade(fade_out_sound_index);
 		sound->fade_interpolation_end = 0.f;
@@ -1801,6 +1837,7 @@ static void sound_stop(
 	struct sound_definition *definition =
 		sound_definition_get(sound->definition_index);
 
+	PS3_MUSIC_LOG("ends", sound_index); /* port: (the PS3's music log) */
 	if (sound->playing_channel_index != NONE)
 	{
 		channel_get(sound->playing_channel_index)->sound_index = NONE;
@@ -2917,6 +2954,15 @@ static void process_looping_sounds(
 
 		if (looping_sound->flip_flop != sound_manager_globals.flip_flop)
 		{
+#ifdef HALO_PS3
+			/* port: (the PS3's music log: one not in the world, which every game sound update refreshes) */
+			if (looping_sound->source.spatialization_mode == _sound_spatialization_mode_none)
+			{
+				error(_error_silent, "[music] %lu ms: looping sound %lx (%s) not refreshed: deleted",
+					system_milliseconds(), (unsigned long)looping_sound_index,
+					tag_get_name(looping_sound->definition_index));
+			}
+#endif
 			datum_delete(looping_sound_data, looping_sound_index);
 		}
 		else if (looping_sound->state != _looping_sound_refresh_stop)

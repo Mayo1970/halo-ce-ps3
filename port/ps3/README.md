@@ -153,7 +153,7 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 | Drawing | `[gpu] ready` and the RSX local memory; `[gpu] the command buffer's segment` (its start, end and size, the system's callback); `screen: 852x480 drawn at 1280x720` (or `640x480 drawn at 960x720`) at the start and at each change of WIDESCREEN; `[gpu] target ... tiled` for the screen's targets (`ZCull` on its depth); `Direct3D:` lines: `vertex and index conversions on an SPU` (or `on the PPE`) and `[spu] vertices up` at the start, each vertex shader translated, the first pixel shaders, and every 600 frames the draws, the skips, the texture uploads, the textures in RSX memory (and the part no draw used in 600 frames), the vertex cache (the vertex elements converted into it and at draws, its use) and the conversions' SPU (its tasks, elements and indices, its time a frame with its waits for input and output, the waits that found tasks not done and their time a frame), the elements converted by type (the XDK's `D3DVSDT_` values: 0x32 FLOAT3, 0x22 FLOAT2, 0x40 D3DCOLOR, 0x16 NORMPACKED3, 0x21 NORMSHORT2, ...); `[spu] vertices: ... SPU off` if a task is not done in 100 ms; `[spu] the game thread's jobs run on an SPU` (or `the PPE`) and `[spu] game up`, `[spu] the render's jobs run on an SPU` and `[spu] render up` at the start, `[spu] game: ... SPU off` (or `render:`) if a job is not done in 100 ms, `[halo] checkpoint: ... copied by an SPU` (or `the PPE`) at each checkpoint; `[gpu] frame N` every 600 frames: the vertex programs uploaded and switched, the fragment programs (and of them the SPU's copies) and the scratch use | The game's picture at the display's lines: 16:9 over the whole display, or 4:3 in its middle |
 | Timers | `[time]` lines every 300 frames (`src/ps3_timers.c`): the game thread's ms a frame by phase (game ticks, render and its parts), the ticks' parts in ms a tick (`game.c`, `objects_update`'s in `objects.c`), `[time] node matrices` (`object_compute_node_matrices`'s steps at every call: the animation's orientations, the overlays and blends, the matrices (the first node, the validity checks, the other nodes, the bounding sphere); the postprocess; its calls and nodes a tick), `[time] particles` (the game frame's particles part: `particles_update` with its particles' physics and counts, `contrails_update`, `particle_systems_update`), `[time] point physics` (`point_physics_update` at every call: its wind and its rays, of them those that test no surface (the weather's), its calls and rays a frame), `[time] ai` (`ai_update`'s conversations, encounters and actors; each actor's update by step: `actors.c`; the actors a tick), `[time] ai parts` (the control and movement steps by call: `actors.c`; `actor_perception_update`'s refresh, danger zone and props loop, with its props and their position and status refreshes a tick: `actor_perception.c`), `[time] ai line of sight` (`ai_test_line_of_sight`: the first ray, the fog, the mode's rays, the first rays' length: `ai.c`; its rays' structure and objects parts with their bsp nodes, leaves, clusters and objects tested: `collision_usage.h`, `collisions.c`), `[time] ai line of sight objects` (the rays' loop over a cluster's objects: the copies' iterator, the tests, the objects walked, read from kept blocks, passed and tested: `collisions.c`, `object_bounds_cache.c`), `[time] action control` (`actor_action_control` by action: `actions.c`), `[time] ai move` (`actor_move_update`'s parts, and `actor_path_refresh` wherever it runs, with its path builds: `actor_moving.c`), `[time] ai paths` (a path build's setup, search with its nodes, and path made; the flying and cached builds), `[time] ai avoidance` (the flying vector avoidance's setup with the objects it found, its rays' structure tests and object tests), `[time] ai decisions` (the decisions step by call, the decision loop's decide and perform: `actors.c`), `[time] ai path search` (the search's reset, begin, traverse with its pops, edges with the surfaces, edge loops and closest points, the debug copy; the path made's smoothing and obstacles: `path.c`), `[time] ai path smoothing` (its pill tests, turning points and surfaces: `path_smoothing.c`), `[time] vehicles` (`vehicle_update`'s physics, effects, stopping and animation: `vehicles.c`), `[time] physics` (`physics_update`'s forces with the mass points, movement, units' collisions, old physics: `physics.c`), `[time] old physics` (`physics_update_old`'s location with the mass points, ground plane, water depth, antigravity probes with their count, the move: `physics.c`), `[time] ground planes` (`compute_ground_plane`'s features in the sphere with the features found, and the point test, for the new and old physics), `[time] ground planes' features in the sphere` (in those queries alone: the bsp's leaves with the calls and the leaves a call, the structure's features, the leaves' clusters' objects with the clusters and the objects walked and read from kept blocks, their tests: `collisions.c`), the game's part of each frame (`game_frame`), the render's objects and effects passes by part, `[time] render_model but the shadows` (`render_model`'s node matrices with the nodes a model, begin, parts and end, each with the game thread's Direct3D draws and constants in it, the models a frame: `models.c`; the objects' widgets and `render_objects`' Direct3D: `render_objects.c`), `[time] render_model's parts' draws` (in the parts' draws: the solid draws of model and environment shaders, the decals' draws, the transparent submits, each with its count and Direct3D, and the loops: `models.c`), `[time] lights and diffuse passes` (their parts with their Direct3D: the lens flares' occlusion tests, the objects' shadows, the lights' diffuse part, the light and alpha-tested decals; the structure's diffuse textures, the primary and secondary decals: `render.c`), `[time] objects' shadows` (the pass's begin and end, the objects' checks and lighting, each shadow's begin, model, volume, structure (the surfaces found, their triangles, their draws: `structure_render.c`) and end, each with its Direct3D: `render_objects.c`), `[time] weather` (the weather's update with its particles, in it each particle's acceleration and `point_physics_update`; visibility tests, sprites built with their count, their draw: `weather_particle_systems.c`), `[time] transparent geometry` (the sort with the groups, in it the qsort and the port's model order, the groups' begin and end, each group drawn by its shader's type with the groups: `rasterizer_transparent_geometry.c`), `[time] unit parts` (each part of a type update, ms a tick: `object_types.c`; `biped_update`'s steps: `bipeds.c`), `[time] sound` (`sound_render`'s steps: `sound_manager.c`; `game_sound_update`'s: `game_sound.c`; the game thread's waits for DirectSound's lock; the sounds' obstruction calls and those computed, not from the cache), `[time] collision` and `[time] collision by user` (the outermost collision tests' ms a frame by kind and by the user on top of the game's collision-user stack, with the tests a frame: `collision_usage.c`, `collisions.c`, `collision_models.c`), `[time] collision by function` (each logged collision function's ms and calls a frame at any depth, the bsp nodes its tests entered: `collision_bsp.c`; the objects the rays tested themselves, after the copies of their spheres, `object_bounds_cache.c`; `[vmx] exact` or `not exact` at the first test), `[time] interface pass` (its parts: `render.c`; the HUD's: `interface.c`, `hud.c`; the game thread's time in the Direct3D draws and vertex constants, without its waits for the ring), `[time] screen quads` (the quads a frame and the parts of `_rasterizer_psuedo_dynamic_screen_quad_draw`; the interface pass's Direct3D draws and constants), `[time] HUD parts` (the weapon HUD's and the unit HUD's parts with their quads: `hud_weapon.c`, `hud_unit.c`, `motion_sensor.c`), the Direct3D thread's (busy, the game thread's waits for it, its draws and waits, the SPU's conversions among them), `[time] game SPU, render SPU` (the game thread's SPU jobs by kind: copies, shadows, weather, particles, lights, visibility, sprites, contrails; jobs a frame, the SPU's microseconds a job and its DMA waits, the game thread's waits in ms a frame; the tag data cache's lines found and fetched, the jobs refused; the shadows checked against the PPE's search, their PPE time, those apart: `ps3_spu.c`, `structure_render.c`), and `[time] RSX`: the RSX's ms a frame and by part, from timestamps the RSX writes at each split (no wait); `[time] specular part` (the specular part's splits: `render.c`'s lights, specular lightmaps, reflection masks, mirrors, reflections, transparent and fog, on the game thread and on the RSX with the RSX's draws a frame); `[time] specular part's Direct3D draws and constants` (each split's share of the game thread's Direct3D draws and constants); `[time] specular part's pixel shaders on the RSX` (in one frame of eight the RSX stamps each of the part's draws: the eight pixel shaders with the most RSX time, ms and draws a stamped frame, the split, the program's 16-byte slots (instructions and inline constants) and registers, the combiners, the texture modes and the last draw's textures: `d3d8_rsx.c`, `ps3_gpu.c`) | |
 | Sound | `[aud] port N` at the start; `[spu] mixer up` and `DirectSound: the streams decode and mix on an SPU` (or `on the PPE`); `DirectSound:` every 10 s: the streams and buffers that play, the packets decoded, the mixer thread's time per 5333 us chunk (with its wait for the SPU; of it its own decoding, and the lock held), the port blocks played silent or partial (underruns), and the SPU's time per chunk, its decoding, the mixer thread's wait, how the waits ended (the SPU's event, the 1 ms timeout, an error) and the events lv2 refused the SPU; `[spu] mixer: ... SPU off` if a job is not done in 100 ms; `[spu] mixer down`, `[spu] vertices down`, `[spu] game down` and `[spu] render down` at the exit | The game's sound on the PS3 audio output |
-| Network | `Winsock: PSL1GHT sockets, this PS3 at a.b.c.d` at the start (or `no network`); `[net] <call>: lv2 error N` for the first 32 socket errors that are not would-block; `Winsock: SO_RCVBUF of N bytes refused` with the size lv2 took; the game's own `network` and `transport` lines; `Internet play:` lines (the brokers, STUN, UPnP, joins); `menus: the multiplayer menu has LAN PLAY and INTERNET PLAY; SETTINGS has EXTRA OPTIONS` | The PC builds' games on the LAN in LAN PLAY's list; public internet games in INTERNET PLAY's list |
+| Network | `Winsock: PSL1GHT sockets, this PS3 at a.b.c.d` at the start (or `no network`); `[net] <call>: lv2 error N` for the first 32 socket errors that are not would-block; `Winsock: SO_RCVBUF of N bytes refused` with the size lv2 took; the game's own `network` and `transport` lines; `Internet play:` lines (the brokers, STUN, UPnP, joins); `menus: the multiplayer menu has LAN PLAY, INTERNET PLAY and HOST ONLINE; SETTINGS has EXTRA OPTIONS` | The PC builds' games on the LAN in LAN PLAY's list; public internet games in INTERNET PLAY's list |
 | Exit | `[ps3] exit 0` | PS button > Quit Game goes back to the XMB |
 | Failure | `EXCEPTION halt` and the call stack: `./build.sh symbols ADDRESSES="..."` names its functions | A red pulse until PS button > Quit Game |
 
@@ -161,25 +161,32 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 
 SETTINGS in the main menu opens a screen of two items (`menu_tags.c`,
 `xbox_settings_wire`): PLAYER PROFILES, the Xbox's profile screens, and
-EXTRA OPTIONS. EXTRA OPTIONS has four rows, at the places of ADVANCED
-CONTROLS' first four. A or START keeps the changes in `config.toml`, and
+EXTRA OPTIONS. EXTRA OPTIONS has five rows, at the places of ADVANCED
+CONTROLS' five. A or START keeps the changes in `config.toml`, and
 they apply from the next frame; B goes back without them.
 
 | Row | Values | Setting |
 | --- | --- | --- |
 | WIDESCREEN | ON (the default): 852x480 of the game, drawn at 1280x720 over the whole display. OFF: the Xbox's 640x480, drawn at 960x720 in the middle | `display.screen_width`: 0 for the display's shape, 640 for 4:3 |
-| FRAME RATE | 60 (the default): a frame at each refresh, blended between the game's 30 ticks a second (`port/linux/game/render_interpolation.c`). 30: a frame a tick, as on the Xbox | `display.interpolation`: true or false |
 | BUTTON ICONS | XBOX: the maps' own buttons. STYLE A (the default): the PS3's, colored circles with white symbols. STYLE B: black circles with colored symbols | `display.button_icons`: `"xbox"`, `"style_a"` or `"style_b"` |
+| PRESET | CUSTOM (the default): FRAME RATE and DYNAMIC RESOLUTION as set. QUALITY: 30 and OFF. PERFORMANCE: 60 and ON. Choosing QUALITY or PERFORMANCE sets those two rows and hides them; CUSTOM shows them, and a change of one of them sets CUSTOM (`menu_functions.c`, "xbox extra options update") | `display.preset`: `"custom"`, `"quality"` or `"performance"` |
+| FRAME RATE | 60 (the default): a frame at each refresh, blended between the game's 30 ticks a second (`port/linux/game/render_interpolation.c`). 30: a frame a tick, as on the Xbox | `display.interpolation`: true or false |
 | DYNAMIC RESOLUTION | ON: in heavy scenes the 3D view is drawn smaller, then scaled up under the HUD (below). OFF (the default): always whole | `display.dynamic_resolution`: true or false |
+
+Split screen (two or more players on the PS3) always plays at 30 frames per
+second, without the dynamic resolution, whatever FRAME RATE, DYNAMIC
+RESOLUTION and PRESET say (`xbox/port_stubs.c`, `render.c`).
 
 The button icons (`xbox/hud_hires_rsx.c`) stand for the menus' button
 bitmaps (`a_butn`, `b_butn`, `x_butn`, `y_butn` and the small A and B) and
 for the A, B, X and Y sprites of the message icons (`hud_msg_icons_sm`, the
 "Press A" icons of the menus' text; `combined\hud_msg_icons`, the HUD's
 prompts, which `hud_hires_button_draw` leaves to them on the PS3): CROSS for A, CIRCLE for
-B, SQUARE for X, TRIANGLE for Y. The message icons are stencils, white with
-the symbol cut out, which the game tints as the Xbox's; both styles share
-them. The other message icons (the triggers, the sticks, the black and
+B, SQUARE for X, TRIANGLE for Y. The menus' message icons are each style's
+buttons in their own colours, drawn with the text's alpha only
+(`ui_widget.c`). The HUD's are stencils, white with the symbol cut out,
+which take the message's colour; both styles share them. The other message
+icons (the triggers, the sticks, the black and
 white buttons) stay the maps'. The art is `ps3_buttons/svg` (made by
 `ps3_buttons/make.py`); `tools/ps3_button_assets.py build` draws it at 4
 times the bitmaps' size into `port/assets/buttons/ps3`, and the Makefile
@@ -248,7 +255,8 @@ In the multiplayer menu, LAN PLAY is in the place of SYSTEM LINK PLAY
 the System Link game list without the "press START to join" screens. The
 list shows only the games of the LAN: the hosts that internet play reaches
 are in INTERNET PLAY's list. A on a game joins it. Y, or A when the list has
-no games, hosts a game (CREATE GAME). Only player 1 plays, with player 1's
+no games, opens CREATE GAME: HOST ONLINE's screen (below) for the LAN only,
+with CO-OP CAMPAIGN and MULTIPLAYER. Only player 1 plays, with player 1's
 profile (the active profile, else the last used, else the first): the
 "press START to join" screens of the other pads are not on this path.
 
@@ -268,9 +276,36 @@ the pregame screen opens. Player 1's profile plays, as in LAN PLAY.
 - Players in a browser connect through WebRTC (DTLS with Mbed TLS).
 - The list refuses games with a password (no screen types it) and closed
   games.
-- A game that the PS3 hosts is not in the server browser. Its invite link is
-  in the log (`Internet play: hosting.`).
 - Discord does not operate: the PS3 has no Discord client.
+
+### Host online
+
+HOST ONLINE, after INTERNET PLAY in the multiplayer menu, opens a screen of
+two items (`menu_tags.c`, `xbox_host_wire`; `menu_functions.c`, "xbox
+host ..."). Player 1 hosts, with player 1's profile. LAN PLAY's CREATE GAME
+opens the same screen, titled CREATE GAME, and hosts for the LAN only
+(`p2p_set_hosting_allowed(FALSE)`: no code, not in the server browser).
+
+- MULTIPLAYER: the map select, the gametypes, then the pregame screen. The
+  game is in the server browser while `network.host_public` is true (the
+  default).
+- CO-OP CAMPAIGN: the campaign's level list (the levels player 1's profile
+  has reached) and difficulty list, then the pregame screen. The game is
+  co-op (`ui_widget_port_cooperative_level_choose`), with
+  `network.coop_friendly_fire`, `network.coop_player_collisions` and
+  `network.coop_ally_friendly_fire`. It is in the server browser only while
+  `network.coop_public` is true (false by default).
+- The pregame screen shows the game's slots and invite code ("Slots: 16
+  Code: 1234 5678"; the code below). The invite link is in the log too
+  (`Internet play: hosting.`).
+- The gametype lists show OpenCE's gametypes (SWAT, Infection, Gun Game and
+  the four Hardcore ones) with descriptions of their own: `menu_tags.c` adds
+  them after the 36 of `ui\shell\strings\game_variant_descriptions`, where
+  a default gametype's is (its index + 10).
+- Slots: a game hosted takes 16 players at first. In the pregame screen the
+  host's Y (Y = SLOTS, left of the key bar) goes to the next of 2, 4, 8, 12
+  and 16, none under the players already in; the lobby is told at once, and
+  the next games hosted keep it.
 
 ### Invite codes
 

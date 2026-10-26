@@ -292,6 +292,8 @@ static uint64_t ps3_interface_draws, ps3_interface_constants;
 #ifdef HALO_PS3
 /* port: d3d8_rsx.c's */
 int d3d8_dynamic_resolution(int on);
+/* port: players.c's (split screen draws no smaller view) */
+short local_player_count(void);
 /* port: the main loop's place, for the PS3's heartbeat (main.c) */
 extern volatile long ps3_main_loop_step;
 #define PS3_MAIN_STEP(step) (ps3_main_loop_step = (step))
@@ -339,9 +341,9 @@ static void render_window(
 	PS3_WINDOW_STEP(3);
 #ifdef HALO_PS3
 	/* port: display.dynamic_resolution (d3d8_rsx.c): the primary window's 3D view drawn smaller from its clear, then
-	scaled up over the screen before the HUD */
+	scaled up over the screen before the HUD; not in split screen (30 frames a second), its cinematics too */
 	ps3_scaled = rasterizer_target == _render_target_primary && main_get_window_count() == 1 &&
-		d3d8_dynamic_resolution(TRUE);
+		local_player_count() <= 1 && d3d8_dynamic_resolution(TRUE);
 #endif
 	rasterizer_window_begin(&parameters);
 	PS3_TIMER_SPLIT(_ps3_timer_window_visibility);

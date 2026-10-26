@@ -592,6 +592,27 @@ void scripted_looping_sound_set_scale(
 	return;
 }
 
+#ifdef HALO_PS3
+#include "cseries/cseries_windows.h"
+#include "cseries/errors.h"
+#include "tag_files/tag_files.h"
+
+/* port: the scripts' music in the log, beside sound_manager.c's [music] lines (the PS3's two tracks at once) */
+static void ps3_music_script_log(
+	char const *event,
+	long definition_index)
+{
+	if (looping_sound_definition_is_music(definition_index))
+	{
+		error(_error_silent, "[music] %lu ms: the script %s %s", system_milliseconds(), event,
+			tag_get_name(definition_index));
+	}
+}
+#define PS3_MUSIC_SCRIPT_LOG(event, definition_index) ps3_music_script_log((event), (definition_index))
+#else
+#define PS3_MUSIC_SCRIPT_LOG(event, definition_index) ((void)0)
+#endif
+
 void scripted_looping_sound_set_alternate(
 	long sound_index,
 	boolean alternate)
@@ -604,6 +625,8 @@ void scripted_looping_sound_set_alternate(
 		definition = looping_sound_definition_get(sound_index);
 		if (definition->runtime_scripting_sound_index != NONE)
 		{
+			PS3_MUSIC_SCRIPT_LOG(alternate ? "turns on the alternate of" : "turns off the alternate of",
+				sound_index); /* port: (the PS3's music log) */
 			looping_sound = game_looping_sound_get(definition->runtime_scripting_sound_index);
 			SET_FLAG(looping_sound->flags, _game_looping_sound_alternate_bit, alternate);
 		}
@@ -635,6 +658,8 @@ static void scripted_looping_sound_stop_internal(
 		definition = looping_sound_definition_get(sound_index);
 		if (definition->runtime_scripting_sound_index != NONE)
 		{
+			/* port: (the PS3's music log) */
+			PS3_MUSIC_SCRIPT_LOG(fixed_fadeout ? "stops (a 4 s fade)" : "stops", sound_index);
 			looping_sound = game_looping_sound_get(definition->runtime_scripting_sound_index);
 			SET_FLAG(looping_sound->flags, _game_looping_sound_scripted_bit, FALSE);
 			unattached_looping_sound_stop(definition->runtime_scripting_sound_index);
@@ -681,6 +706,8 @@ void scripted_looping_sound_start(
 			"c:\\halo\\SOURCE\\sound\\game_sound.c",
 			495,
 			definition->runtime_scripting_sound_index==NONE);
+		PS3_MUSIC_SCRIPT_LOG(TEST_FLAG(definition->flags, _looping_sound_stops_music_bit) ?
+			"starts (it stops the music)" : "starts", sound_index); /* port: (the PS3's music log) */
 		if (TEST_FLAG(definition->flags, _looping_sound_stops_music_bit))
 		{
 			scripted_music_stop_all();

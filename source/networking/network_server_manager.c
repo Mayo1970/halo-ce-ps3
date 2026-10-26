@@ -3927,6 +3927,14 @@ void network_game_server_port_set_settings(
 	network_game_server_port_settings.maximum_players = maximum_players;
 	if (server)
 		network_game_server_port_settings_apply(server);
+#ifdef HALO_PS3
+	/* port: and the lobby told, as the co-op setters do (the PS3's pregame Y changes the slots there) */
+	if (server && server->state == _network_game_server_state_pregame &&
+		!network_game_server_send_game_data_pregame(server))
+	{
+		network_event("network_game_server_port_set_settings() failed to send updated game settings to clients");
+	}
+#endif
 }
 
 void network_game_server_port_cooperative_won(

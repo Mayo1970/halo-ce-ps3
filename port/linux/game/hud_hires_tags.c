@@ -369,8 +369,8 @@ struct bitmap_data const *hud_hires_sprite_bitmap(
 	return bitmap;
 }
 
-/* whether a sprite drawn from `drawn` (hud_hires_sprite_bitmap's) is a PS3 stencil: those all take the message's
-colour, not the Xbox buttons' own (green A, red B, yellow Y) */
+/* whether a sprite drawn from `drawn` (hud_hires_sprite_bitmap's) is a PS3 button's, not tinted as the Xbox's (green A,
+red B, yellow Y): the HUD's stencils take the message's colour, the menus' keep their style's (ui_widget.c) */
 boolean hud_hires_sprite_stencil(struct bitmap_data const *drawn, struct bitmap_data const *bitmap)
 {
 #ifdef HALO_PS3

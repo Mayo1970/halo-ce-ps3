@@ -4299,6 +4299,42 @@ static struct
 	short count;
 } xbox_lan;
 
+/* the slots ("xbox host slots") a game hosted has: 16 at first, as the Xbox's */
+#define XBOX_DEFAULT_SLOTS 16
+
+/* HOST ONLINE's screen, also LAN PLAY's CREATE GAME */
+static struct
+{
+	/* for the internet ("xbox host online"), else the LAN only ("xbox lan create") */
+	boolean online;
+	/* co-op's level ("xbox host coop level") */
+	short level;
+	/* the players a game hosted takes, kept for the next */
+	short slots;
+} xbox_host = { FALSE, NONE, XBOX_DEFAULT_SLOTS };
+
+/* a description's text raised XBOX_TEXT_RAISE units for four lines, whose last one sat on its box's bottom edge */
+#define XBOX_TEXT_RAISE 20
+
+/* the text instance seen last and its place from the map */
+struct xbox_text_place
+{
+	struct widget_instance *text;
+	long creation_time;
+	short top;
+};
+
+static void xbox_text_raise(struct xbox_text_place *place, struct widget_instance *text, boolean raised)
+{
+	if (place->text != text || place->creation_time != text->creation_time)
+	{
+		place->text = text;
+		place->creation_time = text->creation_time;
+		place->top = text->vertical_offset;
+	}
+	text->vertical_offset = (short)(place->top - (raised ? XBOX_TEXT_RAISE : 0));
+}
+
 /* (deleted) the rows' games let go of, as System Link's are */
 static void xbox_list_end(struct widget_instance *list)
 {
@@ -4739,10 +4775,9 @@ static boolean xbox_lan_select(struct widget_instance *list, short controller, b
 	return ui_widget_port_join(list, xbox_lan.games[index], XBOX_PREGAME_NAME, widget_deleted);
 }
 
-/* "xbox lan create" (Y) and "xbox lan create if none" (A, START, while it finds none, as System Link's): player 1
-hosts a new game, and the handler opens the map select */
-static boolean xbox_lan_create(struct widget_instance *list, struct event_record *event, short controller,
-	boolean if_none, boolean *widget_deleted)
+/* "xbox lan create" (Y) and "xbox lan create if none" (A, START, while it finds none, as System Link's): the handler
+opens HOST ONLINE's screen, CREATE GAME for this network only */
+static boolean xbox_lan_create(boolean if_none)
 {
 	void *client = global_network_game_client_get();
 	short state;
@@ -4752,17 +4787,17 @@ static boolean xbox_lan_create(struct widget_instance *list, struct event_record
 	{
 		return FALSE;
 	}
-	if (!multiplayer_player(controller))
-		return FALSE;
-	return ui_widget_port_host(list, event, widget_deleted);
+	xbox_host.online = FALSE;
+	return TRUE;
 }
 
-/* "xbox mp type desc" (the multiplayer menu's list, for "multiplayer type menu update desc"): LAN PLAY has SYSTEM LINK
-PLAY's picture and a description in its place; INTERNET PLAY, after it, that picture and the description added last */
+/* "xbox mp type desc" (for "multiplayer type menu update desc"): LAN PLAY has SYSTEM LINK PLAY's picture and a
+description in its place; INTERNET PLAY and HOST ONLINE, after it, that picture and the descriptions added last */
 static void xbox_multiplayer_type_description(struct widget_instance *list)
 {
-	static short const frames[] = { 0, 1, 2, 2, 3 };
-	static short const strings[] = { 0, 1, 2, 4, 3 };
+	static short const frames[] = { 0, 1, 2, 2, 2, 3 };
+	static short const strings[] = { 0, 1, 2, 4, 5, 3 };
+	static struct xbox_text_place place;
 	struct widget_instance *description = list->parameters.list.extended_description;
 	short index = ui_widget_port_list_index(list);
 
@@ -4771,6 +4806,8 @@ static void xbox_multiplayer_type_description(struct widget_instance *list)
 	{
 		description->child->animation.current_frame_index = frames[index];
 		description->child->next->parameters.text_box.string_list_index = strings[index];
+		/* (HOST ONLINE's four lines) */
+		xbox_text_raise(&place, description->child->next, index == 4);
 	}
 }
 
@@ -4778,18 +4815,175 @@ static void xbox_multiplayer_type_description(struct widget_instance *list)
 (p2p.c), else nothing */
 static void xbox_invite_code_update(struct widget_instance *text_box)
 {
+	void *server = global_network_game_server_get();
 	char code[P2P_CODE_DIGITS + 1], spaced[P2P_CODE_DIGITS + 2];
-	wchar_t wide[P2P_CODE_DIGITS + 2], text[32];
+	wchar_t wide[P2P_CODE_DIGITS + 2], text[48];
 
 	text[0] = 0;
-	if (global_network_game_server_get() && p2p_invite_code(code, sizeof(code)))
+	/* (and its slots, "xbox host slots") */
+	if (server && p2p_invite_code(code, sizeof(code)))
 	{
 		xbox_code_spaced(code, spaced);
 		text_to_wide(spaced, wide, NUMBEROF(wide));
-		usnprintf(text, NUMBEROF(text) - 1, L"Code: %s", wide);
-		text[NUMBEROF(text) - 1] = 0;
+		usnprintf(text, NUMBEROF(text) - 1, L"Slots: %d  Code: %s",
+			network_game_server_get_game(server)->maximum_players, wide);
 	}
+	else if (server)
+		usnprintf(text, NUMBEROF(text) - 1, L"Slots: %d", network_game_server_get_game(server)->maximum_players);
+	text[NUMBEROF(text) - 1] = 0;
 	text_set_length(text_box, text, NUMBEROF(text));
+}
+
+/* ---- HOST ONLINE (menu_tags.c's xbox_host_wire), also LAN PLAY's CREATE GAME: player 1 hosts a multiplayer game or
+co-op (the campaign's level and difficulty) for the internet or the LAN; the pregame's Y changes the slots */
+
+/* "xbox host online" (HOST ONLINE's A, before it opens its screen): for the internet */
+static boolean xbox_host_online(void)
+{
+	xbox_host.online = TRUE;
+	return TRUE;
+}
+
+/* "xbox host header": HOST ONLINE, or CREATE GAME for the LAN */
+static void xbox_host_header(struct widget_instance *header)
+{
+	header->parameters.text_box.string_list_index = xbox_host.online ? 0 : 1;
+}
+
+/* "xbox host desc" (HOST ONLINE's list): CO-OP's picture and SYSTEM LINK PLAY's, and the mode's descriptions */
+static void xbox_host_description(struct widget_instance *list)
+{
+	static short const frames[] = { 0, 2 };
+	static struct xbox_text_place place;
+	struct widget_instance *description = list->parameters.list.extended_description;
+	short index = ui_widget_port_list_index(list);
+
+	if (description && description->child && description->child->next && index >= 0 &&
+		index < (short)NUMBEROF(frames))
+	{
+		description->child->animation.current_frame_index = frames[index];
+		description->child->next->parameters.text_box.string_list_index = (short)(index + (xbox_host.online ? 0 : 2));
+		/* (the internet's MULTIPLAYER's four lines) */
+		xbox_text_raise(&place, description->child->next, xbox_host.online && index == 1);
+	}
+}
+
+/* player 1 hosts with the slots kept, for the internet (listed as network.host_public or network.coop_public say) or
+the LAN only */
+static boolean xbox_host_begin(struct widget_instance *widget, struct event_record *event, short controller,
+	boolean cooperative, boolean *widget_deleted)
+{
+	if (xbox_host.online && !config_boolean("network.online"))
+		return campaign_fail();
+	if (!multiplayer_player(controller))
+		return FALSE;
+	p2p_set_hosting_allowed(xbox_host.online);
+	p2p_set_hosting_public(xbox_host.online &&
+		config_boolean(cooperative ? "network.coop_public" : "network.host_public"));
+	/* (kept for the server's pregame setup: network_game_server_port_settings_apply) */
+	network_game_server_port_set_settings(L"", xbox_host.slots);
+	return ui_widget_port_host(widget, event, widget_deleted);
+}
+
+/* "xbox host multiplayer" (MULTIPLAYER): player 1 hosts; the handler opens the map select */
+static boolean xbox_host_multiplayer(struct widget_instance *item, struct event_record *event, short controller,
+	boolean *widget_deleted)
+{
+	return xbox_host_begin(item, event, controller, FALSE, widget_deleted);
+}
+
+/* "xbox host coop" (CO-OP CAMPAIGN): player 1's profile, whose levels the campaign's list shows */
+static boolean xbox_host_coop(short controller)
+{
+	struct player_profile profile;
+
+	if (xbox_host.online && !config_boolean("network.online"))
+		return campaign_fail();
+	xbox_host.level = NONE;
+	return campaign_profile(controller, &profile) || campaign_fail();
+}
+
+/* "xbox host coop level" (co-op's level list, A): a level player 1 has reached, for the difficulty's A */
+static boolean xbox_host_coop_level(struct widget_instance *list, short controller)
+{
+	struct player_profile profile;
+	short level = list->parameters.list.selected_index;
+
+	if (!campaign_profile(controller, &profile))
+		return campaign_fail();
+	campaign_levels_read(&profile);
+	if (level < 0 || level >= NUMBER_OF_SINGLE_PLAYER_LEVELS || !campaign.levels[level].available)
+		return campaign_fail();
+	xbox_host.level = level;
+	return TRUE;
+}
+
+/* "xbox host coop start" (co-op's difficulty list, A): player 1 hosts co-op, with CO-OP OPTIONS' settings as the PC
+menus' server_start applies them; the handler opens the pregame screen */
+static boolean xbox_host_coop_start(struct widget_instance *list, struct event_record *event, short controller,
+	boolean *widget_deleted)
+{
+	static char const *const friendly_fire_names[] = { "off", "on", "shields_only", "explosives_only" };
+	char const *friendly_fire = config_string("network.coop_friendly_fire");
+	short difficulty = list->parameters.list.selected_index;
+	short index, friendly_fire_mode = _friendly_fire_on;
+
+	if (difficulty < 0 || difficulty > 3 || xbox_host.level < 0 || xbox_host.level >= NUMBER_OF_SINGLE_PLAYER_LEVELS)
+		return campaign_fail();
+	if (!xbox_host_begin(list, event, controller, TRUE, widget_deleted))
+		return FALSE;
+	if (!ui_widget_port_cooperative_level_choose(main_get_solo_level_name(xbox_host.level), difficulty))
+		return campaign_fail();
+	/* (co-op's setup sets its own 16) */
+	network_game_server_port_set_settings(L"", xbox_host.slots);
+	for (index = 0; friendly_fire && index < (short)NUMBEROF(friendly_fire_names); index++)
+	{
+		if (!strcmp(friendly_fire, friendly_fire_names[index]))
+			friendly_fire_mode = cooperative_friendly_fire_modes[index];
+	}
+	network_game_server_port_set_cooperative_friendly_fire(friendly_fire_mode);
+	network_game_server_port_set_cooperative_player_collisions(config_boolean("network.coop_player_collisions"));
+	network_game_server_port_set_cooperative_ally_friendly_fire(config_boolean("network.coop_ally_friendly_fire"));
+	platform_log("menus: hosting co-op on %s at difficulty %d for %s", main_get_solo_level_name(xbox_host.level),
+		difficulty, xbox_host.online ? "the internet" : "the LAN");
+	return TRUE;
+}
+
+/* "xbox host slots" (the pregame screen's Y, menu_tags.c): the host's next slots of 2, 4, 8, 12 and 16, none under
+the players in the game; kept for the games hosted next */
+static boolean xbox_host_slots(void)
+{
+	static short const slots[] = { 2, 4, 8, 12, 16 };
+	void *server = global_network_game_server_get();
+	struct network_game *game;
+	short index, next = NONE;
+
+	if (!server)
+		return TRUE;
+	game = network_game_server_get_game(server);
+	for (index = 0; index < (short)NUMBEROF(slots) && next == NONE; index++)
+	{
+		if (slots[index] > game->maximum_players && slots[index] >= game->player_count)
+			next = slots[index];
+	}
+	for (index = 0; index < (short)NUMBEROF(slots) && next == NONE; index++)
+	{
+		if (slots[index] >= game->player_count)
+			next = slots[index];
+	}
+	if (next == NONE || next == game->maximum_players)
+		return campaign_fail();
+	xbox_host.slots = next;
+	network_game_server_port_set_settings(L"", next);
+	ui_play_audio_feedback_sound(SOUND_FORWARD);
+	platform_log("menus: the game hosted has %d slots", next);
+	return TRUE;
+}
+
+/* "xbox slots key" (the pregame screen's Y = SLOTS): shown to the host only */
+static void xbox_slots_key(struct widget_instance *key)
+{
+	key->visible = global_network_game_server_get() != NULL;
 }
 #endif
 
@@ -6504,6 +6698,63 @@ static void gametype_option_help(struct widget_instance *list)
 	}
 }
 
+#ifdef HALO_PS3
+/* "xbox extra options update" (EXTRA OPTIONS' list, menu_tags.c): PRESET's QUALITY and PERFORMANCE set FRAME RATE and
+DYNAMIC RESOLUTION, which show with CUSTOM only; a change of either makes it CUSTOM. Then the help */
+static void xbox_extra_options_update(struct widget_instance *list)
+{
+	/* (by PRESET's value, CUSTOM, QUALITY, PERFORMANCE: FRAME RATE's 60 or 30, DYNAMIC RESOLUTION's ON or OFF) */
+	static short const frame_rates[] = { NONE, 1, 0 };
+	static short const dynamics[] = { NONE, 1, 0 };
+	/* (PRESET's place among the rows, menu_tags.c's xbox_settings_wire) */
+	enum { preset_row = 2 };
+	static struct
+	{
+		struct widget_instance *list;
+		long creation_time;
+		short preset;
+		short focus;
+	} last;
+	struct widget_instance *row;
+	short focus;
+	struct widget_instance *frame_rate = named(list, "frame_rate_spinner", 0);
+	struct widget_instance *dynamic = named(list, "dynamic_resolution_spinner", 0);
+	struct widget_instance *preset = named(list, "preset_spinner", 0);
+
+	if (frame_rate && dynamic && preset && preset->parameters.list.selected_index >= 0 &&
+		preset->parameters.list.selected_index < (short)NUMBEROF(frame_rates))
+	{
+		short chosen = preset->parameters.list.selected_index;
+
+		if (frame_rates[chosen] != NONE)
+		{
+			if (last.list == list && last.creation_time == list->creation_time && chosen != last.preset)
+			{
+				frame_rate->parameters.list.selected_index = frame_rates[chosen];
+				dynamic->parameters.list.selected_index = dynamics[chosen];
+			}
+			else if (frame_rate->parameters.list.selected_index != frame_rates[chosen] ||
+				dynamic->parameters.list.selected_index != dynamics[chosen])
+			{
+				preset->parameters.list.selected_index = 0;
+			}
+		}
+		/* (the two rows hidden: a press onto them goes on to the first row going down, to PRESET going up) */
+		visible_set(named(list, "op_frame_rate", 0), preset->parameters.list.selected_index == 0);
+		visible_set(named(list, "op_dynamic_resolution", 0), preset->parameters.list.selected_index == 0);
+		if (list->focused_child && !list->focused_child->visible)
+			focus_row(list, last.focus == preset_row ? 0 : preset_row);
+		for (row = list->child, focus = 0; row && row != list->focused_child; row = row->next)
+			focus++;
+		last.list = list;
+		last.creation_time = list->creation_time;
+		last.preset = preset->parameters.list.selected_index;
+		last.focus = focus;
+	}
+	gametype_option_help(list);
+}
+#endif
+
 static char const *const engine_items[] =
 {
 	/* (the type list's rows, in order: game_engine_ctf and so on) */
@@ -6973,7 +7224,31 @@ boolean pc_menu_event_function_invoke(
 		}
 		else if (!strcmp(name, "xbox lan create") || !strcmp(name, "xbox lan create if none"))
 		{
-			return xbox_lan_create(widget, event, controller, !strcmp(name, "xbox lan create if none"), widget_deleted);
+			return xbox_lan_create(!strcmp(name, "xbox lan create if none"));
+		}
+		else if (!strcmp(name, "xbox host online"))
+		{
+			return xbox_host_online();
+		}
+		else if (!strcmp(name, "xbox host slots"))
+		{
+			return xbox_host_slots();
+		}
+		else if (!strcmp(name, "xbox host coop"))
+		{
+			return xbox_host_coop(controller);
+		}
+		else if (!strcmp(name, "xbox host multiplayer"))
+		{
+			return xbox_host_multiplayer(widget, event, controller, widget_deleted);
+		}
+		else if (!strcmp(name, "xbox host coop level"))
+		{
+			return xbox_host_coop_level(widget, controller);
+		}
+		else if (!strcmp(name, "xbox host coop start"))
+		{
+			return xbox_host_coop_start(widget, event, controller, widget_deleted);
 		}
 #endif
 		else if (!strcmp(name, "controls back handler") || !strcmp(name, "gamespy back handler") ||
@@ -7054,5 +7329,13 @@ void pc_menu_game_data_function_invoke(
 		xbox_lan_update(widget);
 	else if (!strcmp(name, "xbox invite code"))
 		xbox_invite_code_update(widget);
+	else if (!strcmp(name, "xbox host desc"))
+		xbox_host_description(widget);
+	else if (!strcmp(name, "xbox host header"))
+		xbox_host_header(widget);
+	else if (!strcmp(name, "xbox slots key"))
+		xbox_slots_key(widget);
+	else if (!strcmp(name, "xbox extra options update"))
+		xbox_extra_options_update(widget);
 #endif
 }

@@ -28,6 +28,10 @@ boolean xbox_demos_available(
 {
 	struct file_reference file;
 	
+#ifdef HALO_PS3
+	/* port: the PS3 cannot launch an Xbox executable (XDemos.xbe): no GAME DEMOS item, as on an Xbox without them */
+	return FALSE;
+#endif
 	if (check_for_demos==TRUE)
 	{
 		if (file_reference_create_from_path(&file, "d:\\XDemos\\XDemos.xbe", FALSE))

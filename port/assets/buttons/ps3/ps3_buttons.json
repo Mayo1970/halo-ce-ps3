@@ -88,8 +88,8 @@
    "scale": 4,
    "sprites": 15,
    "png": [
-    "hud_msg_icons_sm__0.png",
-    "hud_msg_icons_sm__0.png"
+    "colour_hud_msg_icons_sm__0.png",
+    "black_hud_msg_icons_sm__0.png"
    ]
   },
   {

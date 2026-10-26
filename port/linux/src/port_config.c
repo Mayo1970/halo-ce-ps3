@@ -160,6 +160,11 @@ static const struct config_setting config_settings[] =
 		"smaller (down to 5/8 of the width and height), then scale it up under\n"
 		"the HUD: steadier in heavy scenes, softer while it acts; false always\n"
 		"draws it whole." },
+	{ "display.preset", _config_string, "\"custom\"", "HALO_PRESET", _environment_value, _platform_android,
+		"EXTRA OPTIONS' PRESET, which sets interpolation and dynamic_resolution\n"
+		"there: \"quality\" (30 frames a second, the full resolution),\n"
+		"\"performance\" (60, the dynamic resolution) or \"custom\" (as they are\n"
+		"set). Split screen always plays at 30 frames a second." },
 #endif
 	{ "display.shadow_resolution", _config_integer, "128", "HALO_SHADOW_RESOLUTION", _environment_value,
 		_platform_all,

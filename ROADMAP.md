@@ -53,6 +53,16 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-26: HOST ONLINE, split screen at 30, EXTRA OPTIONS' PRESET, and
+  a music log (Matt's four items; his answers: a MULTIPLAYER item, LAN
+  PLAY for the LAN only, listing as upstream, the music bug "In a
+  level"). Then (Matt saw the menus) the descriptions' four lines raised,
+  EXTRA OPTIONS reordered, LAN co-op through LAN PLAY's CREATE GAME, and
+  the pregame's Y for the slots (2 to 16); then OpenCE's gametypes'
+  descriptions, PRESET hiding FRAME RATE and DYNAMIC RESOLUTION, and the
+  menus' PS3 message icons in their style's colours. PKG of 17:20 in
+  `build/ps3_host/` (the tree of `ddf46cbe` and this change only). Not
+  tested on the PS3. Not committed. See the Log.
 - 2026-10-26: the XMB's artifacts over the game and at the quit fixed
   (Matt: "It works! Good job."): PKG of 14:28 in `build/ps3_xmb/`, run
   on the PS3. Not committed. See the Log.
@@ -6090,3 +6100,133 @@ then `./build.sh pkg LOG_IP=<address>`.
     (0 to 2, since 0447fb45) under the shown buffer; they stay bound now.
   - PKG of 14:28, `build/ps3_xmb/`; Matt: "It works! Good job." UDP 18194
     was the msgicons session's listener; no log read.
+- 2026-10-26: four items (Matt: "Let PS3 clients also host the games online
+  (co-op campaign or multiplayer lobbies) with an extra tab ... display that
+  code instead of the url. Cap the framerate on split screen play at 30 FPS.
+  Investigate why it plays the old music when a new one plays ... Create a
+  "Preset" tab ..."). His answers: HOST ONLINE as a MULTIPLAYER item; LAN
+  PLAY's CREATE GAME for the LAN only; listed as upstream
+  (`network.host_public`, `network.coop_public`); the music "In a level".
+  - HOST ONLINE (`menu_tags.c`, `xbox_host_*`; `menu_functions.c`, "xbox
+    host ..."): the multiplayer menu's fifth item (a copy of SYSTEM LINK
+    PLAY's; EDIT GAMETYPES and the blue line 33 units lower). Its screen,
+    a copy of the multiplayer menu's as SETTINGS', has CO-OP CAMPAIGN and
+    MULTIPLAYER (pictures: CO-OP's and SYSTEM LINK's). MULTIPLAYER: player
+    1 hosts (`p2p_set_hosting_allowed(TRUE)`, public as
+    `network.host_public`), then the map select. CO-OP CAMPAIGN: copies of
+    the campaign's level list (A checks the level against player 1's
+    profile, `campaign_levels_read`) and difficulty list (no saved game
+    warning; A hosts: `ui_widget_port_cooperative_level_choose`, CO-OP
+    OPTIONS' three settings as `server_start`, public as
+    `network.coop_public`), then the pregame screen, which shows the code.
+    Read from the Xbox `ui.map` (decompressed, its widgets dumped in the
+    scratchpad). LAN PLAY's create: `p2p_set_hosting_allowed(FALSE)`.
+  - Split screen: `halo_interpolation_enabled` (`xbox/port_stubs.c`) is
+    false with more than one local player; `render.c` draws no smaller view
+    then (its cinematics too).
+  - PRESET (`display.preset`: custom, quality, performance; the fifth row,
+    ADVANCED CONTROLS' fifth place, 193; its spinner 100 units wider:
+    "PERFORMANCE" is 138 units in `large_ui`): "xbox extra options update"
+    sets FRAME RATE and DYNAMIC RESOLUTION from QUALITY (30, OFF) and
+    PERFORMANCE (60, ON), and shows CUSTOM when one of them changes or does
+    not match; then the Xbox's help. `xbox_settings_find` wants 5 rows.
+  - The music: no cause found by reading (the PS3's sound updates at the
+    ticks keep `game_sound_update` and `sound_render` paired; the PS3's
+    stream flush leaves no packet; no newer upstream sound fix in 34
+    commits). A `[music]` log for the next run: the scripts' starts, stops
+    and alternates of music (`game_sound.c`), each music part's start,
+    change, fade out and end with the other music parts on channels
+    (`sound_manager.c`), and a looping sound outside the world deleted
+    unrefreshed.
+  - Checks: the changed units with `-Wall` (no new warning); `check`: 0
+    `r2off`, `.got` 0xbc48. No PC run of the menus.
+  - PKG of 15:52 in `build/ps3_host/` (a copy of `build/ps3_xmb/`, its
+    depfiles' folder rewritten). Not tested on the PS3. UDP 18194 was the
+    msgicons session's listener (its file 2,486,211 bytes at 15:53).
+- 2026-10-26: the 15:52 PKG's menus seen (Matt: "Pretty good so far! But
+  move the HOST Online text a bit higher." "Also the multiplayer tab
+  inside." The EXTRA OPTIONS order WIDESCREEN, BUTTON ICONS, PRESET, FRAME
+  RATE, DYNAMIC RESOLUTION. "I need a way to host LAN Campaign games too.
+  And I need a way to change how many player slots can join."; his
+  answers: LAN PLAY's Y, the pregame's Y, 2 to 16).
+  - The descriptions of four lines (HOST ONLINE's in the multiplayer menu,
+    MULTIPLAYER's online) 20 units higher: their text instance's offset
+    per focused item (`xbox_text_raise`), as their last line sat on the
+    box's edge.
+  - EXTRA OPTIONS' rows, labels and helps in Matt's order.
+  - LAN PLAY's Y (and A with no games) opens HOST ONLINE's screen in the
+    LAN's mode: its header CREATE GAME ("xbox host header"), the LAN's
+    descriptions, and `xbox_host_begin` with `p2p_set_hosting_allowed(FALSE)`
+    (no code, not listed). HOST ONLINE's item sets the internet's mode
+    first ("xbox host online", a handler before the stock ones).
+  - Slots: a game hosted starts with 16 (`network_game_server_port_set_settings`
+    before the server's pregame setup, and again after co-op's own 16). The
+    pregame screen's Y (the stock screen's tag now runs port functions:
+    `pc_menu_xbox_patch_tag`) goes to the next of 2, 4, 8, 12, 16 not under
+    the players in; `network_server_manager.c` (HALO_PS3) sends the lobby
+    the settings. The pregame text "Slots: 16  Code: 1234 5678" (wider:
+    310, 262 units); a Y = SLOTS key (a copy of CREATE GAME's) left of the
+    key bar, the host's only ("xbox slots key").
+  - Checks: the changed units with `-Wall` (no new warning); `check`: 0
+    `r2off`, `.got` 0xbc48. PKG of 16:32 in `build/ps3_host/`. Not tested
+    on the PS3.
+- 2026-10-26: the 16:32 PKG's menus run (Matt: "Pretty good!"; the log
+  16:10 to 16:16 on the PS3's clock: LAN and internet co-op hosts on a10,
+  the slots cycled 2 to 16; no level played, so no `[music]` part).
+  Matt: "stop that listener": the msgicons session's (PID 6104) stopped;
+  UDP 18194 is free.
+- 2026-10-26: the "missing string" custom gametypes (Matt: "Please check
+  what are the missing string custom games that we got"): OpenCE's 7
+  default gametypes (`game_modes.c`: SWAT, Infection, Gun Game, Hardcore
+  Slayer, Hardcore CTF, Hardcore Oddball, Hardcore King; default playlist
+  profiles 26 to 32). The Xbox gametype list's description of a default
+  gametype is `ui\shell\strings\game_variant_descriptions` at the
+  profile's index + 10 (`ui_widget_game_data_input_functions.c`, the
+  multiplayer settings list's update), and the Xbox `ui.map`'s list has 36
+  strings (10 type texts, then the 26 Xbox defaults'): indices 36 to 42
+  give `<missing string>`. Their names are right (the profiles' own). No
+  change yet.
+- 2026-10-26: three more (Matt: "Yes, thank you." to the gametypes'
+  descriptions; "if the preset is Quality or performance, the dynamic
+  resolution and the framerate rows are hidden, but if choosen custom,
+  they'll be displayed"; "With the playstation buttons, in the UI, when it
+  prompts me to create a LAN game, it says "Push X (as the Xbox button) or
+  TRIANGLE to create a game"... fix that and make it match the button
+  style color").
+  - The gametypes: `menu_tags.c` makes `game_variant_descriptions` 43
+    strings (the map's 36, then SWAT's, Infection's, Gun Game's and the
+    four Hardcore ones', in `game_modes.c`'s order), at the map's own last.
+  - EXTRA OPTIONS: FRAME RATE and DYNAMIC RESOLUTION (the last two rows)
+    shown with CUSTOM only; the focus a press moves onto them goes on to
+    WIDESCREEN going down, to PRESET going up (the Xbox lists do not pass
+    over hidden rows: only the PC menus' tags do).
+  - The menus' message icons: `hud_msg_icons_sm` now a texture a style,
+    drawn from `colour_*` and `black_*` (`tools/ps3_button_assets.py`:
+    `STYLED_SHEETS`; `colour_hud_msg_icons_sm__0.png`,
+    `black_hud_msg_icons_sm__0.png`, the stencil PNG deleted; the HUD's
+    sheet stays a stencil), and `ui_widget.c`'s `render_state_bitmap` draws
+    a PS3 sprite white with the text's alpha (it was tinted as the Xbox's
+    A: green with the cross cut out). The tool's other PNGs unchanged.
+  - Checks: the changed units with `-Wall` (no new warning); `check`: 0
+    `r2off`, `.got` 0xbc48. PKG of 17:20 in `build/ps3_host/`. Not tested
+    on the PS3.
+- 2026-10-26: the 17:20 PKG's LAN message (Matt: "There's no transparency in
+  "Press X or Triangle to start your own game""): the icons sat on squares
+  of their colour. The HUD's bitmap draws blend by alpha multiply add
+  (premultiplied, `hud_draw.c`), and the styled sheets were straight alpha
+  with bled colour around the circles. `tools/ps3_button_assets.py` now
+  premultiplies them (0 colour where the alpha is 0, as the stencils' grey
+  is their alpha). PKG of 18:00 in `build/ps3_host/`. Not tested on the
+  PS3. Our listener (PID 2684, `ps3log_host.txt`) runs.
+- 2026-10-26: the 18:00 PKG's LAN message (Matt: "Ok, that's pretty good
+  now! But align them a tiny bit higher. They're too low!"): the menus' PS3
+  message icons 3 units higher (`ui_widget.c`, `PS3_MESSAGE_ICON_RAISE`;
+  their circles' middles about 7 px under the capitals' at 1080p). PKG of
+  20:38 in `build/ps3_host/`. Not tested on the PS3.
+- 2026-10-26: GAME DEMOS removed (Matt: "also remove the Game Demos
+  button, as it crashes the console."): the main menu's fourth item runs
+  "disable if no xdemos" when made; `xbox_demos_available`
+  (`marketing_and_strategic_business_development.c`) is FALSE on the PS3,
+  so the item is disabled and hidden as on an Xbox without
+  `d:\XDemos\XDemos.xbe` (the PS3 cannot launch an .xbe). PKG of 20:42 in
+  `build/ps3_host/` (with the 20:38 icon raise). Not tested on the PS3.
