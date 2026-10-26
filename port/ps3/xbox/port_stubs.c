@@ -230,7 +230,10 @@ void memory_watch_prepare_write(void *address, unsigned long size)
 
 /* ---------- the desktop: window, clipboard, quit */
 
-/* display.interpolation (EXTRA OPTIONS' FRAME RATE): 60 frames a second between the 30 Hz ticks, else 30 */
+short players_port_local_player_count(void);
+
+/* display.interpolation (EXTRA OPTIONS' FRAME RATE): 60 frames a second between the 30 Hz ticks, else 30; split screen
+always 30 */
 int halo_interpolation_enabled(void)
 {
 	static int enabled;
@@ -241,7 +244,7 @@ int halo_interpolation_enabled(void)
 		read_at = config_changes();
 		enabled = config_boolean("display.interpolation");
 	}
-	return enabled;
+	return enabled && players_port_local_player_count() <= 1;
 }
 
 void platform_display_apply(void)

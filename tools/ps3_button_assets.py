@@ -10,9 +10,9 @@ tools/button_assets.py):
 build: renders port/assets/buttons/ps3/*.png at SCALE times the maps'
     bitmaps (720p draws them at 1.5 times), and ps3_buttons.json. Each menu
     icon has a texture a style: cross for A, circle for B, square for X,
-    triangle for Y. The message icons' sheets (the menus' hud_msg_icons_sm, the
-    HUD's combined hud_msg_icons) have one for both, the stencils the game
-    tints, their A, B, X and Y sprites only.
+    triangle for Y. The message icons' sheets have their A, B, X and Y sprites
+    only: the menus' hud_msg_icons_sm one a style, in its colours; the HUD's
+    combined hud_msg_icons one for both, the stencil the game tints.
     Needs resvg_py, Pillow, NumPy and SciPy.
 embed: the PNGs as the RSX samples them (A8R8G8B8 words, swizzled, every mip
     level), zlib-compressed, in a C header for port/ps3/xbox/hud_hires_rsx.c.
@@ -42,6 +42,9 @@ PS3_RADIUS = 10.0
 XBOX_RADII = (8.659, 12.932)
 # the PS3 circles sit lower than the Xbox's tilted ovals: up by this (texels) to the key labels' middle
 RAISE = 2.7
+# the message icon sheets drawn in each style's colours, which the menus' text draws untinted (ui_widget.c): the
+# others are stencils, which the game tints with the message's colour
+STYLED_SHEETS = {"ui\\hud\\bitmaps\\hud_msg_icons_sm"}
 
 # the HUD's message icons (the HUD globals' messaging icons, the menus' are hud_msg_icons_sm): its A, B, X and Y
 # sprites, from bitmap 0 of every Xbox map (its CRC); the places of their ovals measured on its alpha, as
@@ -111,29 +114,40 @@ def build(arguments) -> None:
         entry = {key: xbox[key] for key in ("name", "tag", "bitmap", "width", "height", "crc")}
         entry["scale"] = SCALE
         if "sprites" in xbox:
-            body = []
-            mask = 0
-            for index, sprite in enumerate(xbox["sprites"]):
-                left, top, right, bottom = sprite["cell"]
-                scale, x, y = sprite["place"]
-                # the Xbox oval's centre, and a circle of its area, inside the cell
-                centre = (left + x + scale * CENTRE[0], top + y + scale * CENTRE[1])
-                radius = min(scale * (XBOX_RADII[0] * XBOX_RADII[1]) ** 0.5, (right - left) / 2 - 0.5,
-                             (bottom - top) / 2 - 0.5)
-                size = radius * xbox.get("size", 1.0) / PS3_RADIUS
-                moved = (f"translate({centre[0] - size * CENTRE[0]:.4f} {centre[1] - size * CENTRE[1]:.4f}) "
-                         f"scale({size:.4f})")
-                area = f'x="{left}" y="{top}" width="{right - left}" height="{bottom - top}"'
-                body.append(f'<defs><clipPath id="cell{index}"><rect {area}/></clipPath></defs>'
-                            f'<g clip-path="url(#cell{index})"><g transform="{moved}">'
-                            f'{stencil(FACES[sprite["svg"]], f"s{index}")}</g></g>')
-                mask |= 1 << sprite["sequence"]
-            image = render(document(width, height, "\n".join(body)), SCALE)
-            # (grey the same as alpha, as the sheet's)
-            image[..., :3] = image[..., 3:4]
-            entry["sprites"] = mask
-            entry["png"] = [f"{xbox['name']}.png"] * 2
-            Image.fromarray(image, "RGBA").save(ASSETS / entry["png"][0], optimize=True)
+            # (the menus' sheet a texture a style, in its colours; the HUD's one stencil for both)
+            styled = xbox["tag"] in STYLED_SHEETS
+            entry["sprites"] = sum(1 << sprite["sequence"] for sprite in xbox["sprites"])
+            entry["png"] = []
+            for style in STYLES if styled else (None,):
+                body = []
+                for index, sprite in enumerate(xbox["sprites"]):
+                    left, top, right, bottom = sprite["cell"]
+                    scale, x, y = sprite["place"]
+                    # the Xbox oval's centre, and a circle of its area, inside the cell
+                    centre = (left + x + scale * CENTRE[0], top + y + scale * CENTRE[1])
+                    radius = min(scale * (XBOX_RADII[0] * XBOX_RADII[1]) ** 0.5, (right - left) / 2 - 0.5,
+                                 (bottom - top) / 2 - 0.5)
+                    size = radius * xbox.get("size", 1.0) / PS3_RADIUS
+                    moved = (f"translate({centre[0] - size * CENTRE[0]:.4f} {centre[1] - size * CENTRE[1]:.4f}) "
+                             f"scale({size:.4f})")
+                    area = f'x="{left}" y="{top}" width="{right - left}" height="{bottom - top}"'
+                    face = FACES[sprite["svg"]]
+                    # (the redraws and the stencils share the frame: the oval at CENTRE)
+                    elements = art(f"{style}_{face}.svg", f"s{index}") if style else stencil(face, f"s{index}")
+                    body.append(f'<defs><clipPath id="cell{index}"><rect {area}/></clipPath></defs>'
+                                f'<g clip-path="url(#cell{index})"><g transform="{moved}">{elements}</g></g>')
+                image = render(document(width, height, "\n".join(body)), SCALE)
+                if style:
+                    # (premultiplied, as the stencils are: the HUD's draws blend by alpha multiply add, hud_draw.c)
+                    image[..., :3] = (image[..., :3].astype("uint16") * image[..., 3:4] + 127) // 255
+                else:
+                    # (grey the same as alpha, as the sheet's)
+                    image[..., :3] = image[..., 3:4]
+                name = f"{style}_{xbox['name']}.png" if style else f"{xbox['name']}.png"
+                Image.fromarray(image, "RGBA").save(ASSETS / name, optimize=True)
+                entry["png"].append(name)
+            if not styled:
+                entry["png"] *= 2
         else:
             scale, x, y = xbox["place"]
             entry["png"] = []
