@@ -17,6 +17,10 @@ int ps3_log_vprintf(const char *format, va_list ap);
 int ps3_exit_requested(void);
 /* moves at each start and end of the system's drawing over the game (the XMB in the game, a dialog) */
 unsigned ps3_system_overlay_events(void);
+/* nonzero while the system draws over the game: it can take vertex program slots at every frame */
+int ps3_system_overlay_active(void);
+/* the system's events (sysUtilCheckCallback): the monitor thread every 100 ms, the frames at each start */
+void ps3_system_check_events(void);
 
 /* largest lv2 memory container that fits, in MB: the free user memory */
 unsigned ps3_memory_free_mb(void);
