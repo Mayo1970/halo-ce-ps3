@@ -2157,6 +2157,7 @@ enum
 	_xbox_extra_widescreen_values,
 	_xbox_extra_frame_rate_values,
 	_xbox_extra_button_values,
+	_xbox_extra_dynamic_values,
 	_xbox_extra_help,
 	_xbox_settings_screen,
 	_xbox_settings_header,
@@ -2178,6 +2179,9 @@ enum
 	_xbox_extra_button_row,
 	_xbox_extra_button_label,
 	_xbox_extra_button_spinner,
+	_xbox_extra_dynamic_row,
+	_xbox_extra_dynamic_label,
+	_xbox_extra_dynamic_spinner,
 	_xbox_extra_help_text,
 	NUMBER_OF_XBOX_TAGS,
 	/* (each part's string lists come first) */
@@ -2217,6 +2221,7 @@ static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
 	XBOX_EXTRA "var_widescreen",
 	XBOX_EXTRA "var_frame_rate",
 	XBOX_EXTRA "var_button_icons",
+	XBOX_EXTRA "var_dynamic_resolution",
 	XBOX_EXTRA "extra_help_strings",
 	XBOX_SETTINGS "settings_select_screen",
 	XBOX_SETTINGS "header_settings",
@@ -2238,6 +2243,9 @@ static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
 	XBOX_EXTRA "op_button_icons",
 	XBOX_EXTRA "button_icons_label",
 	XBOX_EXTRA "button_icons_spinner",
+	XBOX_EXTRA "op_dynamic_resolution",
+	XBOX_EXTRA "dynamic_resolution_label",
+	XBOX_EXTRA "dynamic_resolution_spinner",
 	XBOX_EXTRA "extra_options_help",
 };
 
@@ -2385,7 +2393,7 @@ static void xbox_child_set(struct ui_widget_child_reference *child, long tag_ind
 }
 
 /* ---------- SETTINGS (the PS3's): a screen of PLAYER PROFILES and EXTRA OPTIONS, a copy of the multiplayer menu's;
-EXTRA OPTIONS' WIDESCREEN, FRAME RATE and BUTTON ICONS, a copy of the profile's ADVANCED CONTROLS, written to config.toml */
+EXTRA OPTIONS' four rows, a copy of the profile's ADVANCED CONTROLS, written to config.toml */
 
 /* the headers' place and colour, those of the maps' header pictures' text (in the menu's large font) */
 #define XBOX_HEADER_TOP 46
@@ -2454,7 +2462,7 @@ static boolean xbox_settings_find(struct xbox_settings_stock *stock)
 		xbox_widget(stock->advanced_screen)->child_widgets.count == 3 &&
 		xbox_child_tag(stock->advanced_screen, 0) == stock->advanced_list &&
 		xbox_child_tag(stock->advanced_screen, 2) == stock->options_key &&
-		xbox_widget(stock->advanced_list)->child_widgets.count >= 3 &&
+		xbox_widget(stock->advanced_list)->child_widgets.count >= 4 &&
 		xbox_child_tag(stock->advanced_list, 0) == stock->first_row &&
 		xbox_widget(stock->first_row)->child_widgets.count == 2 &&
 		xbox_widget(stock->second_row)->child_widgets.count == 2 &&
@@ -2472,14 +2480,15 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 	char const *descriptions[] =
 	{
 		"Create, edit or delete the\r\nplayer profiles: name,\r\ncontrols and color.",
-		"Choose the picture's shape,\r\nthe frame rate and the\r\nbutton icons.",
+		"Choose the picture's shape,\r\nthe frame rate, the button\r\nicons and the resolution.",
 	};
 	char const *settings_title = "SETTINGS";
 	char const *extra_title = "EXTRA OPTIONS";
-	char const *labels[] = { "WIDESCREEN", "FRAME RATE", "BUTTON ICONS" };
+	char const *labels[] = { "WIDESCREEN", "FRAME RATE", "BUTTON ICONS", "DYNAMIC RESOLUTION" };
 	char const *widescreen_values[] = { "ON", "OFF" };
 	char const *frame_rate_values[] = { "60", "30" };
 	char const *button_values[] = { "XBOX", "STYLE A", "STYLE B" };
+	char const *dynamic_values[] = { "ON", "OFF" };
 	char const *help[] =
 	{
 		"The picture fills a 16:9 screen, and you see more\r\nof the world at its sides.",
@@ -2489,6 +2498,8 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 		"The Xbox's buttons, as the maps draw them.",
 		"The PS3's buttons: colored circles with white\r\nsymbols.",
 		"The PS3's buttons: black circles with colored\r\nsymbols.",
+		"In heavy scenes the world is drawn smaller, then\r\nscaled up: steadier, a little softer.",
+		"The world is always drawn at the full resolution.",
 	};
 
 	definitions[_xbox_settings_texts] = string_list_build(texts, NULL, NUMBEROF(texts), NULL);
@@ -2499,6 +2510,7 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 	definitions[_xbox_extra_widescreen_values] = string_list_build(widescreen_values, NULL, NUMBEROF(widescreen_values), NULL);
 	definitions[_xbox_extra_frame_rate_values] = string_list_build(frame_rate_values, NULL, NUMBEROF(frame_rate_values), NULL);
 	definitions[_xbox_extra_button_values] = string_list_build(button_values, NULL, NUMBEROF(button_values), NULL);
+	definitions[_xbox_extra_dynamic_values] = string_list_build(dynamic_values, NULL, NUMBEROF(dynamic_values), NULL);
 	definitions[_xbox_extra_help] = string_list_build(help, NULL, NUMBEROF(help), NULL);
 	definitions[_xbox_settings_screen] = xbox_widget_copy(stock->type_screen, "settings_select_screen");
 	definitions[_xbox_settings_header] = xbox_widget_copy(stock->first_item, "header_settings");
@@ -2527,6 +2539,11 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 	definitions[_xbox_extra_button_label] = xbox_widget_copy(xbox_child_tag(stock->second_row, 0), "button_icons_label");
 	definitions[_xbox_extra_button_spinner] = xbox_widget_copy(xbox_child_tag(stock->second_row, 1),
 		"button_icons_spinner");
+	definitions[_xbox_extra_dynamic_row] = xbox_widget_copy(stock->second_row, "op_dynamic_resolution");
+	definitions[_xbox_extra_dynamic_label] = xbox_widget_copy(xbox_child_tag(stock->second_row, 0),
+		"dynamic_resolution_label");
+	definitions[_xbox_extra_dynamic_spinner] = xbox_widget_copy(xbox_child_tag(stock->second_row, 1),
+		"dynamic_resolution_spinner");
 	definitions[_xbox_extra_help_text] = xbox_widget_copy(stock->advanced_help, "extra_options_help");
 }
 
@@ -2624,13 +2641,14 @@ static void xbox_setting_add(long definition_index, char const *setting, char co
 	entry->value_count = index;
 }
 
-/* the screens' references, children and handlers, and their three settings */
+/* the screens' references, children and handlers, and their four settings */
 static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **definitions, long const *tags)
 {
 	/* (display.screen_width: 0 is the display's shape, 640 the Xbox's 4:3) */
 	static char const *const widescreen_values[] = { "0", "640" };
 	static char const *const frame_rate_values[] = { "true", "false" };
 	static char const *const button_values[] = { "xbox", "style_a", "style_b" };
+	static char const *const dynamic_values[] = { "true", "false" };
 	static long const rows[][4] =
 	{
 		{ _xbox_extra_widescreen_row, _xbox_extra_widescreen_label, _xbox_extra_widescreen_spinner,
@@ -2638,6 +2656,8 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 		{ _xbox_extra_frame_rate_row, _xbox_extra_frame_rate_label, _xbox_extra_frame_rate_spinner,
 			_xbox_extra_frame_rate_values },
 		{ _xbox_extra_button_row, _xbox_extra_button_label, _xbox_extra_button_spinner, _xbox_extra_button_values },
+		{ _xbox_extra_dynamic_row, _xbox_extra_dynamic_label, _xbox_extra_dynamic_spinner,
+			_xbox_extra_dynamic_values },
 	};
 	static char const *const accept_events[] = { "a", "start" };
 	static char const *const created_event[] = { "created" };
@@ -2692,7 +2712,7 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 	reference_set(&text->text_label_string_list, UNICODE_STRING_LIST_TAG, tags[_xbox_settings_descriptions]);
 	text->string_list_index = 0;
 
-	/* EXTRA OPTIONS: ADVANCED CONTROLS' list at its first three rows' places, its header the port's, its key */
+	/* EXTRA OPTIONS: ADVANCED CONTROLS' list at its first four rows' places, its header the port's, its key */
 	{
 		long template_children[] = { 0, 1, 2 };
 		long children[] = { tags[_xbox_extra_list], tags[_xbox_extra_header], NONE };
@@ -2703,10 +2723,10 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 	extra_screen->event_handlers.count = 0;
 	xbox_header_set(definitions[_xbox_extra_header], tags[_xbox_extra_title]);
 	{
-		long template_children[] = { 0, 1, 2 };
+		long template_children[] = { 0, 1, 2, 3 };
 		long children[] = { tags[_xbox_extra_widescreen_row], tags[_xbox_extra_frame_rate_row],
-			tags[_xbox_extra_button_row] };
-		char const *names[] = { "op_widescreen", "op_frame_rate", "op_button_icons" };
+			tags[_xbox_extra_button_row], tags[_xbox_extra_dynamic_row] };
+		char const *names[] = { "op_widescreen", "op_frame_rate", "op_button_icons", "op_dynamic_resolution" };
 
 		xbox_children_set(extra_list, template_children, NUMBEROF(children), children, names);
 	}
@@ -2743,6 +2763,7 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 	xbox_setting_add(tags[_xbox_extra_widescreen_spinner], "display.screen_width", widescreen_values, 2);
 	xbox_setting_add(tags[_xbox_extra_frame_rate_spinner], "display.interpolation", frame_rate_values, 2);
 	xbox_setting_add(tags[_xbox_extra_button_spinner], "display.button_icons", button_values, 3);
+	xbox_setting_add(tags[_xbox_extra_dynamic_spinner], "display.dynamic_resolution", dynamic_values, 2);
 	/* BUTTON ICONS' values are wider than ON or 60: its spinner and left arrow reach further left */
 	{
 		struct ui_widget_definition *spinner = definitions[_xbox_extra_button_spinner];

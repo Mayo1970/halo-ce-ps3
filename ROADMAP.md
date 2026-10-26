@@ -53,6 +53,52 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-26: the 12:17 PKG run on b40 with DYNAMIC RESOLUTION ON (Matt:
+  "Done. Pretty good!"): a clean exit; 60.0 / 57.25 fps (43 play windows /
+  the 2 under 59; none under 56), 59.7 on average (the 09:52 run 59.3, 8
+  windows under 59 of 26); the 2: the first after the load and a
+  checkpoint. Frames at 8/8 65.5 %, 7/8 19.7 %, 6/8 9.7 %, 5/8 5.1 %; 99
+  changes. The RSX 8.9 ms a frame on median, 12.0 at most (was 14.7).
+  `config.toml` was written again with the defaults at the boot (half
+  resolution particles off). See the Log. Next: Matt's choice. Our
+  listener stopped; UDP 18194 is free.
+- 2026-10-26: EXTRA OPTIONS' DYNAMIC RESOLUTION row (Matt: "Place a menu
+  row for the dynamic resolution, thanks."): ON or OFF (the default),
+  the fourth row at ADVANCED CONTROLS' fourth place (`menu_tags.c`); the
+  view's target made between frames when it is turned on. PKG of 12:17 in
+  `build/ps3_dynamic/`. Not tested on the PS3. Not committed. See the Log.
+- 2026-10-26: the dynamic resolution built (G10 step 4; Matt: "Ok then,
+  let's build it."): `display.dynamic_resolution` (false by default, no
+  row). While the RSX's time in the windows averages over 14 ms, the
+  primary window's 3D view is drawn an eighth smaller (down to 5/8 of
+  1280x720) into a target of the screen's size, then scaled up over the
+  screen, filtered, before the HUD; an eighth larger when that time,
+  grown with the pixels, stays under 12.5 ms. PKG of 11:53 in
+  `build/ps3_dynamic/` (it has the steps 2 to 5 too). Not tested on the
+  PS3. Not committed. See the Log.
+- 2026-10-26: the 03:49 PKG run on b40 (Matt: "Done"), with
+  `half_resolution_particles = true` (targets 640x360): a clean exit;
+  59.8 / 58.3 fps (26 play windows / the 8 under 59; none under 56), 59.3
+  on average. (2) The hash 1.85 ms a frame on median (was 1.9): still 1.5
+  ms a frame plus 0.73 cycles a byte, so its fixed part is not the
+  checks' waits. (3) The effects on the RSX as before (1.0 ms a frame on
+  median, the most 5.1); the log does not count the draws in the half
+  targets. (4) A call's costs -24 % to +8 % against the last runs (other
+  scenes): no clear gain in free play. (5) One check a bsp a load (the
+  swap's 34,998-node bsp once, 6.99 ms). See the Log. Next: Matt's
+  choice. Our listener stopped; UDP 18194 is free.
+- 2026-10-26: steps 2, 4 and 5 of the 00:26 run built, step 3 a setting
+  (Matt: "Let's work on steps 2, 3, 4 and 5"; step 3 "Half-res particles
+  on", step 4 "Profile, then cut"): (2) the texture hash's first line and
+  last bytes in its 4 KB fetches, one wait for a texture of 4 KB or less;
+  (3) `half_resolution_particles = true` in `config.toml`'s `[display]`
+  for the run; (4) a profiler of the whole game on the PC (the build's
+  objects on qemu-ppc64 with a PPE model, b40 in heavy combat), then cuts
+  with the same game state: the accessors' fast paths, the quaternions in
+  registers, `ps3_vmx_exact` inline, 20 hot units in the one TOC: a tick
+  9.33 to 8.43 ms in the model; (5) the sphere test's check kept through
+  a bsp switch. PKG of 03:49 in `build/ps3_steps/`. Not tested on the
+  PS3. Not committed. See the Log.
 - 2026-10-26: the 00:26 PKG run on b40 (Matt: "Done."): a clean exit;
   60.0 / 53.7 fps (32 play windows / the 1 under 56), 5 windows under 59
   (the last run 11). The texture hash 4.8 to 1.9 ms a frame on median
@@ -1019,7 +1065,7 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20; on hardware 2026-10-22 the kept boxes crashed the game thread twice (step 627, the transparent sort; cause not found): taken out (Matt: option 2), then a clean run (the weather in the snow 1.27 to 0.86 ms a frame); the stream buffers' blocks (no heap fragments: 22.3 MB free at the end, before 19.3), the sphere query on the kept blocks (13.3 to 10.3 us a call; the same answer: PC check), `render_model_parts` and the shadows timed inside: run on hardware 2026-10-22 (SUCCESS); the SPU candidates written down (the Log); the game thread's jobs on a third SPU (the checkpoint's copies, the shadows' surfaces, the weather, the particles' rays; PC check on the 23 maps): built 2026-10-22, run on hardware 2026-10-22 (the checkpoint 12.9-15.1 to 3.1 ms; the shadows' surfaces 103 to 4.7 us a shadow; the weather 1.2 to 0.05 ms a frame; the particles 3.8 to 2.9 us each); the pixel shaders' copies on the conversions' SPU and the particles' rays taken a frame late: built 2026-10-22 |
 | G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0); file reads in 128 KB calls (the BSP switch's stutter), the decals' batch in one call, the shadows' sort and triangles on the render SPU: built 2026-10-22; the handoff's items 2 to 4 (the generic shaders' definitions kept, the decals' vertices converted by the SPU, the shadows' kept node matrices and parts; Matt skipped 1 and 5): built 2026-10-24, run on hardware 2026-10-24 (the generic definitions all kept; the shadow models 78 to 57 us; the parts' setup never kept); the decals of a layer in one order over its clusters, the shadows' kept node matrices by hash, the transparent sort's model bounds in exact VMX, the server browser's log: built 2026-10-24, run on hardware 2026-10-24 (59.4 / 54.9 fps on median; the browser works: 28 to 34 games; the shadows and the sort no faster); the timers inside the model draws, the Direct3D thread, the node matrices, the render interpolation and the file reads, then the draw prologue's compares, the index ranges, the uniforms and the scissor: run on hardware 2026-10-24 (a draw's Direct3D work on the game thread 6.1 to 4.2 us; 59.6 / 51.5 fps) |
-| G10 The Direct3D thread's work on an SPU, so that the game thread has the PPE's core alone; and a dynamic resolution for the views where the RSX sets the rate (Matt, 2026-10-25) | The plan and the evidence: GOALS.md ("G10 plan"). The Direct3D thread's work on an SPU and the render interpolation's tick on the game SPU: built 2026-10-25 (PC checks: the same RSX commands, the same records), run on hardware 2026-10-25 (b40, a clean exit; 59.5 / 54.0 fps; the game thread waits 7.8 ms a frame; the RSX sets the rate in the heavy windows); the run's proposals 1 to 3 (the effects pass split on the RSX, the SPU's timers, pixel shader 76) built and run on hardware 2026-10-25 (pixel shader 76 107 to 78 us a draw; the particles 1.2 ms a frame on the RSX on median, up to 3.7); that run's proposals 1 to 3 (the unchanged fragments killed, the half resolution particles as a setting, `particles_update` on the game SPU) built 2026-10-25, PKG of 17:53, run on b40 the same day (59.9 / 54.25 fps; the drops the RSX's: the specular part, the effects); the kill's clean-up built 2026-10-25, PKG of 18:48, not tested on the PS3; the dynamic resolution not built |
+| G10 The Direct3D thread's work on an SPU, so that the game thread has the PPE's core alone; and a dynamic resolution for the views where the RSX sets the rate (Matt, 2026-10-25) | The plan and the evidence: GOALS.md ("G10 plan"). The Direct3D thread's work on an SPU and the render interpolation's tick on the game SPU: built 2026-10-25 (PC checks: the same RSX commands, the same records), run on hardware 2026-10-25 (b40, a clean exit; 59.5 / 54.0 fps; the game thread waits 7.8 ms a frame; the RSX sets the rate in the heavy windows); the run's proposals 1 to 3 (the effects pass split on the RSX, the SPU's timers, pixel shader 76) built and run on hardware 2026-10-25 (pixel shader 76 107 to 78 us a draw; the particles 1.2 ms a frame on the RSX on median, up to 3.7); that run's proposals 1 to 3 (the unchanged fragments killed, the half resolution particles as a setting, `particles_update` on the game SPU) built 2026-10-25, PKG of 17:53, run on b40 the same day (59.9 / 54.25 fps; the drops the RSX's: the specular part, the effects); the kill's clean-up built 2026-10-25, PKG of 18:48, not tested on the PS3; the dynamic resolution (`display.dynamic_resolution`, EXTRA OPTIONS' DYNAMIC RESOLUTION) built 2026-10-26, PKG of 12:17, not tested on the PS3 |
 
 ## G9 analysis (2026-10-22)
 
@@ -1857,6 +1903,16 @@ the whole tree. No code change.
   reads the writer shares the disk with are the first suspect). Matt
   works on the run's other steps (the hash's fixed waits, the RSX, the
   ticks' profiles, the BSP swap's double check).
+- From the ticks' profile (found 2026-10-26; not built): the sphere test's
+  table of checked bsps has 256 slots by address: a structure bsp and an
+  object's bsp in one slot push each other out, and each time the large
+  bsp is checked again (7 ms for 35,000 nodes; not seen on b40). Cuts the
+  profile shows: the small getters that save a register (an LHS each:
+  `global_structure_bsp_get`, `game_in_progress`, ...) with a fast path;
+  the rays' bsp walk without its checks (0.69 ms a tick, as the sphere
+  test's); the markers by name (0.47 ms: a cache); every unit without
+  `-mminimal-toc` (`-mcmodel=medium`); the lights' reconnects (0.58 ms);
+  the aiming screens' check (one apply in 16 done twice) still on.
 - G4 pixel data and G5 sound data stay little-endian in the cache file:
   the texture and sound caches read them by file offset. CPU-written texels
   are little-endian too (trap 27). Not converted yet (tool or later code):
@@ -5807,3 +5863,207 @@ then `./build.sh pkg LOG_IP=<address>`.
   - The BSP swap checked the 34,998-node bsp twice (6.95 and 7.08 ms),
     the 9,484-node one twice (2.13, 2.16): the switch's first sphere tests
     come before its generation changes.
+- 2026-10-26: Steps 2 to 5 of the 00:26 run (Matt: "Let's work on steps
+  2, 3, 4 and 5."; step 3: "Half-res particles on"; step 4: "Profile,
+  then cut").
+  - 2, the texture hash's fixed waits (`spu_direct3d.c`): a check waited
+    for its first line (an unaligned source), its first 4 KB and its last
+    bytes. Now each 4 KB piece comes with the line before it (the
+    shuffle's first line) and the last piece with the lines to the end
+    (the last bytes); a texture under 64 bytes in one fetch; one loop of
+    pieces for each alignment. The same hash values at the same point.
+    Check in flycastPS3's SPU simulator (HEAD's image, the tree's,
+    `xgpu_texture_hash`): 70 sizes at the 16 alignments, 1,120 cases, 0
+    apart; 8 of 8 faults found. The DMA waits a hash (the model's 500
+    cycles a DMA): 885-2,073 to 239-678 cycles; a hash of 64 bytes 2,756
+    to 2,345 cycles, 4 KB 5,575 to 5,161, 43,736 bytes 32,577 to 31,809,
+    64 KB the same, 1 MB +1 %. LS 212,552 bytes (was 212,368).
+  - 3, no code: the run with `half_resolution_particles = true` in
+    `config.toml`'s `[display]` (the log: `Direct3D: the half resolution
+    particles' targets: ...`).
+  - 4, a profiler of the whole game on the PC: the PS3 build's game and
+    Xbox layer objects (ppu-gcc) linked by powerpc64-linux-gnu-gcc with
+    glibc and a host layer of its own (files, threads, the Xbox window;
+    no RSX, so the device draws nothing; the SPUs off, their PPE paths;
+    newlib's errno, ctype, `struct tm` and `open` flags), run by
+    qemu-ppc64 (`-R 4 GB`) with a TCG plugin that models the PPE (in
+    order, register latencies, L1D 32 KB and L2 512 KB of 128-byte lines,
+    gshare, load-hit-store, D-ERAT) between markers around `game_tick`
+    (`--wrap`). b40 from `init.txt` (`debug_no_drawing 1`, `map_name`),
+    one tick a frame (`debug.fixed_step`), cues at 40 s
+    (`debug.network_test_cues`: `switch_bsp 0`, the player to
+    `ext_a_flag`, `ai_place` of ext_a's areas A and B, covenant and
+    marines): 60 to 68 actors fighting; ticks 1,301 to 2,100 profiled, the
+    caches emptied at each tick (the render's lines).
+    - The tick before: 29.85 M cycles (9.33 ms at 3.2 GHz), 9.20 M
+      instructions (IPC 0.31); of the cycles L2 misses 22 %, L1 misses 10
+      %, mispredicts 7 %, load-hit-stores 6 %. objects_update 5.65 ms
+      (node matrices 1.69 for 238 calls, of it the units' preprocess
+      0.76; biped_update 1.43; the lights' reconnects 0.58; the markers by
+      name 0.47 for 385), ai 3.42 (perception 1.61, of it line of sight
+      1.07; the path search 0.45); 149,620 calls a tick.
+    - The largest self costs: the accessors, 2.2 ms a tick: `datum_get`
+      0.95 (26,662 calls, 114 cycles each: its asserts' stack frame, five
+      saved registers, the CR saved), `object_get_and_verify_type` 0.70
+      (12,541), `tag_get` with `cache_get_tag_instance` 0.53 (8,582, 5,654
+      mispredicts); then the rays' bsp walk 0.69, the path search 0.36,
+      the sphere test's fast walks 0.52. 38 % of the load-hit-stores are a
+      saved register's restore right after its save, 69 % of those r30
+      (`-mminimal-toc`'s TOC register).
+    - Built: (a) `datum_get`, `object_get_and_verify_type` (with the
+      lookup inline) and `tag_get` with `cache_get_tag_instance`: a fast
+      path with every check, the code as written (`*_checked`) for an
+      index it refuses; `tag_get`'s tests as bits, one branch; (b)
+      `quaternions_interpolate_and_normalize` in registers (normalize read
+      back what interpolate had just stored); (c) `ps3_vmx_exact` inline
+      (`ps3_vmx.h`); (d) 20 units without `-mminimal-toc` (`Makefile`'s
+      `FULL_TOC_UNITS`): the one TOC 0x89e8 to 0xbbb8 bytes.
+    - The model (the same 800 ticks): a tick 29.85 M cycles to 27.69 M
+      with (a) to (c), 26.97 M with (d) and the bits: 9.33 to 8.43 ms (-9.6
+      %), instructions 9.20 to 7.95 M. `datum_get` 0.95 to 0.36 ms,
+      `object_get_and_verify_type` 0.70 to 0.45, `tag_get` 0.53 to 0.26
+      (mispredicts 5,654 to 221); objects_update 5.65 to 5.06, ai 3.42 to
+      3.12, node matrices 1.69 to 1.48.
+    - The same results: the game state's 18.2 MB dumped after ticks 300,
+      1,250, 1,700 and 2,100, before and after, compared half-word by
+      half-word by field: apart only fields that hold stack leftovers no
+      code reads (`struct location`'s `bonus` in objects, actors, effects,
+      particles and contrail points; the actors' direction
+      specifications' padding and union past an index; a particle's node
+      index with no object) and the decal vertex cache's function
+      descriptors. A run is the same each time from the same files (the
+      profile and the checkpoint put back; the local random seed, the
+      clock's at the start, set at the first tick). A fault (the
+      normalize's sum in another order) gives 116 to 1,485 fields apart.
+  - 5, the sphere test's check kept through a structure bsp's switch
+    (`collision_bsp.c`, `cache_files.c`): the table by the bsp alone,
+    forgotten at a structure bsp's unload and at the tags' unload
+    (`scenario_tags_unload`); not by the generation, which changes after
+    the switch's first sphere tests. The profiler's b40: one check of the
+    34,998-node bsp at the cue's switch.
+  - `check`: 0 `r2off`, `.got` 0xbbb8. PKG of 03:49 in `build/ps3_steps/`
+    (a new folder: make does not see the changed flags). Not tested on
+    the PS3.
+- 2026-10-26: The 03:49 PKG on hardware (b40; Matt: "Done"): the boot
+  line's 02:45:43 (UTC) is `build/ps3_steps/`' `ps3_main.o`; `[ps3] exit
+  0`. A first boot at the menu without the setting (09:49), then the run
+  with `half_resolution_particles = true` (`Direct3D: the half resolution
+  particles' targets: 640x360`). 30 windows; left out the menu and the
+  load (2), the BSP swap with a checkpoint (09:54:11, 50.8 fps) and the
+  revert (09:54:52, 56.2 fps). Medians of 26 play windows / the 8 under 59
+  fps (none under 56): 59.8 / 58.3 fps, 59.3 on average; the game
+  thread's work 9.6 / 11.0 ms a frame, the RSX 9.75 / 13.05, the Direct3D
+  SPU's work 6.6 / 7.2 (the 00:26 run 7.0).
+  - Step 2: the texture hash 1.85 / 2.0 ms a frame (the most 2.5; the
+    00:26 run 1.9, the most 2.8). Against the `Direct3D: frame` lines'
+    bytes (12 pairs of windows, 53 to 3,382 KB a frame): 1.50 ms a frame
+    plus 0.73 cycles a byte, as in the 00:26 run (1.5 and 0.7). So the
+    fixed part is not the checks' waits (step 2 removed two of three). At
+    the menu (2,217 KB a frame, 55 stages bound) the hash is 0.5 ms, the
+    bytes alone. The log does not count the checks.
+  - Step 3: the effects part on the RSX 1.0 / 2.15 ms a frame, the most
+    5.1 (the 17:53 run 0.9 / 1.9; the 00:26 run's most 4.8). 09:53:34
+    (57.2 fps): pixel shader 400 (particles) 3.85 ms for 3.9 draws. The
+    log does not count the draws in the half targets (the run: the effect
+    groups with blend 0, 3 or 7 after every other group, before the
+    first-person weapon's).
+  - Step 4: a call's cost over the play windows against the 23:35 run
+    (the same game code as 00:26): the pill's sphere query 35.2 to 33.5
+    us, its bsp test 18.0 to 18.4, every caller's structure-bsp-sphere
+    6.8 to 7.3, object-bsp-sphere 1.5 to 1.4, the ground planes' bsp test
+    3.1 to 3.0; against the 21:32 and 22:15 runs: the props' status
+    refresh 41 to 38 us, their position 5.6 to 4.2, the pill's objects
+    0.51 to 0.45 us an object walked, the aiming screen 14.0 to 14.8 us an
+    apply. Other scenes: no clear gain. The 4 heavy windows (ticks of 7
+    ms or more): a tick 8.95 ms: objects 5.50 (units 2.14, node matrices
+    1.77 for 850 nodes), ai 2.21 (the 23:35 run's 12: 8.1, 5.38, 1.83,
+    1.54, 1.30).
+  - Step 5: one check a bsp a load: the 9,484-node bsp at the start (2.32
+    ms) and after the revert (2.48 ms, its data read again), the
+    34,998-node one at the swap (6.99 ms; the 00:26 run: twice).
+  - The 8 windows under 59 fps: the RSX 3 (09:53:34 14.7 ms: specular
+    5.2, effects 5.1; 09:53:44 13.5 and 09:53:55 13.9: the lights'
+    specular 2.27 and 3.87); the ticks 2 (09:54:36 and 09:54:46: 8.9 and
+    9.3 ms each, a tick frame about 17 ms); the checkpoint's writer 1
+    (09:53:04: 1,918 ms, 481 waiting for reads); 2 with no unit near its
+    limit (09:52:39 after the load, 09:54:26).
+- 2026-10-26: The dynamic resolution, G10 step 4 (Matt: "Ok then, let's
+  build it."; next step 4 of the 03:49 run). `display.dynamic_resolution`
+  (`port_config.c`, false by default, no row; `port/ps3/README.md`).
+  - `render.c`: the primary window's 3D view, from before
+    `rasterizer_window_begin` (its clear included) to after the lens
+    flares, with one window only (`d3d8_dynamic_resolution`).
+  - `d3d8_rsx.c`, the game's thread: a record (`_record_scale`) with the
+    screen colour's data, the scale in eighths (`ps3_gpu_dynamic_scale`)
+    and the view's target (the screen's size, tiled, made with the device
+    and at a screen change, freed with the screen's targets). A frame at
+    8/8 sends the record as the scale's measure, without a view.
+  - `spu_direct3d.c` and `d3d8_rsx.c`'s Direct3D thread, between the
+    records: the screen's colour goes to the view's target, the surface
+    the scaled size with the screen's depth (its top left), the pixels a
+    unit times the scale (the scissors, clears, lights' bounds); the half
+    resolution particles at half the view; the screen's colour as a
+    texture (active camouflage, the sun's glow) the view's target at its
+    scale; a depth clear of the whole view is ZCull's whole
+    (`surface.smaller`). The end: the view's target filtered over the
+    screen (one quad, `ps3_gpu_scale_up`); the present ends a view left
+    open.
+  - `ps3_gpu.c`: each finished frame's RSX time in its windows (its
+    stamps but the frame's start, before the windows, after them and the
+    present) at its scale (the stamps' `eighths`): an eighth less when the
+    last frames' average (1/4 each) passes 14 ms, after 4 frames at the
+    scale; an eighth more when the average (1/16 each) times the scale's
+    square stays under 12.5 ms, after 60 frames; 5/8 at least.
+    `[time] dynamic resolution`: the frames at each scale with their
+    windows' RSX ms a frame, the changes.
+  - Checks: `check`: 0 `r2off`, `.got` 0xbc30. The Direct3D SPU 214,576
+    bytes of LS (was 212,552). The scale's rule on synthetic frames (gcc
+    13 in Docker; the RSX's time 2 ms plus the pixels' at the square of
+    the scale, measured two frames late): 10 ms frames stay whole; 17 ms
+    whole go to 7/8 in 3 frames, then 6/8; 24 ms to 5/8; 13 ms whole back
+    to 7/8; 8 ms whole. No PC check of the drawing (no d3dcheck harness
+    now); with the setting off no record is sent and the surfaces and
+    scales are those of before (by reading).
+  - PKG of 11:53 in `build/ps3_dynamic/` (the `build/ps3_steps/` objects
+    copied, their depfiles' folder rewritten). Not tested on the PS3.
+- 2026-10-26: EXTRA OPTIONS' DYNAMIC RESOLUTION row (Matt: "Place a menu
+  row for the dynamic resolution, thanks.").
+  - `menu_tags.c`: a fourth row, a copy of CONTROLLER VIBRATION's as
+    FRAME RATE's, at the place of ADVANCED CONTROLS' fourth (FLIGHT STICK
+    CONTROLS', 163 units down; Xbox ui.map's list has 5 rows, read from
+    its tags: `xbox_settings_find` now wants 4); ON / OFF (the default)
+    for `display.dynamic_resolution` true / false; its help lines after
+    BUTTON ICONS'; SETTINGS' description of EXTRA OPTIONS names the
+    resolution.
+  - `d3d8_rsx.c`: the view's target made in `halo_screen_commit` when the
+    setting is on after a change (between frames, the Direct3D thread
+    drained, as for a screen change), not at a frame's first view.
+  - Checks: `check`: 0 `r2off`, `.got` 0xbc30. The PC harness (the
+    profiler's, the build's objects on qemu-ppc64, booted to ui.map):
+    `menus: the multiplayer menu has LAN PLAY and INTERNET PLAY; SETTINGS
+    has EXTRA OPTIONS`.
+  - PKG of 12:17 in `build/ps3_dynamic/`. Not tested on the PS3.
+- 2026-10-26: The 12:17 PKG on hardware (b40; Matt: "Done. Pretty
+  good!"): the boot line's 10:50:41 (UTC) is `build/ps3_dynamic/`'
+  `ps3_main.o`; `[ps3] exit 0`. `settings: wrote the defaults` at the boot
+  (no `config.toml`): half resolution particles off. DYNAMIC RESOLUTION
+  turned ON in EXTRA OPTIONS at the menu (`menus:
+  display.dynamic_resolution = true`, the target made then: `the dynamic
+  resolution's target: 1280x720`). 51 windows; left out the menus, the
+  load, the BSP swap with a checkpoint (11:57:35, 50.8 fps) and the end's
+  load of the menu. Medians of 43 play windows / the 2 under 59 fps (none
+  under 56): 60.0 / 57.25 fps, 59.7 on average (the 09:52 run: 59.8 /
+  58.3, 59.3, 8 windows under 59 of 26); the game thread's work 9.0 / 8.6
+  ms a frame, the RSX 8.9 / 10.2 (the most 12.0; the 09:52 run 14.7), the
+  Direct3D SPU's work 6.9 / 6.55, its waits for the RSX 0.0 (the most 0.4,
+  was 2.5).
+  - The scale (12,897 frames): 8/8 65.5 % (the windows' RSX 8.6 ms a
+    frame), 7/8 19.7 % (9.8), 6/8 9.7 % (8.5), 5/8 5.1 % (7.5); 30 of the
+    43 windows scaled some frames; 99 changes, 2.3 a window.
+  - The RSX by part, median / the most: specular 3.1 / 6.0 (6.7), effects
+    0.8 / 2.3 (5.1 with the half resolution particles), objects 0.6 / 2.1.
+  - The 2 windows under 59 fps: 11:55:34 57.2, the first after the load
+    (no unit near its limit; 65 texture uploads, 8 MB, in its 600
+    frames); 11:56:24 57.3, a checkpoint (its writer 1,789 ms, 373 waiting
+    for reads). The 5 heavy windows (ticks of 7 ms or more, 8.0 ms on
+    median): 60.0 fps on median (the 09:52 run's 4: 58.5).

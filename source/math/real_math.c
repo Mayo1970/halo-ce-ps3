@@ -2450,8 +2450,35 @@ void quaternions_interpolate_and_normalize(
 	real t,
 	real_quaternion *result)
 {
+#ifdef HALO_PS3
+	/* port: (the PS3) quaternions_interpolate's and quaternion_normalize's operations in their order, the quaternion
+	kept in registers: normalize read back at once what interpolate had just stored (a load-hit-store) */
+	real v = 1.f-t;
+	real i, j, k, w, magnitude_squared;
+
+	if (q0->v.i*q1->v.i + q0->v.j*q1->v.j + q0->v.k*q1->v.k + q0->w*q1->w < 0.f)
+	{
+		t = -t;
+	}
+	i = q0->v.i*v + q1->v.i*t;
+	j = q0->v.j*v + q1->v.j*t;
+	k = q0->v.k*v + q1->v.k*t;
+	w = q0->w*v + q1->w*t;
+	magnitude_squared = i*i + j*j + k*k + w*w;
+	if (magnitude_squared > 0.f)
+	{
+		real one_over_magnitude = reciprocal_square_root(magnitude_squared);
+		set_real_quaternion(result, one_over_magnitude*i, one_over_magnitude*j, one_over_magnitude*k,
+			one_over_magnitude*w);
+	}
+	else
+	{
+		set_real_quaternion(result, 0.f, 0.f, 0.f, 1.f);
+	}
+#else
 	quaternions_interpolate(q0, q1, t, result);
 	quaternion_normalize(result);
+#endif
 	return;
 }
 

@@ -165,7 +165,13 @@ static char const *data_00316820[] =
 
 /* ---------- private code */
 
+#ifdef HALO_PS3
+/* port: (the PS3) cache_get_tag_instance as written, for an index the fast path below refuses (its asserts' calls
+keep a stack frame that a lookup that passes needs none of) */
+static struct cache_file_tag_instance *__attribute__((noinline)) cache_get_tag_instance_checked(
+#else
 static struct cache_file_tag_instance *cache_get_tag_instance(
+#endif
 	long tag_index)
 {
 	short absolute_index;
@@ -206,6 +212,24 @@ static struct cache_file_tag_instance *cache_get_tag_instance(
 
 	return tag_instance;
 }
+
+#ifdef HALO_PS3
+/* port: every check of cache_get_tag_instance_checked passed: its tag's instance */
+static struct cache_file_tag_instance *cache_get_tag_instance(
+	long tag_index)
+{
+	short absolute_index = (short)tag_index;
+
+	if (cache_file_globals.tags_loaded && global_tag_instances && absolute_index >= 0 &&
+		absolute_index < global_tag_count &&
+		(!(tag_index & 0xFFFF0000) || global_tag_instances[absolute_index].tag_index == tag_index))
+	{
+		return &global_tag_instances[absolute_index];
+	}
+
+	return cache_get_tag_instance_checked(tag_index);
+}
+#endif
 
 /* port: the tag that a tag index that is not one gets (cache_get_tag_instance,
 tag_get): no group, no name, and data that is all zeros, which whatever
@@ -517,6 +541,9 @@ void scenario_tags_unload(
 	cache_file_globals.tags_loaded = FALSE;
 	global_tag_instances = NULL;
 	global_tag_count = 0;
+#ifdef HALO_PS3
+	collision_bsp_sphere_fast_forget(); /* port: (collision_bsp.h) */
+#endif
 
 	return;
 }
@@ -1431,7 +1458,12 @@ void scenario_structure_bsp_unload(
 	return;
 }
 
+#ifdef HALO_PS3
+/* port: (the PS3) tag_get as written, for a tag the fast path below refuses */
+static void *__attribute__((noinline)) tag_get_checked(
+#else
 void *tag_get(
+#endif
 	long group_tag,
 	long tag_index)
 {
@@ -1469,9 +1501,34 @@ void *tag_get(
 	{
 		return cache_empty_tag_instance(tag_index)->base_address;
 	}
-	
+
 	return tag_instance->base_address;
 }
+
+#ifdef HALO_PS3
+/* port: every check of tag_get_checked passed: a loaded tag of the group, or of a parent group, with its data */
+void *tag_get(
+	long group_tag,
+	long tag_index)
+{
+	short absolute_index = (short)tag_index;
+
+	if (cache_file_globals.tags_loaded && global_tag_instances && absolute_index >= 0 &&
+		absolute_index < global_tag_count)
+	{
+		struct cache_file_tag_instance *tag_instance = &global_tag_instances[absolute_index];
+		/* (each test a bit, one branch for them all: the group's three were often mispredicted) */
+		unsigned long same_index = !(tag_index & 0xFFFF0000) | !(tag_instance->tag_index ^ tag_index);
+		unsigned long same_group = !(tag_instance->group_tag ^ group_tag) |
+			!(tag_instance->parent_group_tags[0] ^ group_tag) | !(tag_instance->parent_group_tags[1] ^ group_tag);
+
+		if (same_index & same_group & (tag_instance->base_address != NULL))
+			return tag_instance->base_address;
+	}
+
+	return tag_get_checked(group_tag, tag_index);
+}
+#endif
 
 /* whether the index is a loaded tag of the group or a parent group: the netcode names tags that
 another machine sent (port/linux/game/network_damage.c), on which tag_get would only assert */

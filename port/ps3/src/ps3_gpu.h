@@ -79,6 +79,9 @@ struct ps3_gpu_surface
 	uint32_t depth_pitch;
 	uint16_t width;
 	uint16_t height;
+	/* the screen's 3D view drawn smaller (d3d8_rsx.c's dynamic resolution): a depth clear of all of it is ZCull's
+	whole */
+	uint32_t smaller;
 };
 
 /* A8R8G8B8 colour and Z24S8 depth surfaces */
@@ -207,6 +210,15 @@ void ps3_gpu_particles_depth(uint32_t depth_offset, uint32_t depth_pitch, uint32
 /* an A8R8G8B8 surface over it: its colour plus the bound one's times its alpha (the particles' and their
 transmittance) */
 void ps3_gpu_particles_composite(uint32_t color_offset, uint32_t color_pitch, uint32_t width, uint32_t height);
+
+/* ---------- the dynamic resolution (d3d8_rsx.c) */
+
+/* the scale to draw the screen's 3D view at, in eighths (8: whole), from the RSX's time in the last frames */
+uint32_t ps3_gpu_dynamic_scale(void);
+/* the Direct3D thread: this frame's scale, which its time measures */
+void ps3_gpu_frame_scale(uint32_t eighths);
+/* an A8R8G8B8 surface filtered over the whole bound one, the caches after it unknown */
+void ps3_gpu_scale_up(uint32_t color_offset, uint32_t color_pitch, uint32_t width, uint32_t height);
 
 /* ---------- the Direct3D SPU's frames (spu_direct3d.c writes the draws' commands in chunks) */
 

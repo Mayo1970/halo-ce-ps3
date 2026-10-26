@@ -71,7 +71,8 @@ GAME_ABI = -O2 -mcpu=cell -mhard-float -mno-altivec -fsigned-char -fms-extension
            $(addprefix -fno-builtin-,$(GAME_WIDE))
 # -mminimal-toc: the game's units need 137 KB of TOC, the one TOC holds 64 KB; each gets its own
 GAME_WARN ?= -w
-GAME_CFLAGS = -std=gnu89 -D__STRICT_ANSI__ $(GAME_WARN) $(GAME_ABI) -mminimal-toc \
+GAME_TOC = -mminimal-toc
+GAME_CFLAGS = -std=gnu89 -D__STRICT_ANSI__ $(GAME_WARN) $(GAME_ABI) $(GAME_TOC) \
               -include $(PS3_DIR)/include/halo_ps3_prefix.h -include $(SEMANTICS) \
               -I$(PS3_DIR)/include -Iport/linux/include -iquote port/linux/game $(GAME_DEFINES) $(GAME_INCLUDES) \
               -idirafter port/include/xdk $(GAME_UNIT_FLAGS) $(GAME_EXTRA)
@@ -79,6 +80,15 @@ GAME_CFLAGS = -std=gnu89 -D__STRICT_ANSI__ $(GAME_WARN) $(GAME_ABI) -mminimal-to
 # the game's main() is called by the PS3's (port/ps3/src/ps3_main.c)
 $(BUILD)/obj/source/shell/shell_xbox.o: GAME_UNIT_FLAGS := -Dmain=halo_xbox_main# prototypes libtiff's units lack, kept out of its licensed headers
 $(BUILD)/obj/source/bitmaps/libtiff/%.o: GAME_UNIT_FLAGS := -include $(PS3_DIR)/include/halo_ps3_libtiff.h
+# the units with the most calls a tick in the PPE profile (13 KB of TOC): in the one TOC, their small functions save no
+# r30 (-mminimal-toc's TOC register), whose restore read its own save back at once (a load-hit-store)
+FULL_TOC_UNITS := source/memory/data source/cache/cache_files source/objects/objects source/scenario/scenario \
+                  source/game/game_time source/main/main source/math/matrix_math source/math/real_math \
+                  source/math/random_math source/physics/collision_bsp source/physics/collision_models \
+                  source/physics/collisions source/physics/collision_usage source/physics/breakable_surfaces \
+                  source/structures/structures source/models/model_animations source/ai/path source/units/units \
+                  source/ai/actor_perception port/linux/game/object_bounds_cache
+$(patsubst %,$(BUILD)/obj/%.o,$(FULL_TOC_UNITS)): GAME_TOC :=
 
 # the source path can hold spaces, so the shell gets it quoted
 define game_compile

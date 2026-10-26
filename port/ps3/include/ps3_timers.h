@@ -600,6 +600,11 @@ extern uint64_t ps3_rsx_timers[_ps3_timer_count];
 extern uint64_t ps3_rsx_frame_nanoseconds;
 extern uint32_t ps3_rsx_frames;
 extern uint32_t ps3_rsx_draws[_ps3_timer_count];
+/* the dynamic resolution (ps3_gpu.c): the frames by the eighths their view was drawn at (0: the setting off) with
+their RSX nanoseconds in the windows; the scale's changes */
+extern uint32_t ps3_rsx_scale_frames[9];
+extern uint64_t ps3_rsx_scale_nanoseconds[9];
+extern uint32_t ps3_rsx_scale_changes;
 /* the stamped draws' RSX nanoseconds and draws by the Direct3D device's key for their pixel shader, in the specular
 part [0] and the effects pass [1], and by part; a stamp is the key and part << PS3_DRAW_STAMP_PART_SHIFT */
 #define PS3_DRAW_STAMP_KEYS 1024

@@ -57,6 +57,9 @@ enum
 	_spu_d3d_record_particles,
 	/* the lights' bounds (d3d8_light_bounds): on (a 1: the bounds follow) and off (a 0) */
 	_spu_d3d_record_light_bounds,
+	/* the dynamic resolution (d3d8_dynamic_resolution): the screen's 3D view drawn smaller (a 1: the scale follows),
+	then scaled up over the screen (a 0) */
+	_spu_d3d_record_scale,
 	_spu_d3d_record_count
 };
 
@@ -212,10 +215,20 @@ typedef struct
 	uint32_t pad[2];
 } spu_d3d_record_tag_cache;
 
+/* the scale record's: the screen colour's data, the view's scale in eighths (5 to 7), the target of the screen's size
+the view is drawn into */
+typedef struct
+{
+	uint32_t data;
+	uint32_t eighths;
+	uint32_t color_offset;
+	uint32_t color_pitch;
+} spu_d3d_record_scale;
+
 typedef char spu_d3d_record_sizes_check[sizeof(spu_d3d_record_draw) % 16 == 0 && sizeof(spu_d3d_record_stream) == 16 &&
 	sizeof(spu_d3d_record_immediate) == 16 && sizeof(spu_d3d_record_clear) == 16 &&
 	sizeof(spu_d3d_record_elements) % 16 == 0 && sizeof(spu_d3d_viewport) == 24 &&
-	sizeof(spu_d3d_record_light_bounds) == 32 ? 1 : -1];
+	sizeof(spu_d3d_record_light_bounds) == 32 && sizeof(spu_d3d_record_scale) == 16 ? 1 : -1];
 
 /* ---------- the state the PPE's vertex shader objects hold (d3d8_rsx.c's struct vertex_shader_object, checked there) */
 
@@ -372,7 +385,9 @@ typedef struct
 	uint32_t draws[SPU_D3D_TIMESTAMP_PARTS];
 	uint32_t count;
 	uint32_t frame;
-	uint32_t pad[2];
+	/* the scale the screen's 3D view was drawn at, in eighths (the dynamic resolution; 0: whole) */
+	uint32_t eighths;
+	uint32_t pad;
 } spu_d3d_stamps;
 
 typedef struct

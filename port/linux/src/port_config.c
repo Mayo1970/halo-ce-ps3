@@ -154,6 +154,12 @@ static const struct config_setting config_settings[] =
 		"nearest particles) at half the width and height, then blend them over\n"
 		"the frame: faster with many of them, a little softer; false draws them\n"
 		"as the Xbox does." },
+	{ "display.dynamic_resolution", _config_boolean, "false", "HALO_DYNAMIC_RESOLUTION", _environment_value,
+		_platform_android,
+		"While the RSX is too slow for 60 frames a second, draw the 3D view\n"
+		"smaller (down to 5/8 of the width and height), then scale it up under\n"
+		"the HUD: steadier in heavy scenes, softer while it acts; false always\n"
+		"draws it whole." },
 #endif
 	{ "display.shadow_resolution", _config_integer, "128", "HALO_SHADOW_RESOLUTION", _environment_value,
 		_platform_all,

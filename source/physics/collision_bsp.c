@@ -2612,7 +2612,7 @@ static boolean bsp3d_test_pill_recursive(
 
 #ifdef HALO_PS3
 /* port: (the PS3) a bsp that passes every check of the sphere test for any sphere is tested without them, in the
-same steps and order: checked once a bsp and structure bsp generation (sphere_fast_bsp_get) */
+same steps and order: checked once a bsp until its data can go, at a structure bsp's or the tags' unload */
 enum
 {
 	SPHERE_FAST_BSP_COUNT = 256,
@@ -2622,7 +2622,6 @@ enum
 struct sphere_fast_bsp
 {
 	struct collision_bsp const *bsp;
-	unsigned long generation;
 	boolean valid;
 	struct bsp3d_node const *nodes;
 	real_plane3d const *planes;
@@ -2849,12 +2848,12 @@ static struct sphere_fast_bsp const *sphere_fast_bsp_get(
 	struct sphere_fast_bsp *fast =
 		&sphere_fast_bsps[((uint32_t)(uintptr_t)bsp >> 2) * 2654435761u >> 24];
 
-	if (fast->bsp != bsp || fast->generation != scenario_structure_bsp_generation)
+	/* (not the structure bsp generation: a switch's first sphere tests come before it changes) */
+	if (fast->bsp != bsp)
 	{
 		uint64_t start = ps3_timer_now();
 
 		fast->bsp = bsp;
-		fast->generation = scenario_structure_bsp_generation;
 		fast->valid = sphere_fast_check(bsp);
 		/* a structure bsp's check in the log (the timebase: 79.8 MHz) */
 		if (bsp->bsp3d.nodes.count >= 4096)

@@ -142,7 +142,13 @@ void *datum_try_and_get(
 	return header;
 }
 
+#ifdef HALO_PS3
+/* port: (the PS3) datum_get as written, for an index the fast path below refuses: its asserts' calls keep a stack frame
+and five saved registers, which a lookup that passes needs none of */
+static void *__attribute__((noinline)) datum_get_checked(
+#else
 void *datum_get(
+#endif
 	struct data_array *data,
 	long index)
 {
@@ -199,6 +205,28 @@ void *datum_get(
 
 	return NULL;
 }
+
+#ifdef HALO_PS3
+/* port: every check of datum_get_checked passed: its datum, in a function without a frame */
+void *datum_get(
+	struct data_array *data,
+	long index)
+{
+	short identifier = (short)(index>>16);
+	short absolute_index = (short)index;
+
+	if (data->valid && (identifier || !data->identifier_zero_invalid) && absolute_index>=0 &&
+		absolute_index<data->count)
+	{
+		struct datum_header *header = (struct datum_header *)((byte *)data->data+data->size*absolute_index);
+
+		if (header->identifier && (!identifier || identifier==header->identifier))
+			return header;
+	}
+
+	return datum_get_checked(data, index);
+}
+#endif
 
 void data_verify(
 	struct data_array *data)

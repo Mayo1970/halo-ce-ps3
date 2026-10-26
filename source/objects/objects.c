@@ -288,7 +288,12 @@ void *object_try_and_get_and_verify_type(
 	return result;
 }
 
+#ifdef HALO_PS3
+/* port: (the PS3) object_get_and_verify_type as written, for an index or a type the fast path below refuses */
+static void *__attribute__((noinline)) object_get_and_verify_type_checked(
+#else
 void *object_get_and_verify_type(
+#endif
 	long object_index,
 	unsigned long valid_type_flags)
 {
@@ -306,6 +311,33 @@ void *object_get_and_verify_type(
 
 	return result;
 }
+
+#ifdef HALO_PS3
+/* port: every check passed (datum_get's lookup, then the type): the object, without the call and its frame */
+void *object_get_and_verify_type(
+	long object_index,
+	unsigned long valid_type_flags)
+{
+	struct data_array *data = object_header_data;
+	short identifier = (short)(object_index>>16);
+	short absolute_index = (short)object_index;
+
+	if (data->valid && (identifier || !data->identifier_zero_invalid) && absolute_index>=0 &&
+		absolute_index<data->count)
+	{
+		struct object_header_datum *header =
+			(struct object_header_datum *)((byte *)data->data+data->size*absolute_index);
+
+		if (header->identifier && (!identifier || identifier==header->identifier) &&
+			TEST_FLAG(valid_type_flags, header->datum->object.type))
+		{
+			return header->datum;
+		}
+	}
+
+	return object_get_and_verify_type_checked(object_index, valid_type_flags);
+}
+#endif
 
 void object_iterator_new(
 	struct object_iterator *iterator,
