@@ -1542,8 +1542,9 @@ static int frame_begin(void)
 	draw_stamps_read();
 	deferred_frees_run(0);
 	caches_invalidate();
-	/* an overlay of the system's (the XMB in the game) may use the vertex program slots */
-	if (overlay_events != ps3_system_overlay_events())
+	/* an overlay of the system's (the XMB in the game) may use the vertex program slots, at each frame it draws */
+	ps3_system_check_events();
+	if (overlay_events != ps3_system_overlay_events() || ps3_system_overlay_active())
 	{
 		overlay_events = ps3_system_overlay_events();
 		memset(resident_programs, 0, sizeof(resident_programs));

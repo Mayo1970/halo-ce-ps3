@@ -53,6 +53,9 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-26: the XMB's artifacts over the game and at the quit fixed
+  (Matt: "It works! Good job."): PKG of 14:28 in `build/ps3_xmb/`, run
+  on the PS3. Not committed. See the Log.
 - 2026-10-26: the 12:17 PKG run on b40 with DYNAMIC RESOLUTION ON (Matt:
   "Done. Pretty good!"): a clean exit; 60.0 / 57.25 fps (43 play windows /
   the 2 under 59; none under 56), 59.7 on average (the 09:52 run 59.3, 8
@@ -6074,3 +6077,16 @@ then `./build.sh pkg LOG_IP=<address>`.
     0.2 ms a frame over the run. A sharper filter (4 to 5 texels a pixel)
     estimated at 1 to 2 ms, not built. Matt: "It's okay for now. We're
     doing good. I'll focus on something else."
+- 2026-10-26: the XMB's artifacts (Matt: "When the XMB menu overlays the
+  game or when quitting the game there are some glitchy artifacts."):
+  - Over the game: the system takes vertex program slots at each frame it
+    draws, but the resident programs were dropped once an event, and the
+    events came up to 100 ms late (the monitor's pass). Now
+    `ps3_system_overlay_active` (draw begin to end, menu open to close)
+    drops them at each frame (`frame_begin`; the SPU by
+    `programs_reset`), and `frame_begin` reads the events
+    (`ps3_system_check_events`, one thread at a time).
+  - At the quit: `ps3_video_shutdown` unbound the display buffers' tiles
+    (0 to 2, since 0447fb45) under the shown buffer; they stay bound now.
+  - PKG of 14:28, `build/ps3_xmb/`; Matt: "It works! Good job." UDP 18194
+    was the msgicons session's listener; no log read.

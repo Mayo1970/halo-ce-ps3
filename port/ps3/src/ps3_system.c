@@ -138,6 +138,8 @@ static void log_init(void)
 /* ---------- XMB exit */
 
 static volatile unsigned overlay_events;
+static volatile int overlay_drawing, overlay_menu;
+static volatile int events_checking;
 
 static void sysutil_callback(u64 status, u64 parameter, void *user_data)
 {
@@ -150,6 +152,19 @@ static void sysutil_callback(u64 status, u64 parameter, void *user_data)
 	if (status == SYSUTIL_DRAW_BEGIN || status == SYSUTIL_DRAW_END || status == SYSUTIL_MENU_OPEN ||
 		status == SYSUTIL_MENU_CLOSE)
 		overlay_events++;
+	if (status == SYSUTIL_DRAW_BEGIN || status == SYSUTIL_DRAW_END)
+		overlay_drawing = status == SYSUTIL_DRAW_BEGIN;
+	if (status == SYSUTIL_MENU_OPEN || status == SYSUTIL_MENU_CLOSE)
+		overlay_menu = status == SYSUTIL_MENU_OPEN;
+}
+
+/* the monitor's 100 ms pass alone saw the XMB up to 6 frames late; one thread at a time, the other skips */
+void ps3_system_check_events(void)
+{
+	if (__sync_lock_test_and_set(&events_checking, 1))
+		return;
+	sysUtilCheckCallback();
+	__sync_lock_release(&events_checking);
 }
 
 int ps3_exit_requested(void)
@@ -162,6 +177,11 @@ unsigned ps3_system_overlay_events(void)
 	return overlay_events;
 }
 
+int ps3_system_overlay_active(void)
+{
+	return overlay_drawing || overlay_menu;
+}
+
 /* Pumps the sysutil events while the main thread is busy (map loads). An exit
 that the game does not answer in 5 s ends the process, else the XMB hangs. */
 static void monitor_main(void *argument)
@@ -171,7 +191,7 @@ static void monitor_main(void *argument)
 	(void)argument;
 	while (!monitor_quit)
 	{
-		sysUtilCheckCallback();
+		ps3_system_check_events();
 		if (exit_flag && ++ticks_since_exit > 50)
 		{
 			ps3_log_printf("[ps3] no shutdown 5 s after the XMB exit: ending the process\n");

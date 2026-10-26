@@ -204,12 +204,10 @@ void ps3_video_shutdown(void)
 		rsxFinish(context, ++finish_reference);
 		/* a flip interrupt after the teardown would run on freed state */
 		gcmSetFlipHandler(NULL);
+		/* the display tiles stay bound: one unbound under the shown buffer scrambled the screen at the quit; the
+		process's end frees them */
 		for (index = 0; index < BUFFER_COUNT; index++)
 		{
-#if TILED_DISPLAY_BUFFERS
-			if (color_buffer[index])
-				gcmUnbindTile((u8)index);
-#endif
 			if (color_buffer[index])
 				rsxFree(color_buffer[index]);
 			color_buffer[index] = NULL;
