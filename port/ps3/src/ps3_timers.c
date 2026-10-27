@@ -57,6 +57,25 @@ int ps3_draw_stamps_part = -1;
 int ps3_transparent_origin;
 void (*ps3_timers_shaders_log)(void);
 void (*ps3_timers_direct3d_collect)(void);
+volatile uint32_t ps3_spike_counts[_ps3_spike_count];
+
+/* a frame this long on the game thread is a spike: one line of its parts, a few a window */
+#define SPIKE_MILLISECONDS 40.0
+#define SPIKE_LINES 10
+/* a part in the line from half a millisecond */
+#define SPIKE_PART_MILLISECONDS 0.5
+
+/* the timers and counts at the frame's start */
+static struct
+{
+	uint64_t start;
+	uint64_t timers[_ps3_timer_count];
+	uint32_t texture_waits;
+	uint32_t ticks;
+	uint32_t counts[_ps3_spike_count];
+	uint32_t lines;
+	uint32_t skipped;
+} spike;
 
 /* the game's global_collision_user_names (its "????" as "unknown") and global_collision_function_names
 (collision_usage.c) */
@@ -760,14 +779,141 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		ps3_timers_shaders_log();
 }
 
+/* " name ms" for each part of SPIKE_PART_MILLISECONDS or more */
+static unsigned long spike_parts(char *line, unsigned long length, unsigned long size, const double *d,
+	const int *timers, const char *const *names, int count)
+{
+	int index;
+
+	for (index = 0; index < count && length < size; index++)
+	{
+		if (d[timers[index]] >= SPIKE_PART_MILLISECONDS)
+			length += (unsigned long)snprintf(line + length, size - length, " %s %.1f", names[index], d[timers[index]]);
+	}
+	return length < size ? length : size - 1;
+}
+
+/* the frame that ends now, from the timers since its start: its parts when it was long */
+static void spike_check(uint64_t now)
+{
+	static const int tick_timers[] =
+	{
+		_ps3_timer_tick_units, _ps3_timer_tick_ai, _ps3_timer_tick_players, _ps3_timer_tick_effects,
+		_ps3_timer_tick_first_person, _ps3_timer_tick_scripts, _ps3_timer_tick_objects, _ps3_timer_tick_hud,
+		_ps3_timer_tick_other, _ps3_timer_tick_interpolation, _ps3_timer_tick_network, _ps3_timer_frame_particles,
+		_ps3_timer_frame_widgets, _ps3_timer_frame_sound, _ps3_timer_frame_other,
+	};
+	static const char *const tick_names[] =
+	{
+		"units", "ai", "players", "effects", "first person", "scripts", "objects", "hud", "other", "interpolation",
+		"network", "particles", "widgets", "sound", "frame other",
+	};
+	static const int detail_timers[] =
+	{
+		_ps3_timer_ai_conversations, _ps3_timer_ai_encounters, _ps3_timer_ai_actors, _ps3_timer_ai_other,
+		_ps3_timer_objects_units, _ps3_timer_objects_items, _ps3_timer_objects_projectiles, _ps3_timer_objects_others,
+		_ps3_timer_objects_damage, _ps3_timer_objects_nodes, _ps3_timer_objects_lights, _ps3_timer_objects_activation,
+	};
+	static const char *const detail_names[] =
+	{
+		"ai conversations", "ai encounters", "ai actors", "ai other", "objects' units", "objects' items",
+		"objects' projectiles", "objects' others", "objects' damage", "node matrices", "objects' lights",
+		"objects' activation",
+	};
+	static const int render_timers[] =
+	{
+		_ps3_timer_sound, _ps3_timer_sound_cache, _ps3_timer_window_visibility, _ps3_timer_window_objects,
+		_ps3_timer_window_lightmaps, _ps3_timer_window_lights, _ps3_timer_window_diffuse, _ps3_timer_window_specular,
+		_ps3_timer_window_effects, _ps3_timer_window_interface, _ps3_timer_window_end,
+	};
+	static const char *const render_names[] =
+	{
+		"sound", "sound cache", "visibility", "objects", "lightmaps", "lights", "diffuse", "specular", "effects",
+		"interface", "end",
+	};
+	static const int wait_timers[] =
+	{
+		_ps3_timer_thread_wait, _ps3_timer_texture_cache_wait, _ps3_timer_vblank_wait, _ps3_timer_flip_wait,
+		_ps3_timer_rsx_wait, _ps3_timer_spu_wait,
+	};
+	static const char *const wait_names[] =
+	{
+		"Direct3D", "texture cache", "vertical blank", "flip", "RSX", "SPU",
+	};
+	double scale = 1000.0 / (double)sysGetTimebaseFrequency(), frame = (double)(now - spike.start) * scale, rest;
+	double d[_ps3_timer_count];
+	uint32_t counts[_ps3_spike_count];
+	char line[1536];
+	unsigned long length;
+	int index;
+
+	if (!spike.start || frame < SPIKE_MILLISECONDS)
+		return;
+	if (spike.lines >= SPIKE_LINES)
+	{
+		spike.skipped++;
+		return;
+	}
+	spike.lines++;
+	for (index = 0; index < _ps3_timer_count; index++)
+		d[index] = (double)(ps3_timers[index] - spike.timers[index]) * scale;
+	for (index = _ps3_timer_specular_lights; index <= _ps3_timer_specular_fog; index++)
+		d[_ps3_timer_window_specular] += d[index];
+	for (index = 0; index < _ps3_spike_count; index++)
+		counts[index] = ps3_spike_counts[index] - spike.counts[index];
+	rest = frame - d[_ps3_timer_ticks] - d[_ps3_timer_render] - d[_ps3_timer_throttle] - d[_ps3_timer_present];
+	length = (unsigned long)snprintf(line, sizeof(line), "[spike] t=%.1fs: a frame of %.1f ms: game ticks %.1f (%u;",
+		ps3_time_seconds(), frame, d[_ps3_timer_ticks], (unsigned)(ps3_timer_game_ticks - spike.ticks));
+	length = spike_parts(line, length, sizeof(line), d, tick_timers, tick_names,
+		(int)(sizeof(tick_timers) / sizeof(tick_timers[0])));
+	length = spike_parts(line, length, sizeof(line), d, detail_timers, detail_names,
+		(int)(sizeof(detail_timers) / sizeof(detail_timers[0])));
+	length += (unsigned long)snprintf(line + length, sizeof(line) - length, "), render %.1f (", d[_ps3_timer_render]);
+	length = spike_parts(line, length, sizeof(line), d, render_timers, render_names,
+		(int)(sizeof(render_timers) / sizeof(render_timers[0])));
+	length += (unsigned long)snprintf(line + length, sizeof(line) - length,
+		" ), throttle %.1f, present %.1f, rest %.1f; waits (", d[_ps3_timer_throttle], d[_ps3_timer_present], rest);
+	length = spike_parts(line, length, sizeof(line), d, wait_timers, wait_names,
+		(int)(sizeof(wait_timers) / sizeof(wait_timers[0])));
+	if (length < sizeof(line))
+		snprintf(line + length, sizeof(line) - length, " ), texture cache waits %u; textures uploaded %u (%u KB), "
+			"shaders translated %u pixel, %u vertex; files moved %u KB\n",
+			(unsigned)(ps3_timer_counts[_ps3_timer_texture_cache_wait] - spike.texture_waits),
+			(unsigned)counts[_ps3_spike_texture_uploads], (unsigned)(counts[_ps3_spike_texture_bytes] >> 10),
+			(unsigned)counts[_ps3_spike_pixel_shaders], (unsigned)counts[_ps3_spike_vertex_shaders],
+			(unsigned)(counts[_ps3_spike_disk_bytes] >> 10));
+	ps3_log_printf("%s", line);
+}
+
+/* the timers at a frame's start, the next spike_check's base */
+static void spike_snapshot(uint64_t start)
+{
+	int index;
+
+	spike.start = start;
+	memcpy(spike.timers, ps3_timers, sizeof(spike.timers));
+	spike.texture_waits = ps3_timer_counts[_ps3_timer_texture_cache_wait];
+	spike.ticks = ps3_timer_game_ticks;
+	for (index = 0; index < _ps3_spike_count; index++)
+		spike.counts[index] = ps3_spike_counts[index];
+}
+
 void ps3_timers_frame(void)
 {
 	static uint64_t window_start;
 	static uint32_t frames;
 	uint64_t now = ps3_timer_now();
 
+	spike_check(now);
 	if (window_start && ++frames < TIMER_FRAMES)
+	{
+		spike_snapshot(now);
 		return;
+	}
+	if (spike.skipped)
+		ps3_log_printf("[spike] %u more frames of %.0f ms or more in the window, not logged\n", (unsigned)spike.skipped,
+			SPIKE_MILLISECONDS);
+	spike.lines = spike.skipped = 0;
 	/* (the Direct3D SPU's timers since the window's start) */
 	if (ps3_timers_direct3d_collect)
 		ps3_timers_direct3d_collect();
@@ -814,4 +960,6 @@ void ps3_timers_frame(void)
 	frames = 0;
 	/* after the log, which is not a phase */
 	window_start = ps3_timer_now();
+	/* (the frame's time from its start: the log's in it) */
+	spike_snapshot(now);
 }

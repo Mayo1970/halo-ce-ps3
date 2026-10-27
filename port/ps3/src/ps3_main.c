@@ -104,13 +104,13 @@ static void memory_heartbeat(void)
 	if (!rsx.heap)
 		return;
 	ps3_log_printf("[mem] t=%.0fs RSX: %.1f MB of %.1f in use (peak %.1f): display %.1f, textures %.1f (%u), "
-		"targets %.1f (%u), vertices %.1f, scratch %.1f, programs %.2f; %u refused\n", now,
+		"targets %.1f (%u), vertices %.1f, scratch %.1f, programs %.2f, kept BSPs %.1f (%u); %u refused\n", now,
 		(rsx.display + rsx.used) / megabyte, rsx.heap / megabyte, (rsx.display + rsx.peak) / megabyte,
 		rsx.display / megabyte, rsx.bytes[_ps3_gpu_memory_texture] / megabyte,
 		(unsigned)rsx.counts[_ps3_gpu_memory_texture], rsx.bytes[_ps3_gpu_memory_target] / megabyte,
 		(unsigned)rsx.counts[_ps3_gpu_memory_target], rsx.bytes[_ps3_gpu_memory_vertices] / megabyte,
 		rsx.bytes[_ps3_gpu_memory_scratch] / megabyte, rsx.bytes[_ps3_gpu_memory_program] / megabyte,
-		(unsigned)rsx.refused);
+		rsx.bytes[_ps3_gpu_memory_bsp] / megabyte, (unsigned)rsx.counts[_ps3_gpu_memory_bsp], (unsigned)rsx.refused);
 }
 
 static void display_main(void *argument)

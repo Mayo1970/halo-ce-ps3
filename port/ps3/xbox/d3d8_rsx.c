@@ -260,7 +260,9 @@ enum
 	/* (both's) */
 	_record_particles,
 	_record_light_bounds,
-	_record_scale
+	_record_scale,
+	/* the Direct3D SPU's only (spu_direct3d.h) */
+	_record_copy
 };
 
 /* the timer build's records by type (_ps3_timer_record_wrap on) */
@@ -1586,6 +1588,8 @@ static void texture_upload(struct texture_entry *entry, const unsigned char *sou
 	entry->bytes = face_bytes * faces;
 	statistics.texture_uploads++;
 	statistics.texture_bytes += face_bytes * faces;
+	ps3_spike_counts[_ps3_spike_texture_uploads]++;
+	ps3_spike_counts[_ps3_spike_texture_bytes] += (uint32_t)(face_bytes * faces);
 
 	memset(&entry->gpu, 0, sizeof(entry->gpu));
 	entry->gpu.offset = memory_offset;
@@ -2190,6 +2194,7 @@ static const struct rsx_fragment_program *fragment_program_get(const struct rsx_
 		entry->key = *key;
 		entry->translated = rsx_fragment_program_translate(key, &entry->program) == 0;
 		fragment_translated_count++;
+		ps3_spike_counts[_ps3_spike_pixel_shaders]++;
 		/* a key the pack lacks, as a line of port/ps3/shader_keys.txt */
 		rsx_fragment_key_text(key, text);
 		if (!entry->translated)
@@ -2929,6 +2934,7 @@ static const struct rsx_vertex_program *vertex_program_get(struct vertex_shader_
 		object->translated = object->instructions &&
 			rsx_vertex_program_translate(object->instructions, object->instruction_count, &object->program) == 0;
 		object->untranslatable = !object->translated;
+		ps3_spike_counts[_ps3_spike_vertex_shaders]++;
 		if (object->untranslatable)
 			platform_log("Direct3D: cannot translate vertex shader %lu (%lu instructions)", object->id,
 				object->instruction_count);
@@ -5215,7 +5221,7 @@ typedef char spu_records_check[(int)_record_present == (int)_spu_d3d_record_pres
 	(int)_record_screen == (int)_spu_d3d_record_screen && (int)_record_tag_cache == (int)_spu_d3d_record_tag_cache &&
 	(int)_record_label == (int)_spu_d3d_record_label && (int)_record_particles == (int)_spu_d3d_record_particles &&
 	(int)_record_light_bounds == (int)_spu_d3d_record_light_bounds &&
-	(int)_record_scale == (int)_spu_d3d_record_scale &&
+	(int)_record_scale == (int)_spu_d3d_record_scale && (int)_record_copy == (int)_spu_d3d_record_copy &&
 	sizeof(struct record) == sizeof(spu_d3d_record) && sizeof(struct record_draw) == sizeof(spu_d3d_record_draw) &&
 	sizeof(struct record_elements) == sizeof(spu_d3d_record_elements) &&
 	sizeof(struct stage_texture) == sizeof(spu_d3d_stage_texture) &&
@@ -5410,6 +5416,7 @@ static void spu_fragment_request(const uint32_t *words, spu_d3d_response *answer
 		entry->key = key;
 		entry->translated = rsx_fragment_program_translate(&key, &entry->program) == 0;
 		fragment_translated_count++;
+		ps3_spike_counts[_ps3_spike_pixel_shaders]++;
 		rsx_fragment_key_text(&key, text);
 		if (!entry->translated)
 			platform_log("Direct3D: cannot translate a pixel shader: %s", text);
@@ -5744,6 +5751,100 @@ static BOOL spu_direct3d_test(void)
 	while (*label != SPU_TEST_VALUE && ps3_host_microseconds() - start < 200000)
 		ps3_host_sleep_microseconds(200);
 	return *label == SPU_TEST_VALUE;
+}
+
+/* ---------- bsp_keep.c's BSPs in RSX memory: the service thread's lock over the RSX heap, the SPU's copies */
+
+#define COPY_LABEL 73
+#define COPY_TIMEOUT_MICROSECONDS 10000000
+
+static BOOL copies_failed;
+
+BOOL d3d8_bsp_copies_available(void)
+{
+	return spu.on && !ring.dead && !copies_failed;
+}
+
+void *d3d8_bsp_memory_allocate(uint32_t bytes, uint32_t *offset)
+{
+	void *memory;
+
+	if (!d3d8_bsp_copies_available())
+		return NULL;
+	ps3_host_lock_enter(spu.gpu_lock);
+	memory = ps3_gpu_memory_allocate(bytes, 128, _ps3_gpu_memory_bsp, offset);
+	ps3_host_lock_leave(spu.gpu_lock);
+	return memory;
+}
+
+/* (memory the RSX does not read: the copies are waited for) */
+void d3d8_bsp_memory_release(void *memory, uint32_t bytes)
+{
+	if (spu.gpu_lock)
+		ps3_host_lock_enter(spu.gpu_lock);
+	ps3_gpu_memory_release(memory, bytes, _ps3_gpu_memory_bsp);
+	if (spu.gpu_lock)
+		ps3_host_lock_leave(spu.gpu_lock);
+}
+
+/* (the game thread: a BSP load, after d3d8_tag_cache_loading) RSX memory into main memory, by the RSX through an IO
+mapping of its 1 MB pages for the copy; TRUE once the RSX has written it */
+BOOL d3d8_bsp_copy_to_main(uint32_t source_offset, void *destination, uint32_t bytes)
+{
+	static uint32_t value;
+	volatile uint32_t *label = ps3_gpu_label(COPY_LABEL);
+	uintptr_t first = (uintptr_t)destination & ~(uintptr_t)0xfffff;
+	uintptr_t end = ((uintptr_t)destination + bytes + 0xfffff) & ~(uintptr_t)0xfffff;
+	uint64_t start;
+	uint32_t io = 0;
+	spu_d3d_record_copy *copy;
+	BOOL done;
+	int result;
+
+	if (!d3d8_bsp_copies_available() || !label)
+		return FALSE;
+	direct3d_drain();
+	ps3_host_lock_enter(spu.gpu_lock);
+	result = ps3_gpu_io_map((void *)first, (uint32_t)(end - first), &io);
+	ps3_host_lock_leave(spu.gpu_lock);
+	if (result != 0)
+	{
+		platform_log("Direct3D: main memory at %p (%lu KB) not mapped for the RSX (0x%08x)", (void *)first,
+			(unsigned long)((end - first) >> 10), (unsigned)result);
+		return FALSE;
+	}
+	if (++value == 0)
+		value = 1;
+	*label = 0;
+	__sync_synchronize();
+	copy = record_begin(_record_copy, sizeof(*copy), 0, 0);
+	if (copy)
+	{
+		copy->source = source_offset;
+		copy->destination = io + (uint32_t)((uintptr_t)destination - first);
+		copy->bytes = bytes;
+		copy->pad = 0;
+		record_commit();
+		record_begin(_record_label, 0, COPY_LABEL, value);
+		record_commit();
+		direct3d_publish();
+		start = ps3_host_microseconds();
+		while (*label != value && ps3_host_microseconds() - start < COPY_TIMEOUT_MICROSECONDS)
+			ps3_host_sleep_microseconds(100);
+	}
+	done = copy && *label == value;
+	if (copy && !done)
+	{
+		/* (the RSX may still write there: the pages stay mapped, and no copy is made again) */
+		platform_log("Direct3D: the RSX's copy of %lu KB did not end in %d s", (unsigned long)(bytes >> 10),
+			COPY_TIMEOUT_MICROSECONDS / 1000000);
+		copies_failed = TRUE;
+		return FALSE;
+	}
+	ps3_host_lock_enter(spu.gpu_lock);
+	ps3_gpu_io_unmap((void *)first);
+	ps3_host_lock_leave(spu.gpu_lock);
+	return done;
 }
 
 /* ps3_timers.h's Direct3D thread timers: the SPU's since the last log */

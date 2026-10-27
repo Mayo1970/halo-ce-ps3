@@ -44,6 +44,8 @@ enum
 	_ps3_gpu_memory_vertices,
 	_ps3_gpu_memory_scratch,
 	_ps3_gpu_memory_program,
+	/* the kept structure BSPs (bsp_keep.c) */
+	_ps3_gpu_memory_bsp,
 	_ps3_gpu_memory_count
 };
 
@@ -51,6 +53,13 @@ enum
 void *ps3_gpu_memory_allocate(uint32_t size, uint32_t alignment, int kind, uint32_t *offset);
 /* the size and kind it was allocated with; freed once the RSX has finished the frame that can still read it */
 void ps3_gpu_memory_free(void *memory, uint32_t size, int kind);
+/* freed now: memory no frame in flight reads */
+void ps3_gpu_memory_release(void *memory, uint32_t size, int kind);
+/* called when an allocation (not a BSP's) finds no room; 1 when it freed some, and the allocation is tried again */
+void ps3_gpu_set_memory_hook(int (*hook)(uint32_t size));
+/* main memory (1 MB aligned and sized) the RSX can read and write, at its IO offset; 0 on success */
+int ps3_gpu_io_map(void *address, uint32_t size, uint32_t *offset);
+void ps3_gpu_io_unmap(void *address);
 
 /* PSL1GHT's RSX heap keeps no totals: these come from the calls above and the display buffers */
 struct ps3_gpu_memory_usage
