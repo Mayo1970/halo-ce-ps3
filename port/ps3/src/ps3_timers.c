@@ -779,6 +779,60 @@ static void timers_log(uint32_t frames, uint64_t elapsed)
 		ps3_timers_shaders_log();
 }
 
+uint64_t ps3_bsp_parts[_ps3_bsp_part_count];
+uint64_t ps3_bsp_disconnects[PS3_BSP_PROCS];
+uint64_t ps3_bsp_reconnects[PS3_BSP_PROCS];
+
+void ps3_timers_bsp_switch(int structure_bsp_index, uint64_t start)
+{
+	static const char *const part_names[] =
+	{
+		"disconnect", "unload", "Direct3D drain", "0xCD fill", "read or copy back", "swap", "kept", "tag cache",
+		"checks", "register", "verify", "culling", "reconnect",
+	};
+	/* scenario.c's tables' order */
+	static const char *const disconnect_names[] =
+	{
+		"object types", "objects", "lights", "ai", "effects", "particles", "particle systems", "contrails",
+		"structure decals", "decals",
+	};
+	static const char *const reconnect_names[] =
+	{
+		"objects", "lights", "ai", "effects", "particles", "particle systems", "contrails", "decals",
+		"structure decals", "observer", "players", "sound", "object types",
+	};
+	double scale = 1000.0 / (double)sysGetTimebaseFrequency(), total = (double)(ps3_timer_now() - start) * scale;
+	char line[1024];
+	unsigned long length;
+	int index;
+
+	length = (unsigned long)snprintf(line, sizeof(line), "BSP switch to %d: %.1f ms:", structure_bsp_index, total);
+	for (index = 0; index < _ps3_bsp_part_count && length < sizeof(line); index++)
+	{
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, " %s %.1f", part_names[index],
+			(double)ps3_bsp_parts[index] * scale);
+		total -= (double)ps3_bsp_parts[index] * scale;
+	}
+	if (length < sizeof(line))
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, " rest %.1f", total);
+	if (length < sizeof(line))
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "; the disconnects:");
+	for (index = 0; index < (int)(sizeof(disconnect_names) / sizeof(disconnect_names[0])) && length < sizeof(line);
+		index++)
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, " %s %.1f", disconnect_names[index],
+			(double)ps3_bsp_disconnects[index] * scale);
+	if (length < sizeof(line))
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, "; the reconnects:");
+	for (index = 0; index < (int)(sizeof(reconnect_names) / sizeof(reconnect_names[0])) && length < sizeof(line);
+		index++)
+		length += (unsigned long)snprintf(line + length, sizeof(line) - length, " %s %.1f", reconnect_names[index],
+			(double)ps3_bsp_reconnects[index] * scale);
+	ps3_log_printf("[halo] %s\n", line);
+	memset(ps3_bsp_parts, 0, sizeof(ps3_bsp_parts));
+	memset(ps3_bsp_disconnects, 0, sizeof(ps3_bsp_disconnects));
+	memset(ps3_bsp_reconnects, 0, sizeof(ps3_bsp_reconnects));
+}
+
 /* " name ms" for each part of SPIKE_PART_MILLISECONDS or more */
 static unsigned long spike_parts(char *line, unsigned long length, unsigned long size, const double *d,
 	const int *timers, const char *const *names, int count)

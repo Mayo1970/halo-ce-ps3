@@ -642,6 +642,32 @@ enum
 
 extern volatile uint32_t ps3_spike_counts[_ps3_spike_count];
 
+/* a structure BSP switch's parts (scenario.c, cache_files.c), timebase ticks, logged and cleared at its end: the
+connection procs' in their tables' order (ps3_timers.c names them) */
+enum
+{
+	_ps3_bsp_disconnect,
+	_ps3_bsp_unload,
+	_ps3_bsp_drain,
+	_ps3_bsp_fill,
+	_ps3_bsp_read,
+	_ps3_bsp_swap,
+	_ps3_bsp_keep,
+	_ps3_bsp_tag_cache,
+	_ps3_bsp_checks,
+	_ps3_bsp_register,
+	_ps3_bsp_verify,
+	_ps3_bsp_culling,
+	_ps3_bsp_reconnect,
+	_ps3_bsp_part_count
+};
+
+#define PS3_BSP_PROCS 16
+
+extern uint64_t ps3_bsp_parts[_ps3_bsp_part_count];
+extern uint64_t ps3_bsp_disconnects[PS3_BSP_PROCS];
+extern uint64_t ps3_bsp_reconnects[PS3_BSP_PROCS];
+
 /* the timebase, read again while its low word is 0 (PSL1GHT's __gettime: a Cell erratum) */
 static inline uint64_t ps3_timer_now(void)
 {
@@ -676,5 +702,17 @@ uint64_t ps3_timers_rsx_wait(int part);
 /* the draws from here stamped on the RSX in a part (_ps3_stamp_*) or not (-1), in the Direct3D thread's order
 (d3d8_rsx.c), in one frame of eight: each draw's time by its pixel shader and part */
 void ps3_timers_draw_stamps(int part);
+
+/* adds the time since start to a BSP switch's part; returns the time now */
+static inline uint64_t ps3_bsp_part(int part, uint64_t start)
+{
+	uint64_t now = ps3_timer_now();
+
+	ps3_bsp_parts[part] += now - start;
+	return now;
+}
+
+/* (scenario.c) the switch's line, from its start; the parts cleared */
+void ps3_timers_bsp_switch(int structure_bsp_index, uint64_t start);
 
 #endif
