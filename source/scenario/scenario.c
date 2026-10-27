@@ -37,6 +37,16 @@ upstream halo-ce-universal copy of source/scenario/scenario.c. */
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
 #include "structure_culling.h" /* port: port/linux/game/structure_culling.c */
+#ifdef HALO_PS3
+#include "ps3_timers.h"
+/* port: a bsp switch's parts and procs, for its log line (port/ps3/src/ps3_timers.c) */
+#define PS3_BSP_PART(part) (ps3_span = ps3_bsp_part((part), ps3_span))
+#define PS3_BSP_PROC(times, index, call) \
+	{ uint64_t ps3_span = ps3_timer_now(); call; (times)[(index)] += ps3_timer_now() - ps3_span; }
+#else
+#define PS3_BSP_PART(part) ((void)0)
+#define PS3_BSP_PROC(times, index, call) call
+#endif
 
 /* ---------- constants */
 
@@ -131,7 +141,7 @@ static void scenario_call_disconnect_from_structure_bsp_procs(
 	short proc_index;
 
 	for (proc_index = 0; proc_index < NUMBEROF(scenario_structure_bsp_disconnect_proc_table); proc_index++)
-		scenario_structure_bsp_disconnect_procs[proc_index]();
+		PS3_BSP_PROC(ps3_bsp_disconnects, proc_index, scenario_structure_bsp_disconnect_procs[proc_index]());
 
 	return;
 }
@@ -142,7 +152,7 @@ static void scenario_call_reconnect_to_structure_bsp_procs(
 	short proc_index;
 
 	for (proc_index = 0; proc_index < NUMBEROF(scenario_structure_bsp_reconnect_proc_table); proc_index++)
-		scenario_structure_bsp_reconnect_procs[proc_index]();
+		PS3_BSP_PROC(ps3_bsp_reconnects, proc_index, scenario_structure_bsp_reconnect_procs[proc_index]());
 
 	return;
 }
@@ -905,6 +915,10 @@ boolean scenario_switch_structure_bsp(
 	struct scenario_structure_bsp_reference *reference;
 	/* port: (the bsp loaded before, loaded again if the new one is refused) */
 	short old_structure_bsp_index = NONE;
+#ifdef HALO_PS3
+	uint64_t ps3_switch_start = ps3_timer_now();
+	uint64_t ps3_span = ps3_switch_start;
+#endif
 
 	/* port: and one the per-bsp arrays hold (MAXIMUM_STRUCTURE_BSPS_PER_SCENARIO: breakable_surfaces.c's; a map's
 	count; the retail scenarios have at most 13 bsps) */
@@ -925,7 +939,9 @@ boolean scenario_switch_structure_bsp(
 
 		if (global_structure_bsp_index != NONE)
 		{
+			PS3_BSP_PART(_ps3_bsp_disconnect); /* port: (main_stop_time's in it) */
 			scenario_call_disconnect_from_structure_bsp_procs();
+			PS3_BSP_PART(_ps3_bsp_disconnect);
 
 			had_old_structure_bsp = TRUE;
 			old_structure_bsp_index = global_structure_bsp_index;
@@ -935,11 +951,15 @@ boolean scenario_switch_structure_bsp(
 				struct scenario_structure_bsp_reference));
 			scenario_globals->structure_bsp_index = NONE;
 			global_structure_bsp_index = NONE;
+			PS3_BSP_PART(_ps3_bsp_unload);
 		}
 
 		/* port: and a bsp whose counts the fixed arrays can't hold (its clusters above all: structure_bsp_port_verify)
 		is refused, as one that didn't load */
 		loaded = scenario_structure_bsp_load(reference);
+#ifdef HALO_PS3
+		ps3_span = ps3_timer_now(); /* port: (the load's parts are cache_files.c's) */
+#endif
 		if (loaded &&
 			!structure_bsp_port_verify(structure_bsp_definition_get(reference->structure_bsp.index)))
 		{
@@ -947,6 +967,7 @@ boolean scenario_switch_structure_bsp(
 			scenario_structure_bsp_unload(reference);
 			loaded = FALSE;
 		}
+		PS3_BSP_PART(_ps3_bsp_verify);
 		/* port: a bsp refused (cache_files.c's checks) after the old one was let go loads the old one again; with that
 		refused too, the main menu with no bsp (a map's first bsp refused refuses the map: scenario_load) */
 		if (!loaded)
@@ -989,10 +1010,12 @@ boolean scenario_switch_structure_bsp(
 			global_structure_bsp_index = structure_bsp_index;
 			/* port: cache buckets while the newly current bsp's tags are loaded */
 			structure_culling_structure_bsp_loaded();
+			PS3_BSP_PART(_ps3_bsp_culling);
 
 			if (had_old_structure_bsp)
 			{
 				scenario_call_reconnect_to_structure_bsp_procs();
+				PS3_BSP_PART(_ps3_bsp_reconnect);
 			}
 			/* port: (not when it is the old one, loaded again) */
 			result = structure_bsp_index != old_structure_bsp_index;
@@ -1002,6 +1025,7 @@ boolean scenario_switch_structure_bsp(
 		main_start_time();
 #ifdef HALO_PS3
 		scenario_structure_bsp_generation++; /* port: (scenario.h) */
+		ps3_timers_bsp_switch(structure_bsp_index, ps3_switch_start); /* port: the switch's line */
 #endif
 	}
 

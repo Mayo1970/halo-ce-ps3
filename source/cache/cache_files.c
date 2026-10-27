@@ -21,6 +21,11 @@ upstream halo-ce-universal copy of source/cache/cache_files.c. */
 #include "map_share.h" /* port: port/linux/game/map_share.c */
 #ifdef HALO_PS3
 #include "physics/collision_bsp.h" /* port: collision_bsp_sphere_fast_forget */
+#include "ps3_timers.h"
+/* port: a bsp load's parts, for the switch's log line (port/ps3/src/ps3_timers.c) */
+#define PS3_BSP_PART(part) (ps3_span = ps3_bsp_part((part), ps3_span))
+#else
+#define PS3_BSP_PART(part) ((void)0)
 #endif
 
 /* ---------- constants */
@@ -54,8 +59,8 @@ enum
 /* port: the level's bsps kept in RSX memory, read there ahead too (port/ps3/xbox/bsp_keep.c) */
 void bsp_keep_map(char const *name, long tag_data_offset, long tag_data_size);
 int bsp_keep_restore(long file_offset, long file_size, void *address);
-void bsp_keep_loaded(long file_offset, long file_size, void *address, int restored, boolean read,
-	void const *references, long count);
+void bsp_keep_loaded(long file_offset, long file_size, void *address, void const *references, long count);
+void bsp_keep_checked(long file_offset, long file_size, void *address, int restored);
 extern struct scenario *global_scenario;
 #endif
 
@@ -1308,6 +1313,11 @@ boolean scenario_structure_bsp_load(
 	byte *tag_cache_base_address;
 	/* port: the bsp's header, once read and checked */
 	struct cache_file_structure_bsp_header *structure_bsp_header;
+#ifdef HALO_PS3
+	uint64_t ps3_span = ps3_timer_now();
+	/* port: how its kept copy came back (port/ps3/xbox/bsp_keep.c): 2 already swapped and checked, 1 as read, 0 none */
+	int kept = 0;
+#endif
 
 	/* port: the tag data's size was checked as the map loaded
 	(cache_file_header_verify); the bsp's reference is the map's, and is
@@ -1340,6 +1350,7 @@ boolean scenario_structure_bsp_load(
 		d3d8_tag_cache_loading();
 	}
 #endif
+	PS3_BSP_PART(_ps3_bsp_drain);
 	if (!custom_edition_cache_tags_loaded())
 	{
 		csmemset(
@@ -1347,12 +1358,13 @@ boolean scenario_structure_bsp_load(
 			0xCD,
 			0x01600000 - cache_file_globals.header.tag_data_size);
 	}
+	PS3_BSP_PART(_ps3_bsp_fill);
 	{
 		boolean read_complete;
-#ifdef HALO_PS3
-		/* port: a bsp kept in RSX memory comes from there, not from the disk (2: already swapped) */
-		int kept = bsp_keep_restore(reference->file_offset, reference->file_size, reference->base_address);
 
+#ifdef HALO_PS3
+		/* port: a bsp kept in RSX memory comes from there, not from the disk */
+		kept = bsp_keep_restore(reference->file_offset, reference->file_size, reference->base_address);
 		read_complete = kept ? TRUE : FALSE;
 		if (!kept)
 #endif
@@ -1379,16 +1391,20 @@ boolean scenario_structure_bsp_load(
 			extern void d3d8_tag_cache_loaded(void const *address, unsigned long size);
 			long reference_count = global_scenario ? global_scenario->structure_bsp_references.count : 0;
 
+			PS3_BSP_PART(_ps3_bsp_read);
 			if (kept != 2)
 				cache_files_swap_structure_bsp(reference->base_address, reference->file_size);
-			bsp_keep_loaded(reference->file_offset, reference->file_size, reference->base_address, kept,
-				read_complete == TRUE, reference_count > 0 ? TAG_BLOCK_GET_ELEMENT(
+			PS3_BSP_PART(_ps3_bsp_swap);
+			bsp_keep_loaded(reference->file_offset, reference->file_size, reference->base_address,
+				reference_count > 0 ? TAG_BLOCK_GET_ELEMENT(
 					&global_scenario->structure_bsp_references,
 					0,
 					struct scenario_structure_bsp_reference) : NULL, reference_count);
+			PS3_BSP_PART(_ps3_bsp_keep);
 			/* port: the RSX copies of vertices go; the next draws make them again (port/ps3/xbox/d3d8_rsx.c) */
 			d3d8_tag_cache_loaded(tag_cache_base_address + cache_file_globals.header.tag_data_size,
 				0x01600000 - cache_file_globals.header.tag_data_size);
+			PS3_BSP_PART(_ps3_bsp_tag_cache);
 		}
 #endif
 
@@ -1427,6 +1443,10 @@ boolean scenario_structure_bsp_load(
 	}
 
 	/* port: and checked against its schema, as the map's tags were (port/linux/game/tag_validate.c; a CE map's too) */
+#ifdef HALO_PS3
+	/* port: (a copy kept after these checks holds the bytes they made: they find nothing more) */
+	if (kept != 2)
+#endif
 	if (!tag_validate_structure_bsp(
 		reference->structure_bsp.index,
 		reference->base_address,
@@ -1434,6 +1454,11 @@ boolean scenario_structure_bsp_load(
 	{
 		return FALSE;
 	}
+	PS3_BSP_PART(_ps3_bsp_checks);
+#ifdef HALO_PS3
+	bsp_keep_checked(reference->file_offset, reference->file_size, reference->base_address, kept);
+	PS3_BSP_PART(_ps3_bsp_keep);
+#endif
 	/* port: a Halo Custom Edition bsp has no Xbox vertex buffers: its materials' checked vertices are compressed and
 	given buffers (port/linux/game/custom_edition_geometry.c) */
 	if (custom_edition_cache_tags_loaded() && !custom_edition_structure_bsp_load(structure_bsp_header->base_address))
@@ -1455,6 +1480,7 @@ boolean scenario_structure_bsp_load(
 		0xEB,
 		tag_instance->group_tag==STRUCTURE_BSP_TAG);
 	tag_instance->base_address = cache_file_globals.structure_bsp_header->base_address;
+	PS3_BSP_PART(_ps3_bsp_register);
 
 	return TRUE;
 }

@@ -6357,3 +6357,50 @@ then `./build.sh pkg LOG_IP=<address>`.
   needler), some scenery, devices and effects. The switch to BSP 0
   (t=154.5 s): copied back in 25.0 ms; that frame 200.9 ms, the next
   168.3 ms (154 ms of texture waits, 18 textures; before 557 ms).
+- 2026-10-27: Matt committed `3bdcabf3` ("Texture preloads"), without
+  `port/ps3/xbox/bsp_keep.c` (`.gitignore`'s `xbox/`: the commit does not
+  link without it; told Matt). Then (Matt: "Go with 2 and 4. Stop it and
+  then when you're done start a new listener"): session cda250fc's
+  listener (PID 16600) stopped; 4: the 126 files this session's first
+  try wrote into `build/ps3_hudicons/obj` deleted, and
+  `build/ps3_bspkeep/`; 2: the switch's timers: `BSP switch to N` lines
+  (`scenario.c`'s `scenario_switch_structure_bsp` and its procs,
+  `cache_files.c`'s `scenario_structure_bsp_load`; `ps3_timers.c`).
+  `-Wall`: no new warning. `check`: 0 `r2off`, `.got` 0xbd88. PKG of
+  14:37 in `build/ps3_bsp/`. Not tested on the PS3. Our listener (PID
+  12568) writes `ps3log_switch.txt` in this session's scratchpad.
+- 2026-10-27: the 14:37 PKG on b40 (Matt: "Done"; `[ps3] exit 0`; our
+  listener stopped). The switches in play: to BSP 0 207.3 ms (the checks
+  129.7, `tag_validate_structure_bsp`; the reconnects 33.8: object types
+  20.8, objects 11.7; the copy back 25.5: the RSX's 16.9, the sums 8.4;
+  the unload 16.1, the vertex buffers' `BlockUntilNotBusy`, the Direct3D
+  SPU's draws of the frame); to BSP 3 (a revert) 53.4 ms (the checks
+  42.7). At the level's start: BSP 0 from the disk 749.7 ms (the read
+  566.7, the swap 59.1, the checks 113.6), BSP 3 138.6 ms. The cut (the
+  step's "then cut what I can"): a BSP is kept after its checks
+  (`tag_validate_structure_bsp`: the retail maps need no correction and
+  a map it passed is clean when checked again, `tools/map_validate.c`),
+  before the vertex buffers' register; a load of such a copy skips the
+  swap and the checks (`bsp_keep_checked`, `cache_files.c`). The
+  reconnects (the game's) and the unload's wait (the frame's draws) left
+  as they are. `-Wall`: no new warning. `check`: 0 `r2off`, `.got`
+  0xbd88. PKG of 14:58 in `build/ps3_bsp/`. Not tested on the PS3. Our
+  listener (PID 25396) writes `ps3log_checks.txt`.
+- 2026-10-27: the 14:58 PKG on b40 (Matt: "Done."; `[ps3] exit 0`; our
+  listener stopped, UDP 18194 free). The switch to BSP 0 in play: 71.4
+  ms (was 207.3): the checks 0 (was 129.7), the reconnects 28.0 (object
+  types 17.2, objects 9.9), the copy back 24.8, the unload 16.1; its
+  frame 71.9 ms, the next 144.3 (130 ms of texture waits, 18 textures,
+  3.3 MB). The first entry into BSP 4 (read ahead, kept as read): 176.4
+  ms (the copy back 14.2, the swap 40.7, the checks 74.5, the unload
+  22.3, the reconnects 14.2), then kept checked (6.1 ms); the next frame
+  140.2 (131 ms of texture waits, 9 textures, 3.8 MB). Not committed:
+  `cache_files.c`, `scenario.c`, `ps3_timers.c`/`.h`, README, and
+  `bsp_keep.c` (in no commit yet: `git add -f`).
+- 2026-10-27: the copy back's check (Matt: "Let's work on 2."; 8.0 ms of
+  the 24.8 for 5.4 MB): `bsp_keep.c`'s `sums_add` a line at a time with
+  the line 1 KB ahead touched (`dcbt`): the same sums (PC check: the old
+  loop and the new, 9 sizes, and in the reader's 128 KB pieces: 0
+  apart). `check`: 0 `r2off`, `.got` 0xbd88. PKG of 15:15 in
+  `build/ps3_bsp/`. Not tested on the PS3. Our listener (PID 29676)
+  writes `ps3log_sums.txt`.
