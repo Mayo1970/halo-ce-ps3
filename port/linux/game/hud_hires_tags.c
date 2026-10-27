@@ -380,6 +380,32 @@ boolean hud_hires_sprite_stencil(struct bitmap_data const *drawn, struct bitmap_
 #endif
 }
 
+#ifdef HALO_PS3
+/* (hud_hires_rsx.c) */
+int hud_hires_asset_sprite_place(long asset, short sequence, short frame, real *cell, real *advance);
+
+/* a PS3 button's own cell on the texture drawn from `drawn` and its width in texels, if not the Xbox sprite's place;
+the Xbox's black and white buttons share sequence 13: the white (L1, button icon 5) has sequence 14's */
+boolean hud_hires_sprite_place(struct bitmap_data const *drawn, struct icon_hud_element_definition const *icon,
+	short frame_index, real_rectangle2d *clip, real *advance)
+{
+	short sequence = icon->sequence_index;
+	long index;
+
+	if (hud_globals && hud_globals->messaging.button_icons.count > 5 && sequence == 13 &&
+		icon == (struct icon_hud_element_definition const *)hud_globals->messaging.button_icons.address + 5)
+		sequence = 14;
+	for (index = 0; index < hires_sprite_bitmap_count; index++)
+	{
+		if (drawn && hires_sprite_bitmaps[index].placeholder == drawn)
+			return hud_hires_asset_sprite_place(hires_sprite_bitmaps[index].asset, sequence,
+				(short)(frame_index & 0x7FFF), clip->n, advance) != 0;
+	}
+
+	return FALSE;
+}
+#endif
+
 /* whether the bitmap at address that `asset` stands for is a Custom Edition
 map's stock one (its pixels are not those the texture was drawn from) */
 long hud_hires_asset_stock_custom_edition(

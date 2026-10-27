@@ -1,26 +1,10 @@
 #!/usr/bin/env python3
-"""The PS3's button icons (EXTRA OPTIONS' BUTTON ICONS: port/ps3/README.md),
-drawn from the approved redraws in ps3_buttons/svg (ps3_buttons/make.py)
-in the places of the Xbox redraws (port/assets/buttons/buttons.json,
-tools/button_assets.py):
-
-    python tools/ps3_button_assets.py build
-    python3 tools/ps3_button_assets.py embed --out build/ps3/ps3_buttons.h
-
-build: renders port/assets/buttons/ps3/*.png at SCALE times the maps'
-    bitmaps (720p draws them at 1.5 times), and ps3_buttons.json. Each menu
-    icon has a texture a style: cross for A, circle for B, square for X,
-    triangle for Y. The message icons' sheets have their A, B, X and Y sprites
-    only: the menus' hud_msg_icons_sm one a style, in its colours; the HUD's
-    combined hud_msg_icons one for both, the stencil the game tints.
-    Needs resvg_py, Pillow, NumPy and SciPy.
-embed: the PNGs as the RSX samples them (A8R8G8B8 words, swizzled, every mip
-    level), zlib-compressed, in a C header for port/ps3/xbox/hud_hires_rsx.c.
-    The standard library only (the Makefile runs it in the build's image).
-"""
+"""The PS3's button icons (port/ps3/README.md, "Extra options"): build draws ps3_buttons/svg into port/assets/buttons/ps3
+(resvg_py, Pillow, NumPy, SciPy); embed writes them as the RSX's swizzled textures for hud_hires_rsx.c (stdlib only)."""
 
 import argparse
 import json
+import math
 import struct
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -32,8 +16,11 @@ ART = ROOT / "ps3_buttons/svg"
 XBOX_LIST = ROOT / "port/assets/buttons/buttons.json"
 ASSETS = ROOT / "port/assets/buttons/ps3"
 LIST = ASSETS / "ps3_buttons.json"
+FONT = ROOT / "port/assets/fonts/Overpass-900.ttf"
 SCALE = 4
 STYLES = ("colour", "black")
+# the HUD's button icons' width offset (every one's in the HUD globals but the thumbstick presses')
+WIDTH_OFFSET = -6
 # the Xbox redraw each button stands in for
 FACES = {"a_butn.svg": "cross", "b_butn.svg": "circle", "x_butn.svg": "square", "y_butn.svg": "triangle"}
 # the redraws' oval: its centre (both sets'), and the Xbox's radii (tools/button_assets.py's art)
@@ -46,9 +33,10 @@ RAISE = 2.7
 # others are stencils, which the game tints with the message's colour
 STYLED_SHEETS = {"ui\\hud\\bitmaps\\hud_msg_icons_sm"}
 
-# the HUD's message icons (the HUD globals' messaging icons, the menus' are hud_msg_icons_sm): its A, B, X and Y
-# sprites, from bitmap 0 of every Xbox map (its CRC); the places of their ovals measured on its alpha, as
-# hud_msg_icons_sm's give theirs; size: the circles a little smaller than the Xbox ovals beside the prompts' text
+# the HUD's thumbstick presses (sequences 19 and 20, 3 frames as the Xbox's): the stick's size in each
+PRESS = [1.0, 0.92, 0.84]
+# the HUD's sheet (every Xbox map's CRCs): A, B, X, Y in their measured cells; the extras in own cells at "at", placed
+# as A's circle; "shared": L1, as the white button shares the black's sequence 13 (no bit in "sprites")
 PS3_SHEETS = [
     {"name": "hud_msg_icons__0", "tag": "ui\\hud\\bitmaps\\combined\\hud_msg_icons", "bitmap": 0, "width": 128,
      "height": 128, "crc": 1457896459, "size": 0.85, "sprites": [
@@ -56,6 +44,25 @@ PS3_SHEETS = [
          {"sequence": 1, "cell": [0, 72, 24, 102], "svg": "b_butn.svg", "place": [1.08, 1.134, 1.403]},
          {"sequence": 2, "cell": [100, 40, 124, 70], "svg": "x_butn.svg", "place": [1.0608, 1.418, 1.39]},
          {"sequence": 3, "cell": [24, 72, 48, 101], "svg": "y_butn.svg", "place": [1.0489, 1.543, 1.714]},
+         {"sequence": 13, "extra": "R1", "at": [0, 0]},
+         {"sequence": 14, "extra": "L1", "at": [34, 0], "shared": True},
+         {"sequence": 15, "extra": "L_ANALOG", "at": [68, 0]},
+     ]},
+    {"name": "hud_msg_icons__1", "tag": "ui\\hud\\bitmaps\\combined\\hud_msg_icons", "bitmap": 1, "width": 128,
+     "height": 128, "crc": 1851454571, "sprites": [
+         {"sequence": 16, "extra": "R_ANALOG", "at": [0, 0]},
+         {"sequence": 17, "extra": "SELECT", "at": [29, 0]},
+         {"sequence": 18, "extra": "START", "at": [59, 0]},
+     ]},
+    {"name": "hud_msg_icons__2", "tag": "ui\\hud\\bitmaps\\combined\\hud_msg_icons", "bitmap": 2, "width": 128,
+     "height": 128, "crc": 734518216, "sprites": [
+         {"sequence": 19, "extra": "L3", "at": [0, 0], "frames": PRESS},
+         {"sequence": 21, "extra": "L2", "at": [90, 0]},
+     ]},
+    {"name": "hud_msg_icons__3", "tag": "ui\\hud\\bitmaps\\combined\\hud_msg_icons", "bitmap": 3, "width": 128,
+     "height": 128, "crc": 2758814568, "sprites": [
+         {"sequence": 20, "extra": "R3", "at": [0, 0], "frames": PRESS},
+         {"sequence": 22, "extra": "R2", "at": [90, 0]},
      ]},
 ]
 
@@ -94,8 +101,66 @@ def render(text: str, scale: int):
     import resvg_py
     from PIL import Image
 
-    png = resvg_py.svg_to_bytes(svg_string=text, zoom=scale)
+    # (the redraws' Overpass900 is the face's own name in the font's file)
+    png = resvg_py.svg_to_bytes(svg_string=text.replace('"Overpass900"', '"Overpass"'), zoom=scale,
+                                font_files=[str(FONT)])
     return np.asarray(Image.open(io.BytesIO(bytes(png))).convert("RGBA")).copy()
+
+
+def circle(sprite: dict, size: float) -> tuple:
+    """A, B, X or Y's circle centre in the sheet, and the redraw's scale:
+    the Xbox oval's centre, and a circle of its area, inside the cell."""
+    left, top, right, bottom = sprite["cell"]
+    scale, x, y = sprite["place"]
+    centre = (left + x + scale * CENTRE[0], top + y + scale * CENTRE[1])
+    radius = min(scale * (XBOX_RADII[0] * XBOX_RADII[1]) ** 0.5, (right - left) / 2 - 0.5, (bottom - top) / 2 - 0.5)
+    return centre, radius * size / PS3_RADIUS
+
+
+def extent(name: str) -> tuple:
+    """An extra's stencil's left, top, right and bottom in its 32x32 frame."""
+    import numpy as np
+
+    alpha = render(document(32, 32, art(name, "x")), 8)[..., 3]
+    rows, columns = np.nonzero(alpha > 8)
+    return columns.min() / 8, rows.min() / 8, (columns.max() + 1) / 8, (rows.max() + 1) / 8
+
+
+def extra_cells(xbox: dict, width: int, height: int) -> tuple:
+    """A HUD sheet's extras: their elements, and each frame's place (its
+    sequence, frame, frames, cell in fractions of the sheet, width)."""
+    a = next(sheet for sheet in PS3_SHEETS if sheet["bitmap"] == 0)["sprites"][0]
+    centre, size = circle(a, PS3_SHEETS[0]["size"])
+    radius = size * PS3_RADIUS
+    above, before = a["cell"][3] - centre[1], centre[0] - radius - a["cell"][0]
+    # (A's circle reaches past where the text goes on: its cell's width and the tag's width offset on)
+    past = centre[0] + radius - (a["cell"][2] + WIDTH_OFFSET)
+    body, places = [], []
+    for index, sprite in enumerate(xbox["sprites"]):
+        if "extra" not in sprite:
+            continue
+        name = f"stencil_extra_{sprite['extra']}.svg"
+        left, top, right, bottom = extent(name)
+        art_width, art_height = (right - left) * size, (bottom - top) * size
+        cell_width = math.ceil(before + art_width + 1.5)
+        cell_height = math.ceil(above + art_height / 2 + 1.5)
+        frames = sprite.get("frames", [1.0])
+        for frame, frame_size in enumerate(frames):
+            x, y = sprite["at"][0] + frame * (cell_width + 2), sprite["at"][1]
+            if x + cell_width > width or y + cell_height > height:
+                sys.exit(f"{xbox['name']}: {sprite['extra']}'s cell is outside the sheet")
+            middle = (x + before + art_width / 2, y + cell_height - above)
+            scale = size * frame_size
+            moved = (f"translate({middle[0] - scale * (left + right) / 2:.4f} {middle[1] - scale * (top + bottom) / 2:.4f}) "
+                     f"scale({scale:.4f})")
+            area = f'x="{x}" y="{y}" width="{cell_width}" height="{cell_height}"'
+            suffix = f"e{index}f{frame}"
+            body.append(f'<defs><clipPath id="cell{suffix}"><rect {area}/></clipPath></defs>'
+                        f'<g clip-path="url(#cell{suffix})"><g transform="{moved}">{art(name, suffix)}</g></g>')
+            places.append([sprite["sequence"], frame, len(frames), round(x / width, 6),
+                           round((x + cell_width) / width, 6), round(y / height, 6),
+                           round((y + cell_height) / height, 6), round(before + art_width - past, 3)])
+    return body, places
 
 
 def build(arguments) -> None:
@@ -116,18 +181,18 @@ def build(arguments) -> None:
         if "sprites" in xbox:
             # (the menus' sheet a texture a style, in its colours; the HUD's one stencil for both)
             styled = xbox["tag"] in STYLED_SHEETS
-            entry["sprites"] = sum(1 << sprite["sequence"] for sprite in xbox["sprites"])
+            entry["sprites"] = sum(1 << sprite["sequence"] for sprite in xbox["sprites"] if not sprite.get("shared"))
             entry["png"] = []
+            extras, places = extra_cells(xbox, width, height)
+            if places:
+                entry["places"] = places
             for style in STYLES if styled else (None,):
-                body = []
+                body = list(extras)
                 for index, sprite in enumerate(xbox["sprites"]):
+                    if "extra" in sprite:
+                        continue
                     left, top, right, bottom = sprite["cell"]
-                    scale, x, y = sprite["place"]
-                    # the Xbox oval's centre, and a circle of its area, inside the cell
-                    centre = (left + x + scale * CENTRE[0], top + y + scale * CENTRE[1])
-                    radius = min(scale * (XBOX_RADII[0] * XBOX_RADII[1]) ** 0.5, (right - left) / 2 - 0.5,
-                                 (bottom - top) / 2 - 0.5)
-                    size = radius * xbox.get("size", 1.0) / PS3_RADIUS
+                    centre, size = circle(sprite, xbox.get("size", 1.0))
                     moved = (f"translate({centre[0] - size * CENTRE[0]:.4f} {centre[1] - size * CENTRE[1]:.4f}) "
                              f"scale({size:.4f})")
                     area = f'x="{left}" y="{top}" width="{right - left}" height="{bottom - top}"'
@@ -270,7 +335,11 @@ def embed(arguments) -> None:
             compressed, raw_size, size, levels = texture(ASSETS / png)
             made[png] = (f"ps3_button_{len(made)}", len(compressed), raw_size, size, levels)
             lines += c_bytes(made[png][0], compressed)
-    lines += ["", "static const struct ps3_button_embedded ps3_buttons[] =", "{"]
+    lines += ["", "static const struct ps3_button_place ps3_button_places[] =", "{"]
+    for asset, entry in enumerate(entries):
+        for sequence, frame, frames, x0, x1, y0, y1, advance in entry.get("places", []):
+            lines.append(f"\t{{ {asset}, {sequence}, {frame}, {frames}, {{ {x0}f, {x1}f, {y0}f, {y1}f }}, {advance}f }},")
+    lines += ["};", "", "static const struct ps3_button_embedded ps3_buttons[] =", "{"]
     for entry in entries:
         textures = ", ".join(f"{{ {made[png][0]}, {made[png][1]}, {made[png][2]} }}" for png in entry["png"])
         _, _, _, size, levels = made[entry["png"][0]]

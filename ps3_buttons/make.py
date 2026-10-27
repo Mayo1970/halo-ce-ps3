@@ -82,29 +82,50 @@ def stencil(name, uid):
             f'<g mask="url(#m{uid})"><g {OVAL}><circle r="{RADIUS}" fill="#fff"/></g></g></g>')
 
 
+# the extras' outlines (label_icon's and label_stencil's)
+SHOULDER = "M2.5,20.5 L2.5,10.5 Q2.5,5.5 8,5 L24,5 Q29.5,5.5 29.5,10.5 L29.5,20.5 Z"
+TRIGGER = "M4,22 L4,9 Q4,3 10,3 L22,3 Q28,3 28,9 L28,22 Q16,25.5 4,22 Z"
+START = "M4.5,7.7 Q4.5,6.5 5.6,6.9 L26.8,13.3 Q27.8,14 26.8,14.7 L5.6,21.1 Q4.5,21.5 4.5,20.3 Z"
+SELECT = 'x="4.5" y="7.5" width="23" height="13" rx="1.5"'
+STICK = 'cx="16" cy="14" r="11.2"'
+
+
+def analog_arrows(colour):
+    return "".join(
+        f'<polygon points="16,{14 - 10.3:.1f} {16 + 1.7:.1f},{14 - 8.1:.1f} {16 - 1.7:.1f},{14 - 8.1:.1f}" '
+        f'fill="{colour}" transform="rotate({angle} 16 14)"/>' for angle in (0, 90, 180, 270))
+
+
 def label_icon(text, shape, body, uid, size=8.5):
     x, y = CENTRE
     if shape == "oval":
         outline = oval(uid)
     elif shape == "shoulder":
-        outline = (f'<path d="M2.5,20.5 L2.5,10.5 Q2.5,5.5 8,5 L24,5 Q29.5,5.5 29.5,10.5 L29.5,20.5 Z" '
+        outline = (f'<path d="{SHOULDER}" '
                    f'fill="url(#body{uid})" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.15"/>')
         x, y = 16, 13.4
     elif shape == "trigger":
-        outline = (f'<path d="M4,22 L4,9 Q4,3 10,3 L22,3 Q28,3 28,9 L28,22 Q16,25.5 4,22 Z" '
+        outline = (f'<path d="{TRIGGER}" '
                    f'fill="url(#body{uid})" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.15"/>')
         x, y = 16, 13.4
     elif shape == "stick":
-        outline = (f'<circle cx="16" cy="14" r="11.2" fill="url(#body{uid})" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.15"/>'
+        outline = (f'<circle {STICK} fill="url(#body{uid})" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.15"/>'
                    f'<circle cx="16" cy="14" r="8" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="1"/>')
+        x, y = 16, 14
+    elif shape == "analog":
+        # the stick seen from above: L3's cap, with an arrow out of its ring each way it moves
+        arrows = analog_arrows("#fff")
+        outline = (f'<circle {STICK} fill="url(#body{uid})" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.15"/>'
+                   f'<circle cx="16" cy="14" r="7.4" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="1"/>'
+                   f'<g transform="translate(0.6 0.9)" opacity="0.55">{analog_arrows("#000")}</g>{arrows}')
         x, y = 16, 14
     elif shape == "start":
         # a wedge a little taller than SELECT and 1.5x as wide as tall, as on the pad
-        outline = (f'<path d="M4.5,7.7 Q4.5,6.5 5.6,6.9 L26.8,13.3 Q27.8,14 26.8,14.7 L5.6,21.1 Q4.5,21.5 4.5,20.3 Z" '
+        outline = (f'<path d="{START}" '
                    f'fill="url(#body{uid})" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.15" stroke-linejoin="round"/>')
         return defs(body, uid, 7, 21) + outline
     elif shape == "select":
-        outline = (f'<rect x="4.5" y="7.5" width="23" height="13" rx="1.5" fill="url(#body{uid})" '
+        outline = (f'<rect {SELECT} fill="url(#body{uid})" '
                    f'stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.15"/>')
         return defs(body, uid, 7, 21) + outline
     t = (f'<text x="{x}" y="{y}" font-family="Overpass900" font-size="{size}" text-anchor="middle" '
@@ -114,6 +135,31 @@ def label_icon(text, shape, body, uid, size=8.5):
     if shape in ("shoulder", "trigger"):
         return defs(body, uid, 3, 24) + outline + st + t
     return defs(body, uid) + outline + st + t
+
+
+def label_stencil(text, shape, uid, size=8.5):
+    # the HUD sheet's extras: the outline in white with the label and the dark details cut out, tinted by the game
+    paint = 'fill="#fff" stroke="#fff" stroke-width="1.15"'
+    x, y, cut = 16, 14, ""
+    if shape == "shoulder":
+        outline, y = f'<path d="{SHOULDER}" {paint}/>', 13.4
+    elif shape == "trigger":
+        outline, y = f'<path d="{TRIGGER}" {paint}/>', 13.4
+    elif shape == "start":
+        outline, text = f'<path d="{START}" {paint} stroke-linejoin="round"/>', ""
+    elif shape == "select":
+        outline, text = f'<rect {SELECT} {paint}/>', ""
+    else:
+        outline = f'<circle {STICK} {paint}/>'
+        ring = 8 if shape == "stick" else 7.4
+        cut = f'<circle cx="16" cy="14" r="{ring}" fill="none" stroke="#000" stroke-width="1"/>'
+        if shape == "analog":
+            cut += analog_arrows("#000")
+    if text:
+        cut += (f'<text x="{x}" y="{y}" font-family="Overpass900" font-size="{size}" text-anchor="middle" '
+                f'dominant-baseline="central" fill="#000">{text}</text>')
+    return (f'<defs><mask id="m{uid}"><rect x="-16" y="-16" width="64" height="64" fill="#fff"/>{cut}</mask></defs>'
+            f'<g mask="url(#m{uid})">{outline}</g>')
 
 
 def svg(inner, px):
@@ -145,6 +191,22 @@ def main():
             "START": label_icon("START", "start", dark, next_uid()),
             "SELECT": label_icon("SELECT", "select", dark, next_uid()),
         }
+    # (after the others, which keep their ids)
+    for style in ("colour", "black"):
+        extras[style]["L_ANALOG"] = label_icon("L", "analog", BLACK_BODY, next_uid(), 9.5)
+        extras[style]["R_ANALOG"] = label_icon("R", "analog", BLACK_BODY, next_uid(), 9.5)
+    extras["stencil"] = {
+        "L1": label_stencil("L1", "shoulder", next_uid(), 9.5),
+        "R1": label_stencil("R1", "shoulder", next_uid(), 9.5),
+        "L2": label_stencil("L2", "trigger", next_uid(), 9.5),
+        "R2": label_stencil("R2", "trigger", next_uid(), 9.5),
+        "L3": label_stencil("L3", "stick", next_uid(), 8.5),
+        "R3": label_stencil("R3", "stick", next_uid(), 8.5),
+        "START": label_stencil("", "start", next_uid()),
+        "SELECT": label_stencil("", "select", next_uid()),
+        "L_ANALOG": label_stencil("L", "analog", next_uid(), 9.5),
+        "R_ANALOG": label_stencil("R", "analog", next_uid(), 9.5),
+    }
 
     for style, icons in list(sets.items()) + [(f"{k}_extra", v) for k, v in extras.items()]:
         for name, inner in icons.items():

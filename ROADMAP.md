@@ -6230,3 +6230,26 @@ then `./build.sh pkg LOG_IP=<address>`.
   so the item is disabled and hidden as on an Xbox without
   `d:\XDemos\XDemos.xbe` (the PS3 cannot launch an .xbe). PKG of 20:42 in
   `build/ps3_host/` (with the 20:38 icon raise). Not tested on the PS3.
+- 2026-10-26: our listener stopped (Matt: "Stop the listener, thank you!");
+  UDP 18194 is free. Its log (`ps3log_host.txt`, 3 runs to 19:50 on the
+  PS3's clock): the 17:20 and 18:00 PKGs' menus; GAME DEMOS at 19:47 went
+  to `XLaunchNewImage("d:\XDemos\XDemos.xbe")` and the game left (the
+  "crash"; the 20:42 PKG hides the item); no level played, so no
+  `[music]` part yet.
+- 2026-10-27: the HUD's other button icons (Matt: the analog "In-game it
+  still displays the Xbox buttons"; "Keep the first ones you made";
+  "Apply the fixes"). `ps3_buttons/make.py` draws L_ANALOG and R_ANALOG
+  (L3's cap, its letter, four arrows) and stencils of the extras
+  (`stencil_extra_*.svg`). `tools/ps3_button_assets.py` draws the HUD
+  sheet's four bitmaps (`hud_msg_icons__0` to `__3`, the CRCs the same in
+  all 24 Xbox maps): R1 and L1 for the black and white buttons, L2, R2,
+  START, SELECT for BACK, L3 and R3 in 3 frames, the sticks; each in a
+  cell of its own with its width (`places` in `ps3_buttons.json`, the
+  header's `ps3_button_places`), placed as A's circle. `hud_messaging.c`'s
+  `render_state_bitmap` takes that cell and width on the PS3
+  (`hud_hires_sprite_place`, `hud_hires_tags.c`); the white button (icon
+  5) shares the black's sequence 13 on the Xbox and takes sequence 14's
+  place (14 is no weapon's icon in any map). The D-pad prompts stay words.
+  Checks: the changed units with `-Wall` (no new warning); `check`: 0
+  `r2off`, `.got` 0xbc48. PKG of 11:28 in `build/ps3_hudicons/` (a copy of
+  `build/ps3_host/`, its depfiles' folder rewritten). Not tested on the PS3.

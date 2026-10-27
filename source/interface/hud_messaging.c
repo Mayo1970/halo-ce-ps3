@@ -359,6 +359,10 @@ boolean hud_hires_button_draw(struct icon_hud_element_definition const *icon,
 	rectangle2d *cursor, pixel32 color);
 struct bitmap_data const *hud_hires_sprite_bitmap(struct bitmap_data const *bitmap, short sequence_index);
 boolean hud_hires_sprite_stencil(struct bitmap_data const *drawn, struct bitmap_data const *bitmap);
+#ifdef HALO_PS3
+boolean hud_hires_sprite_place(struct bitmap_data const *drawn, struct icon_hud_element_definition const *icon,
+	short frame_index, real_rectangle2d *clip, real *advance);
+#endif
 
 static void render_state_bitmap(
 	rectangle2d *bounds,
@@ -427,6 +431,11 @@ static void render_state_bitmap(
 	real_rectangle2d const *clip = NULL;
 	real scale;
 	point2d point;
+#ifdef HALO_PS3
+	real_rectangle2d placed_clip; /* port */
+	real placed_width; /* port */
+	boolean placed = FALSE; /* port */
+#endif
 
 	/* port: keep gameplay prompts on the high-resolution HUD path, which
 	draws a button by its place among the HUD globals' button icons: before
@@ -448,6 +457,12 @@ static void render_state_bitmap(
 	{
 		/* port: a PS3 button stencil takes the message's colour (hud_hires_sprite_stencil) */
 		drawn = hud_hires_sprite_bitmap(bitmap, icon->sequence_index);
+#ifdef HALO_PS3
+		/* port: a PS3 button drawn from its own cell, as wide as it is (hud_hires_sprite_place) */
+		placed = hud_hires_sprite_place(drawn, icon, (short)frame_index, &placed_clip, &placed_width);
+		if (placed)
+			clip = &placed_clip;
+#endif
 		scale = local_player_count() > 1 ? 0.75f : 1.0f;
 		point.x = (short)(icon->offset.x * scale + cursor_bounds->x0);
 		point.y = (short)(cursor_bounds->y1 - icon->offset.y * scale);
@@ -462,6 +477,11 @@ static void render_state_bitmap(
 				!hud_hires_sprite_stencil(drawn, bitmap) ? icon->color : color,
 			FALSE);
 		bitmap = drawn;
+#ifdef HALO_PS3
+		if (placed) /* port */
+			cursor_bounds->x0 = (short)(placed_width * scale + point.x);
+		else
+#endif
 		if (TEST_FLAG(icon->flags, _hud_icon_absolute_width_bit))
 			cursor_bounds->x0 = (short)(icon->width_offset * scale + point.x);
 		else if (clip)
