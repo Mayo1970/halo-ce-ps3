@@ -35,6 +35,9 @@ upstream halo-ce-universal copy of source/cache/xbox_texture_cache.c. */
 #ifdef HALO_ANDROID
 #include "android_ce_texture_cache.h" /* port: port/linux/game/android_ce_texture_cache.c */
 #endif
+#ifdef HALO_PS3
+#include "ps3_timers.h" /* port: the waits for a read, for the spike log */
+#endif
 
 /* ---------- constants */
 
@@ -1033,6 +1036,9 @@ void *_texture_cache_bitmap_get_hardware_format(
 			struct xbox_texture_cache_texture *texture = datum_get(
 				xbox_texture_cache_globals.textures,
 				bitmap->cache_block_index);
+#ifdef HALO_PS3
+			uint64_t ps3_wait_span = block && !texture->loaded ? ps3_timer_now() : 0;
+#endif
 
 			lruv_block_touch(
 				xbox_texture_cache_globals.cache,
@@ -1068,6 +1074,19 @@ void *_texture_cache_bitmap_get_hardware_format(
 				}
 			}
 			while (!hardware_format && block);
+#ifdef HALO_PS3
+			if (ps3_wait_span)
+			{
+				extern void platform_log(char const *format, ...);
+				uint64_t ps3_wait_end = ps3_timer_add(_ps3_timer_texture_cache_wait, ps3_wait_span);
+
+				ps3_timer_counts[_ps3_timer_texture_cache_wait]++;
+				/* the texture named, for the spike log's waits (the timebase is 79.8 MHz) */
+				platform_log("texture cache: %.1f ms waited for %s (%ld KB)",
+					(double)(ps3_wait_end - ps3_wait_span) / 79800.0, tag_get_name(bitmap->tag_index),
+					bitmap->pixels_size >> 10);
+			}
+#endif
 		}
 	}
 	else

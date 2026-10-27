@@ -113,8 +113,13 @@ typedef int BOOL;
 #define NV40TCL_BLEND_ENABLE 0x00000310
 #define NV40TCL_SEMAPHORE_OFFSET 0x00001d6c
 #define NV40TCL_SEMAPHORE_BACKENDWRITE_RELEASE 0x00001d70
+/* the transfer engine (NV0039) on subchannel 1, as librsx's rsxSetTransferData writes it */
+#define NV0039_SET_CONTEXT_DMA_BUFFER_IN 0x00002184
+#define NV0039_OFFSET_IN 0x0000230c
+#define NV0039_LINE_LENGTH_MAX 0x003fffffu
 
 #define GCM_DMA_MEMORY_FRAME_BUFFER 0xFEED0000u
+#define GCM_DMA_MEMORY_HOST_BUFFER 0xFEED0001u
 #define GCM_LOCATION_RSX 0
 #define GCM_ATTRIB_OUTPUT_MASK_POINTSIZE (1 << 5)
 #define GCM_INDEX_TYPE_16B 1
@@ -869,6 +874,34 @@ static void rsx_write_backend_label(uint32_t index, uint32_t value)
 	c[2] = METHOD(NV40TCL_SEMAPHORE_BACKENDWRITE_RELEASE, 1);
 	c[3] = (value & 0xff00ff00) | ((value >> 16) & 0xff) | ((value & 0xff) << 16);
 	cmd += 4;
+}
+
+/* rsxSetTransferData(GCM_TRANSFER_LOCAL_TO_MAIN) of one line of bytes: lines of 4 MB at most */
+static void rsx_transfer_local_to_main(uint32_t destination, uint32_t source, uint32_t bytes)
+{
+	uint32_t *c = commands(3), done = 0;
+
+	c[0] = METHOD(NV0039_SET_CONTEXT_DMA_BUFFER_IN, 2);
+	c[1] = GCM_DMA_MEMORY_FRAME_BUFFER;
+	c[2] = GCM_DMA_MEMORY_HOST_BUFFER;
+	cmd += 3;
+	while (done < bytes)
+	{
+		uint32_t length = bytes - done < NV0039_LINE_LENGTH_MAX ? bytes - done : NV0039_LINE_LENGTH_MAX;
+
+		c = commands(9);
+		c[0] = METHOD(NV0039_OFFSET_IN, 8);
+		c[1] = source + done;
+		c[2] = destination + done;
+		c[3] = 0;
+		c[4] = 0;
+		c[5] = length;
+		c[6] = 1;
+		c[7] = 0x101;
+		c[8] = 0;
+		cmd += 9;
+		done += length;
+	}
 }
 
 typedef struct
@@ -5583,6 +5616,13 @@ static void record_execute(const spu_d3d_record *record, uint64_t position)
 	case _spu_d3d_record_label:
 		rsx_write_backend_label(record->a, record->b);
 		break;
+	case _spu_d3d_record_copy:
+	{
+		const spu_d3d_record_copy *copy = payload;
+
+		rsx_transfer_local_to_main(copy->destination, copy->source, copy->bytes);
+		break;
+	}
 	case _spu_d3d_record_particles:
 		if (record->a)
 			particles_begin(payload);

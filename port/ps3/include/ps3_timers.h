@@ -501,6 +501,9 @@ enum
 	_ps3_timer_spu_game_interpolation_wait,
 	_ps3_timer_spu_shadow_check,
 	_ps3_timer_spu_shadow_apart,
+	/* the game thread's waits for a texture it draws now, which the texture cache still reads (xbox_texture_cache.c),
+	with their count */
+	_ps3_timer_texture_cache_wait,
 	/* RSX splits only (ps3_rsx_timers): the frame's start, before each window, after the render */
 	_ps3_timer_rsx_previous,
 	_ps3_timer_rsx_before,
@@ -624,6 +627,20 @@ extern int ps3_transparent_origin;
 extern void (*ps3_timers_shaders_log)(void);
 /* the Direct3D SPU's timers into the Direct3D thread's, at each window's end (d3d8_rsx.c); NULL: none */
 extern void (*ps3_timers_direct3d_collect)(void);
+
+/* the spike log's counts, never reset (ps3_timers.c logs a long frame's): textures uploaded and their bytes, pixel and
+vertex shaders translated at a draw (d3d8_rsx.c), the bytes every file transfer moved (xbox_files.c) */
+enum
+{
+	_ps3_spike_texture_uploads,
+	_ps3_spike_texture_bytes,
+	_ps3_spike_pixel_shaders,
+	_ps3_spike_vertex_shaders,
+	_ps3_spike_disk_bytes,
+	_ps3_spike_count
+};
+
+extern volatile uint32_t ps3_spike_counts[_ps3_spike_count];
 
 /* the timebase, read again while its low word is 0 (PSL1GHT's __gettime: a Cell erratum) */
 static inline uint64_t ps3_timer_now(void)

@@ -746,6 +746,21 @@ short cache_file_read(
 	return request_index;
 }
 
+#ifdef HALO_PS3
+/* port: the open map's cache file, whose bsps port/ps3/xbox/bsp_keep.c reads ahead; FALSE when none */
+boolean cache_file_open_map_path(
+	char *path)
+{
+	if (cache_file_globals.open_map_file_index == NONE || custom_edition_cache_tags_loaded())
+	{
+		return FALSE;
+	}
+	cached_map_file_get_path(cache_file_globals.open_map_file_index, path);
+
+	return TRUE;
+}
+#endif
+
 short cache_files_precache_map_status(
 	real *progress)
 {

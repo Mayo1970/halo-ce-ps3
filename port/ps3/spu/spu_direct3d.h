@@ -60,6 +60,8 @@ enum
 	/* the dynamic resolution (d3d8_dynamic_resolution): the screen's 3D view drawn smaller (a 1: the scale follows),
 	then scaled up over the screen (a 0) */
 	_spu_d3d_record_scale,
+	/* the SPU's only: RSX memory copied into main memory (bsp_keep.c's BSPs) */
+	_spu_d3d_record_copy,
 	_spu_d3d_record_count
 };
 
@@ -225,7 +227,17 @@ typedef struct
 	uint32_t color_pitch;
 } spu_d3d_record_scale;
 
-typedef char spu_d3d_record_sizes_check[sizeof(spu_d3d_record_draw) % 16 == 0 && sizeof(spu_d3d_record_stream) == 16 &&
+/* the copy record's: the RSX memory's offset, the main memory's IO offset, the bytes */
+typedef struct
+{
+	uint32_t source;
+	uint32_t destination;
+	uint32_t bytes;
+	uint32_t pad;
+} spu_d3d_record_copy;
+
+typedef char spu_d3d_record_sizes_check[sizeof(spu_d3d_record_copy) == 16 &&
+	sizeof(spu_d3d_record_draw) % 16 == 0 && sizeof(spu_d3d_record_stream) == 16 &&
 	sizeof(spu_d3d_record_immediate) == 16 && sizeof(spu_d3d_record_clear) == 16 &&
 	sizeof(spu_d3d_record_elements) % 16 == 0 && sizeof(spu_d3d_viewport) == 24 &&
 	sizeof(spu_d3d_record_light_bounds) == 32 && sizeof(spu_d3d_record_scale) == 16 ? 1 : -1];

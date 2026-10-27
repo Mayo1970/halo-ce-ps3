@@ -50,6 +50,15 @@ enum
 #define CACHE_IO_BARRIER()
 #endif
 
+#ifdef HALO_PS3
+/* port: the level's bsps kept in RSX memory, read there ahead too (port/ps3/xbox/bsp_keep.c) */
+void bsp_keep_map(char const *name, long tag_data_offset, long tag_data_size);
+int bsp_keep_restore(long file_offset, long file_size, void *address);
+void bsp_keep_loaded(long file_offset, long file_size, void *address, int restored, boolean read,
+	void const *references, long count);
+extern struct scenario *global_scenario;
+#endif
+
 /* ---------- structures */
 
 struct cache_file_tag_instance
@@ -1115,6 +1124,9 @@ long scenario_tags_load(
 	name: a Custom Edition map that cannot load is not played at all. */
 	if (custom_edition_level_name(scenario_name))
 	{
+#ifdef HALO_PS3
+		bsp_keep_map(NULL, 0, 0); /* port: (its reads are served in place) */
+#endif
 		cache_file_globals.tag_header = custom_edition_cache_tags_load(
 			stripped_scenario_name,
 			&cache_file_globals.header);
@@ -1159,6 +1171,10 @@ long scenario_tags_load(
 
 				d3d8_tag_cache_loading();
 			}
+			bsp_keep_map(
+				cache_file_globals.header.name,
+				cache_file_globals.header.tag_data_offset,
+				cache_file_globals.header.tag_data_size);
 #endif
 			csmemset(tag_cache_base_address, 0xCD, 0x01600000);
 			cache_file_read(
@@ -1333,7 +1349,13 @@ boolean scenario_structure_bsp_load(
 	}
 	{
 		boolean read_complete;
+#ifdef HALO_PS3
+		/* port: a bsp kept in RSX memory comes from there, not from the disk (2: already swapped) */
+		int kept = bsp_keep_restore(reference->file_offset, reference->file_size, reference->base_address);
 
+		read_complete = kept ? TRUE : FALSE;
+		if (!kept)
+#endif
 		cache_file_read(
 			NONE,
 			reference->file_offset,
@@ -1355,8 +1377,15 @@ boolean scenario_structure_bsp_load(
 		{
 			extern void cache_files_swap_structure_bsp(void *structure_bsp, long size);
 			extern void d3d8_tag_cache_loaded(void const *address, unsigned long size);
+			long reference_count = global_scenario ? global_scenario->structure_bsp_references.count : 0;
 
-			cache_files_swap_structure_bsp(reference->base_address, reference->file_size);
+			if (kept != 2)
+				cache_files_swap_structure_bsp(reference->base_address, reference->file_size);
+			bsp_keep_loaded(reference->file_offset, reference->file_size, reference->base_address, kept,
+				read_complete == TRUE, reference_count > 0 ? TAG_BLOCK_GET_ELEMENT(
+					&global_scenario->structure_bsp_references,
+					0,
+					struct scenario_structure_bsp_reference) : NULL, reference_count);
 			/* port: the RSX copies of vertices go; the next draws make them again (port/ps3/xbox/d3d8_rsx.c) */
 			d3d8_tag_cache_loaded(tag_cache_base_address + cache_file_globals.header.tag_data_size,
 				0x01600000 - cache_file_globals.header.tag_data_size);

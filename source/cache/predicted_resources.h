@@ -30,6 +30,9 @@ struct predicted_resource
 /* ---------- prototypes/PREDICTED_RESOURCES.C */
 
 void predicted_resources_precache(struct tag_block *predicted_resources);
+#ifdef HALO_PS3
+void predicted_resources_precache_object_textures(void); /* port: (predicted_resources.c) */
+#endif
 
 /* ---------- globals */
 

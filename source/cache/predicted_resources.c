@@ -19,6 +19,10 @@ symbols in this file:
 #include "cache/texture_cache.h"
 #include "sound/sound_definitions.h"
 #include "tag_files/tag_groups.h"
+#ifdef HALO_PS3
+#include "cseries/cseries_windows.h" /* port: predicted_resources_precache_object_textures */
+#include "objects/object_definitions.h"
+#endif
 
 /* ---------- constants */
 
@@ -75,6 +79,69 @@ void predicted_resources_precache(
 
 	return;
 }
+
+#ifdef HALO_PS3
+/* port: the bitmaps each unit, item and projectile of the map predicts, read now and waited for (game.c, a campaign
+map's load): a first fight draws them without waiting for the disk */
+void predicted_resources_precache_object_textures(
+	void)
+{
+	extern void platform_log(char const *format, ...);
+	static long const group_tags[] = { 'unit', 'item', 'proj' };
+	unsigned long start = system_milliseconds();
+	long definitions = 0;
+	long bitmaps = 0;
+	long bytes = 0;
+	long group_index;
+
+	for (group_index = 0; group_index < NUMBEROF(group_tags); group_index++)
+	{
+		struct tag_iterator iterator;
+		long definition_index;
+
+		tag_iterator_new(&iterator, group_tags[group_index]);
+		while ((definition_index = tag_iterator_next(&iterator)) != NONE)
+		{
+			struct tag_block *predicted_resources =
+				&object_definition_get(definition_index)->object.predicted_resources;
+			long predicted_resource_index;
+
+			definitions++;
+			for (predicted_resource_index = 0;
+				predicted_resource_index < predicted_resources->count;
+				predicted_resource_index++)
+			{
+				struct predicted_resource *predicted_resource = TAG_BLOCK_GET_ELEMENT(
+					predicted_resources,
+					predicted_resource_index,
+					struct predicted_resource);
+				struct bitmap_data *bitmap;
+				boolean cached;
+
+				if (predicted_resource->type != _predicted_resource_bitmap ||
+					!predicted_resource_valid(predicted_resource))
+					continue;
+				bitmap = TAG_BLOCK_GET_ELEMENT(
+					&bitmap_group_get(predicted_resource->tag_index)->bitmaps,
+					predicted_resource->resource_index,
+					struct bitmap_data);
+				cached = bitmap->cache_block_index != NONE;
+				_texture_cache_bitmap_get_hardware_format(bitmap, FALSE, TRUE);
+				if (!cached && bitmap->cache_block_index != NONE)
+				{
+					bitmaps++;
+					bytes += bitmap->pixels_size;
+				}
+			}
+		}
+	}
+	cache_file_block_until_not_busy();
+	platform_log("predicted textures of %ld units, items and projectiles: %ld read, %ld KB, in %lu ms", definitions,
+		bitmaps, bytes >> 10, system_milliseconds() - start);
+
+	return;
+}
+#endif
 
 /* ---------- private code */
 

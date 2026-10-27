@@ -53,6 +53,16 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-27: the BSP switch's stutter, options 1 and 2, and a spike log
+  for the first combat (Matt: "go with option 1 and 2, and add a timer
+  for the first combat"): the level's BSPs kept in RSX memory
+  (`xbox/bsp_keep.c`; a kept one is copied back by the RSX at its load)
+  and read there ahead by a thread while the game's disk is idle;
+  `[spike]` lines for each frame of 40 ms or more. Then the wind fix (a
+  revert across a switch halted the game) and the first fight's textures
+  read at a campaign map's load. PKG of 14:10 in `build/ps3_bsp/`, run on
+  b40 (Matt: "The stutter is gone in the initial fight(s)!"). Not
+  committed (`port/ps3/xbox/bsp_keep.c` needs `git add -f`). See the Log.
 - 2026-10-26: HOST ONLINE, split screen at 30, EXTRA OPTIONS' PRESET, and
   a music log (Matt's four items; his answers: a MULTIPLAYER item, LAN
   PLAY for the LAN only, listing as upstream, the music bug "In a
@@ -6253,3 +6263,97 @@ then `./build.sh pkg LOG_IP=<address>`.
   Checks: the changed units with `-Wall` (no new warning); `check`: 0
   `r2off`, `.got` 0xbc48. PKG of 11:28 in `build/ps3_hudicons/` (a copy of
   `build/ps3_host/`, its depfiles' folder rewritten). Not tested on the PS3.
+- 2026-10-27: the BSP switch's stutter (Matt: "Every time there's a map
+  loading chunk, would it be possible to reduce or completely remove the
+  stutter we get?"). The 2026-10-26 12:17 run's switch on b40 (t=157 s):
+  the 5.4 MB BSP read 573 ms (9.5 MB/s: the first BSP of each cache file,
+  at 2 KB, always reads so; the rest of the file 35 MB/s), its swap 59 ms,
+  the collision check 7 ms, about 0.2 s more not timed. The levels' BSPs
+  (Xbox maps): a10 52.6 MB (9), d40 51.2 (10), c40 40.4 (13), b40 40.0
+  (13), c20 30.1, c10 29.8, d20 29.8, a50 24.0, a30 12.8, b30 10.1; the
+  multiplayer maps one each. RSX memory: 234 MB for the game, 131 MB used
+  at b40's peak. Matt chose options 1 and 2 and "a timer for the first
+  combat":
+  - `xbox/bsp_keep.c` (new; `git add -f`): a BSP read and swapped is kept
+    in RSX memory (PPE doubleword stores, Fletcher sums); a thread
+    (priority 1002) reads the level's other BSPs there, 128 KB pieces,
+    after the game's file bytes stop 100 ms, the BSPs after the loaded one
+    first; a load of a kept BSP is the RSX's copy (`_record_copy` of the
+    Direct3D SPU: `rsxSetTransferData`'s words, local to main, then a
+    label; the BSP's 1 MB pages `gcmMapMainMemory`'d for the copy), its
+    sums checked (else dropped, read from the disk), swapped if kept as
+    read. 32 MB of RSX memory stay free; an allocation without room drops
+    the kept BSPs (`ps3_gpu_set_memory_hook`). Another map drops them, the
+    menu's keeps them. Hooks: `cache_files.c` (`bsp_keep_map`,
+    `bsp_keep_restore`, `bsp_keep_loaded`), `cache_files_windows.c`
+    (`cache_file_open_map_path`). `[mem]`'s RSX line: kept BSPs.
+  - The spike log (`ps3_timers.c`): `[spike]` for each frame of 40 ms or
+    more (10 a window): its ticks with their parts, the AI's and
+    `objects_update`'s, the render's parts, throttle, present, rest; the
+    waits (Direct3D ring, the texture cache: a new timer in
+    `xbox_texture_cache.c`'s blocking wait, vblank, flip, RSX, SPU);
+    textures uploaded, shaders translated at a draw, file KB moved.
+  - Checks: the changed game units with `-Wall` (no new warning); the SPU's
+    copy words compared with librsx's (`commands_impl.h` and the image's
+    `librsx.a`); no PC run. `check`: 0 `r2off`, `.got` 0xbcf0. PKG of
+    12:46 in `build/ps3_bsp/` (a clean build; the tree of `1a3df243` and
+    this change only). Not tested on the PS3. A first try built in a copy
+    of `build/ps3_hudicons/` (`build/ps3_bspkeep/`, not used): its copied
+    `game.mk` compiled 63 game units into `build/ps3_hudicons/obj` (newer
+    than its PKG; the PKG itself unchanged).
+- 2026-10-27: the 12:46 PKG on b40 (Matt: "Done, but I get a red screen";
+  the log in session cda250fc's `ps3log_hudicons.txt`, its listener PID
+  16600). The 13 BSPs kept (40.0 MB; 12 read ahead in about 4 s, 0.1 to
+  2.1 s waited for the game's disk each); RSX memory 172.5 MB of 234 at
+  the end, 0 refused. The switch to BSP 0 (t=184 s): copied back in 24.7
+  ms (the RSX's copy 16.6, the check 8.1; before: 566 ms read, 59 ms
+  swap); that frame 196 ms, the next 557 ms (545 ms waiting for the
+  texture cache: lightmaps 321, objects 162). The first combat's spikes
+  (40 to 216 ms): the texture cache's waits each time (t=88.9 s: 205 ms
+  for 30 textures, 2.5 MB). The red screen: after a death, the revert
+  went back to the checkpoint's BSP 3 (copied back in 7.8 ms, its sums
+  right), then `EXCEPTION halt in tag_groups.c,#3089: #0 is not a valid
+  <unknown> index in [#0,#0)`: `particles_update` < `particles_spu_submit`
+  < `wind_spu_particles` < `wind_definition_lookup` (`wind.c`). The wind's
+  states are still BSP 0's (`wind_globals.count` from the last
+  `wind_update`) and BSP 3 has no weather palette entry: a disk read
+  would end the same (the 2026-10-22 SPU particles' code). Not fixed:
+  proposed to Matt (`wind_spu_particles` FALSE while the count is past the
+  BSP's palette, the PPE path for that frame).
+- 2026-10-27: the wind fix (Matt: "Yes, apply the fix"): `wind.c`'s
+  `wind_spu_particles` returns FALSE while `wind_globals.count` is past
+  the structure BSP's weather palette (the PPE's loop for that frame, as
+  the original). `-Wall`: no new warning. `check`: 0 `r2off`, `.got`
+  0xbcf0. PKG of 13:40 in `build/ps3_bsp/` (the 12:46 one and this). Not
+  tested on the PS3. Matt's question (a free SPU to cache the textures):
+  answered, nothing built. The levels' texel data (Xbox maps): b40 48.8
+  MB, a10 48.7, d40 56.5, a30 34.8, c20 41.3. The 12:46 run's RSX use:
+  the vertex cache 7.0 of its 48 MB, the scratch's peak 659 KB of 16 MB a
+  half.
+- 2026-10-27: the 13:40 PKG on b40 (Matt: "The fix work!"): two reverts
+  across a switch (BSP 3 copied back in 18.8 ms, BSP 0 in 24.9), no halt;
+  RSX memory at most 171.9 of 234 MB. Then the first fight's textures
+  (Matt: "Sure, this seems feasible"): at a campaign map's load
+  (`game.c`'s `game_initialize_for_new_map`, after `ai_place`),
+  `predicted_resources_precache_object_textures` (`predicted_resources.c`)
+  asks the texture cache for the bitmaps every unit, item and projectile
+  predicts, and waits for the reads (`cache_file_block_until_not_busy`);
+  the Xbox maps' sizes: b40 10.1 MB, a10 10.9, d40 9.1. The first fight
+  in the 12:46 run: 15 frames of 40 ms or more (t=22 to 78 s after the
+  boot), about 0.9 s waited for about 70 textures (4.4 MB). Each wait of
+  the texture cache now logs its bitmap's name. Nothing sent or agreed
+  between machines changed: the network version stays. `-Wall`: no new
+  warning. `check`: 0 `r2off`, `.got` 0xbcf0. PKG of 14:10 in
+  `build/ps3_bsp/`. Not tested on the PS3. The listener's log
+  (`ps3log_hudicons.txt`) had 6614 lines before this run.
+- 2026-10-27: the 14:10 PKG on b40 (Matt: "Done. The stutter is gone in
+  the initial fight(s)!"): `[ps3] exit 0`. The preload: 65 object types,
+  182 textures, 10,332 KB in 499 ms at the load. The first fight (40 to
+  92 s after the level's start): 8 frames of 40 ms or more (the 13:40
+  run: 15), 0.36 s of texture waits in them (before about 0.9 s). Still
+  waited for (60 waits, 750 ms in all, most 2 to 170 KB at 15 to 70 ms
+  each: the disk's seeks): the first-person weapons' textures (the
+  assault rifle's compass and numbers plates, the hands, the pistol, the
+  needler), some scenery, devices and effects. The switch to BSP 0
+  (t=154.5 s): copied back in 25.0 ms; that frame 200.9 ms, the next
+  168.3 ms (154 ms of texture waits, 18 textures; before 557 ms).

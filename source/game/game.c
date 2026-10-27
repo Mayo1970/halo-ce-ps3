@@ -12,6 +12,10 @@ struct game_options;
 #include "bink/bink_playback.h"
 #include "bungie_net/network/transport.h"
 #include "cache/cache_files.h"
+#ifdef HALO_PS3
+#include "cache/predicted_resources.h" /* port: predicted_resources_precache_object_textures */
+#include "scenario/scenario_definitions.h"
+#endif
 #include "camera/director.h"
 #include "camera/observer.h"
 #include "cseries/errors.h"
@@ -627,6 +631,11 @@ void game_initialize_for_new_map(
 	from now on go elsewhere, port/linux/game/network_objects.c) */
 	network_objects_placed();
 	ui_widgets_safe_to_load(TRUE);
+#ifdef HALO_PS3
+	/* port: a campaign map's units', items' and projectiles' textures read before its first frame */
+	if (global_scenario_get()->type == _scenario_type_solo)
+		predicted_resources_precache_object_textures();
+#endif
 
 	return;
 }

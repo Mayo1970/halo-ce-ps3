@@ -7,6 +7,8 @@ folders of the save root on the HDD (z:\ the map cache); names match in any case
 #include <stdlib.h>
 #include <string.h>
 
+#include "ps3_timers.h"
+
 #define SAVE_ROOT "/dev_hdd0/data/HaloCE"
 #define HOST_PATH_SIZE 1024
 /* transfers this large are logged with their time: the saves (16 MB a checkpoint) and the map copies */
@@ -275,6 +277,12 @@ int xbox_files_reads_running(void)
 	return reads_running;
 }
 
+/* (bsp_keep.c's reads wait while the game's move bytes) */
+__uint64 xbox_files_transfer_bytes(void)
+{
+	return transfers_bytes;
+}
+
 static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDWORD done_count, BOOL positioned,
 	__uint64 offset, BOOL write)
 {
@@ -317,6 +325,7 @@ static BOOL transfer(struct platform_file *file, void *buffer, DWORD count, LPDW
 		if (result || !done)
 			break;
 		__sync_fetch_and_add(&transfers_bytes, done);
+		__sync_fetch_and_add(&ps3_spike_counts[_ps3_spike_disk_bytes], (uint32_t)done);
 		total += (DWORD)done;
 	}
 	if (positioned)

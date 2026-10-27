@@ -146,6 +146,8 @@ static struct
 	uint32_t refused;
 } rsx_memory;
 
+static int (*memory_hook)(uint32_t size);
+
 /* what the RSX holds; reset at each frame, which the system's overlays can change (epoch: the resets) */
 static uint32_t caches_epoch;
 static struct ps3_gpu_state state;
@@ -315,6 +317,8 @@ void *ps3_gpu_memory_allocate(uint32_t size, uint32_t alignment, int kind, uint3
 {
 	void *memory = rsxMemalign(alignment < 64 ? 64 : alignment, size);
 
+	if (!memory && kind != _ps3_gpu_memory_bsp && memory_hook && memory_hook(size))
+		memory = rsxMemalign(alignment < 64 ? 64 : alignment, size);
 	if (!memory)
 	{
 		rsx_memory.refused++;
@@ -335,6 +339,27 @@ static void memory_release(void *memory, uint32_t size, int kind)
 	rsx_memory.bytes[kind] -= size;
 	rsx_memory.counts[kind]--;
 	rsx_memory.used -= size;
+}
+
+void ps3_gpu_memory_release(void *memory, uint32_t size, int kind)
+{
+	if (memory)
+		memory_release(memory, size, kind);
+}
+
+void ps3_gpu_set_memory_hook(int (*hook)(uint32_t size))
+{
+	memory_hook = hook;
+}
+
+int ps3_gpu_io_map(void *address, uint32_t size, uint32_t *offset)
+{
+	return gcmMapMainMemory(address, size, offset);
+}
+
+void ps3_gpu_io_unmap(void *address)
+{
+	gcmUnmapEaIoAddress(address);
 }
 
 void ps3_gpu_memory_usage(struct ps3_gpu_memory_usage *usage)

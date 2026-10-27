@@ -463,7 +463,10 @@ boolean wind_spu_particles(
 			entry->plane_distance = lookup->plane_distance;
 		}
 	}
-	if (!wind_spu.valid || wind_globals.count > SPU_GAME_WIND_PALETTES)
+	/* the states are the last wind_update's: after a bsp switch, until the next tick, the old bsp's (the PPE's path,
+	which asks only the new bsp's entries) */
+	if (!wind_spu.valid || wind_globals.count > SPU_GAME_WIND_PALETTES ||
+		wind_globals.count > structure_bsp->weather_palette.count)
 	{
 		return FALSE;
 	}
