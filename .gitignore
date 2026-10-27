@@ -21,6 +21,7 @@ compile_commands.json
 *.pdb
 xbox/
 !source/**/xbox/
+!port/ps3/xbox/
 
 # Locally extracted proprietary game data (never commit)
 assets/

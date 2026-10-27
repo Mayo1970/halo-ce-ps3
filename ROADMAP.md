@@ -6404,3 +6404,40 @@ then `./build.sh pkg LOG_IP=<address>`.
   apart). `check`: 0 `r2off`, `.got` 0xbd88. PKG of 15:15 in
   `build/ps3_bsp/`. Not tested on the PS3. Our listener (PID 29676)
   writes `ps3log_sums.txt`.
+- 2026-10-27: the 15:15 PKG on b40 (Matt: "Done"; `[ps3] exit 0`; our
+  listener stopped, UDP 18194 free). The check of a copy back: BSP 0 2.8
+  and 2.9 ms (was 8.0), BSP 3 1.1 (was 3.3); BSP 0's copy back 19.2 and
+  19.8 ms (was 24.6); the switches to BSP 0 67.2 and 67.0 ms (was 71.4);
+  a revert's switch to BSP 3 11.0 ms. The frame after the first switch
+  399 ms: 384 ms of texture waits (18 textures, 3.3 MB) while the
+  checkpoint's writer wrote 20 MB (2190 ms, 681 waiting for reads); in
+  the runs before 130 to 154 ms. The frame rate, 23 play windows: 59.7 on
+  average, 60.0 the median, 2 under 59 (58.7; 54.9, the window of that
+  switch). The 14:58 run: 59.6 on average, 60.0 the median.
+- 2026-10-27: a50 on the 15:15 PKG (Matt: "We'll check that level";
+  "Done"; `[ps3] exit 0`; our listener stopped, UDP 18194 free; the log
+  starts at t=38 s, in the map's load). The first load 42.2 s: a50's
+  cache file made (`a50.map` read, 172 MB in 5.5 s; `z:\cache000.map`
+  written in 4 MB pieces, about 375 ms each). BSP 0 230.7 ms (read 82,
+  swap 44.5, checks 95.9); BSPs 1 to 3 read ahead (24 MB kept); no
+  switch in play (about 4 min). The predicted textures: 164, 8 MB, 1079
+  ms. 49 play windows: 57.8 fps on average, 59.8 the median, 14 under
+  59, 7 under 56 (54.0, 54.6, 49.0, 43.4, 42.6, 53.2, 39.2: 16 to 19
+  actors). Medians all / under 56: a tick 10.4 / 15.6 ms (0.50 / 0.61 a
+  frame), render 8.7 / 11.2, the RSX 6.7 / 6.6 ms a frame, present 2.0 /
+  0.1: the game thread sets the rate. In a tick: objects 6.2 / 9.1
+  (units 3.0 / 3.4, node matrices 1.4 / 1.5, projectiles 0.1 / 1.1,
+  lights 0.4 / 0.8, items 0.3 / 0.7), AI 2.5 / 4.0 (perception 0.9 /
+  1.7, decisions 0.8 / 1.7, of it perform 0.5 / 1.4). Spikes: texture
+  waits at the start (default cube map 253 ms, a blood splat 138, the
+  sniper rifle's angle ticks mask 141) and at the first checkpoint
+  (t=95 to 96 s: 154 and 234 ms; the writer 2208 ms, 857 waiting for
+  reads); ticks of 40 to 80 ms: scripts 43.9 (t=102 s), the tick's sound
+  70.3 (t=137 s) and 27.9 (t=288 s), AI 16 to 22, objects 42.3 (t=275
+  s). Main memory 14.3 MB free at the lowest (the checkpoint's copy 17.9
+  MB at the first checkpoint, DirectSound's packet blocks 4 to 7 MB at a
+  peak of 4.6 MB used, 1.4 MB at t=108 s; steady from t=240 s); RSX
+  151.6 of 234 MB at the peak, 0 refused. `[music]`: a50_01 to a50_03 in
+  order, each old part faded or ended (a50_02's 4 s fade under a50_03's
+  start); a revert ended battle2_perc, and no part started after it
+  before the end.
