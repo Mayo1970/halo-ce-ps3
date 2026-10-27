@@ -185,9 +185,15 @@ prompts, which `hud_hires_button_draw` leaves to them on the PS3): CROSS for A, 
 B, SQUARE for X, TRIANGLE for Y. The menus' message icons are each style's
 buttons in their own colours, drawn with the text's alpha only
 (`ui_widget.c`). The HUD's are stencils, white with the symbol cut out,
-which take the message's colour; both styles share them. The other message
-icons (the triggers, the sticks, the black and
-white buttons) stay the maps'. The art is `ps3_buttons/svg` (made by
+which take the message's colour; both styles share them. The HUD's other
+button icons are PS3 stencils too: the white and black buttons L1 and R1,
+the triggers L2 and R2, START, BACK as SELECT, the thumbstick presses L3
+and R3 (three frames, as the Xbox's), and the sticks (a stick seen from
+above, its letter and four arrows). Each is drawn from a cell of its own
+on its bitmap's texture, as wide as it is (`hud_hires_sprite_place`,
+`hud_messaging.c`); the white button, which shares the black's sprite on
+the Xbox, has a cell of its own. The menus' other message icons stay the
+maps'. The art is `ps3_buttons/svg` (made by
 `ps3_buttons/make.py`); `tools/ps3_button_assets.py build` draws it at 4
 times the bitmaps' size into `port/assets/buttons/ps3`, and the Makefile
 embeds those (`embed`: swizzled A8R8G8B8 with every mip level). A bitmap
