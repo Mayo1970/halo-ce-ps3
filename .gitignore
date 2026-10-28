@@ -45,6 +45,7 @@ shader_audit.md
 /*
 !/.gitignore
 !/.gitattributes
+!/.github/
 !/Makefile
 !/build.sh
 !/README.md
@@ -142,3 +143,8 @@ shader_audit.md
 /tools/*
 !/tools/ps3_*
 !/tools/linux_msvc_semantics.py
+
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/invite-page.yml
