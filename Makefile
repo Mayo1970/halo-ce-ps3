@@ -116,11 +116,12 @@ game: $(GAME_OBJS)
 # ---------- the Xbox layer: port/ps3/xbox, and the Linux build's units that need no host change
 
 PLATFORM_SEMANTICS := $(BUILD)/platform_msvc_semantics.h
-# internet play (p2p*.c) and its streams (KCP) have the game's long, as xnet_ps3.c, which calls them
+# internet play (p2p*.c) and its streams (KCP) have the game's long, as xnet_ps3.c, which calls them;
+# server_*.c: no dedicated server (HALO_SERVER_BUILD 0, as Android and web), only its calls answered
 XBOX_SRCS := $(wildcard $(PS3_DIR)/xbox/*.c) \
              $(addprefix port/linux/src/,bink_null.c d3d8_resources.c halo_linker_common.c msvc_crt.c \
              msvc_wide.c port_config.c xbdm.c xbox_xapi.c p2p.c p2p_crypto.c p2p_discord.c p2p_lobby.c \
-             p2p_signal.c p2p_webrtc.c log_address.c) \
+             p2p_signal.c p2p_webrtc.c log_address.c server_mode.c server_console.c server_master.c) \
              $(KCP_DIR)/ikcp.c
 XBOX_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(XBOX_SRCS))
 

@@ -114,6 +114,10 @@ saw it must not get in); under p2p_lock */
 void p2p_new_invite_if_listed(void);
 /* a message on the topic of the code looked up (p2p_look_up_code), which may be its invite; under p2p_lock */
 void p2p_code_heard(const unsigned char *payload, int size);
+/* the token of the game hosted was listed elsewhere than the brokers (a
+master server's listing: p2p_lobby_host_listing), so going private makes a
+new invite too; under p2p_lock */
+void p2p_token_listed(const unsigned char *token);
 
 /* ---------- p2p_signal.c: signalling through public MQTT brokers */
 
