@@ -6,6 +6,7 @@ xbox_textures.c's Custom Edition texels, memory_watch.c, port_mods.c, d3d8_gl.c'
 #include <string.h>
 
 #include "halo_menus.h"
+#include "master_list.h"
 #include "port_config.h"
 
 /* ---------- voice chat (voice_audio.c): no microphone, and the others' voices are not played */
@@ -497,4 +498,44 @@ int port_mods_save(void)
 
 void port_mods_revert(void)
 {
+}
+
+int port_mods_list(char *text, unsigned long size)
+{
+	if (size)
+		text[0] = 0;
+	return 0;
+}
+
+/* ---------- the server browser's master servers (master_list.c): none asked, the brokers' games only */
+
+int master_list_read(const char *setting, char (*urls)[MASTER_LIST_URL_SIZE],
+	unsigned char (*keys)[MASTER_LIST_KEY_SIZE], int maximum)
+{
+	(void)setting;
+	(void)urls;
+	(void)keys;
+	(void)maximum;
+	return 0;
+}
+
+void master_list_browse(int on)
+{
+	(void)on;
+}
+
+void master_list_refresh(void)
+{
+}
+
+int master_list_policy(void)
+{
+	return _master_listings_brokers;
+}
+
+void master_list_counts(int *count, int *answered, int *asked)
+{
+	*count = 0;
+	*answered = 0;
+	*asked = 0;
 }
