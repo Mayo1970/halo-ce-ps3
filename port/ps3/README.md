@@ -174,9 +174,9 @@ they apply from the next frame; B goes back without them.
 | --- | --- | --- |
 | WIDESCREEN | ON (the default): 852x480 of the game, drawn at 1280x720 over the whole display. OFF: the Xbox's 640x480, drawn at 960x720 in the middle | `display.screen_width`: 0 for the display's shape, 640 for 4:3 |
 | BUTTON ICONS | XBOX: the maps' own buttons. STYLE A (the default): the PS3's, colored circles with white symbols. STYLE B: black circles with colored symbols | `display.button_icons`: `"xbox"`, `"style_a"` or `"style_b"` |
-| PRESET | CUSTOM (the default): FRAME RATE and DYNAMIC RESOLUTION as set. QUALITY: 30 and OFF. PERFORMANCE: 60 and ON. Choosing QUALITY or PERFORMANCE sets those two rows and hides them; CUSTOM shows them, and a change of one of them sets CUSTOM (`menu_functions.c`, "xbox extra options update") | `display.preset`: `"custom"`, `"quality"` or `"performance"` |
+| PRESET | CUSTOM: FRAME RATE and DYNAMIC RESOLUTION as set. QUALITY: 30 and OFF. PERFORMANCE (the default): 60 and ON. Choosing QUALITY or PERFORMANCE sets those two rows and hides them; CUSTOM shows them, and a change of one of them sets CUSTOM (`menu_functions.c`, "xbox extra options update") | `display.preset`: `"custom"`, `"quality"` or `"performance"` |
 | FRAME RATE | 60 (the default): a frame at each refresh, blended between the game's 30 ticks a second (`port/linux/game/render_interpolation.c`). 30: a frame a tick, as on the Xbox | `display.interpolation`: true or false |
-| DYNAMIC RESOLUTION | ON: in heavy scenes the 3D view is drawn smaller, then scaled up under the HUD (below). OFF (the default): always whole | `display.dynamic_resolution`: true or false |
+| DYNAMIC RESOLUTION | ON (the default): in heavy scenes the 3D view is drawn smaller, then scaled up under the HUD (below). OFF: always whole | `display.dynamic_resolution`: true or false |
 
 Split screen (two or more players on the PS3) always plays at 30 frames per
 second, without the dynamic resolution, whatever FRAME RATE, DYNAMIC
@@ -214,7 +214,7 @@ holds the effects' colour, its alpha the frame's transmittance, and its
 depth the frame's, one texel of each four (the Z24S8 surface read as
 A8R8G8B8).
 
-`display.dynamic_resolution` (DYNAMIC RESOLUTION, false by default) draws
+`display.dynamic_resolution` (DYNAMIC RESOLUTION, true by default) draws
 the 3D view smaller while the RSX is too slow for 60 frames per second.
 `ps3_gpu.c` reads the RSX's time in each frame's windows (its
 timestamps, two frames on): when the last frames average over 14 ms, the
