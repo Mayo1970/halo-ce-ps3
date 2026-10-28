@@ -32,6 +32,7 @@ Rules:
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks (`render_interpolation.c`), each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p | In progress. Matt (2026-10-06) added it as the last goal; 720p added 2026-10-18. Analysis done 2026-10-18; the fixes built 2026-10-19 (Matt: fixes first, then measure), with VIDEO SETTINGS (WIDESCREEN, FRAME RATE) inside SETTINGS. On hardware 2026-10-19 (after the timestamp fix): menus 60 frames per second, a30 calm 54 to 60, heavy combat 33 to 37. Step 5 (the Direct3D thread on the PPE's other hardware thread) built 2026-10-19; on hardware the same day: it runs, a30 heavy combat 38 to 47. Measurements 2026-10-19: the game thread sets the rate (the RSX about 10 ms a frame); the sound, the units' physics and the HUD timed, medians in ROADMAP.md's Log. Matt chose all three next steps (2026-10-19): the collision tests' time by user, the sound's decode on the mixer's thread with short lock holds, the screen quads' timers; run on hardware the same day: `sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame, the collision tests 3.63 / 5.89 ms a frame (the sounds' obstruction rays 1.60 / 1.94). Next steps 1 to 3 (the obstruction kept up to 4 ticks; the rays and the HUD timed inside) run on hardware the same day: the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91 ms a frame; each HUD element 40 to 140 us outside its draw. The SPEs and VMX: see below. The next step is Matt's choice of four (ROADMAP.md, "Now"). ROADMAP.md ("G8 analysis"). |
 | G9 The game thread's render on the SPEs: in heavy scenes the game thread sets the frame rate, so more of its render (render-only work, as G8's SPU jobs) goes to the SPEs | In progress (Matt, 2026-10-22: "Save that as the next goal. Maybe we can delegate more tasks to the SPE for the Game thread's render."; "Work on Goal 9."). Analysis done 2026-10-22, steps proposed: ROADMAP.md ("G9 analysis"). Steps 2 to 5 (Matt: "Work on step 2, 3, 4 and 5 together."): the render SPU with the shadows, the weather, the lights' surfaces, the window's visible surfaces, the particles' sprites and the contrails' strips; built 2026-10-22 (PKG of 17:18, `build/ps3_g9/`); on hardware the same day a clean exit, the render 7.8 ms a frame on median (the 15:18 run 9.0), the game thread's SPU waits 0 (ROADMAP.md's Log). Then file reads in 128 KB calls (the BSP switch's stutter: a 5.4 MB BSP read in 564 ms), the decals' batch in one call, the shadows' sort and triangles on the render SPU: built 2026-10-22 (PKG of 18:00). The evidence (the runs of 14:33 and 15:18, 12 windows under 50 fps, loads left out): the frame 21.6 ms, of it game ticks 5.15 and render 14.65; the Direct3D thread busy 12.15 ms and the game thread's waits for it 0.1, so the Direct3D thread is not the limit. The render's parts: objects 3.2, effects 2.3, specular 2.1, lights 1.65, diffuse 1.3, interface 1.25, lightmaps 1.05, visibility 0.4, sound 0.25 ms a frame. The Direct3D thread's options (`colours` timed inside, the pixel shaders' copies kept across frames) and the shadows' jobs ahead of the particles' gain about 0.013 ms a frame at most. ROADMAP.md's Log, 2026-10-22. |
 | G10 The Direct3D thread's work on an SPU: the records, the draw state and the RSX commands, so that the game thread has the PPE's core alone; and a dynamic resolution for the views where the RSX sets the rate | Proposed (Matt, 2026-10-25: "Can you write the Direct3D thread's work on an SPU as the next goal?"). Steps 2 and 3 built 2026-10-25 (Matt: "Do The Direct3D thread's work on an SPU and render_interpolation_tick"; the probe skipped): `spu_direct3d.c`, the render interpolation's tick on the game SPU; PC checks: the same RSX commands as HEAD's Direct3D thread, the same records as the PPE's walk (ROADMAP.md's Log). Run on b40 2026-10-25: a clean exit, 59.5 / 54.0 fps (all play windows / those under 56 fps); the game thread waits 7.8 ms a frame in present; the RSX sets the rate in the heavy windows (effects and the dynamic lights' specular). The run's proposals 1 to 3 (Matt: "I'd say make 1, 2 and 3"; the effects pass split on the RSX, the Direct3D SPU's timers, pixel shader 76 at 4 registers) built 2026-10-25 and run on b40 the same day: pixel shader 76 107 to 78 us a draw; the particles 1.2 ms a frame on the RSX on median, up to 3.7 (large blended sprites). That run's proposals 1 to 3 (Matt: "Do 1-3"; the unchanged fragments killed, the half resolution particles as a setting, `particles_update` on the game SPU) built 2026-10-25, PKG of 17:53, run on b40 the same day: 59.9 / 54.25 fps; the drops the RSX's (the specular part, the effects); step 1's effect not seen, step 2 off, step 3 0.01 ms a frame on the game thread. The kill's clean-up (Matt: "Clean up change 1.") built 2026-10-25, PKG of 18:48, not tested on the PS3. The dynamic resolution (step 4; Matt: "Ok then, let's build it.") built 2026-10-26: `display.dynamic_resolution` (EXTRA OPTIONS' DYNAMIC RESOLUTION), PKG of 12:17 in `build/ps3_dynamic/`, not tested on the PS3 (ROADMAP.md's Log). See "G10 plan". |
+| G11 Custom Edition maps on the PS3: their tags, BSPs, vertices, bitmaps and sounds in the PS3's byte order, so that the PC builds' Custom Edition support (`port/linux/game/custom_edition_*.c`) runs; map sharing's downloads on | Next (Matt, 2026-10-28: "Any way to fix the custom maps on Ps3?", then "mark this as next goal"). Parked 2026-10-28 (Matt: "park this goal and hide the custom maps in the browser for now"; the browser hides games on maps the PS3 has not). Analysis done 2026-10-28, steps proposed: ROADMAP.md ("G11 analysis"). See "G11 plan". |
 
 ## SPEs and VMX (candidates)
 
@@ -115,6 +116,47 @@ goal?"
        (AGENTS.md, "Settings").
 - The hardware test: b40's heavy combat, the medians of the play windows
   (all / under 56 frames per second).
+
+## G11 plan (2026-10-28)
+
+Matt: "Any way to fix the custom maps on Ps3?", then "mark this as next
+goal".
+
+- Aim: Halo Custom Edition maps (cache version 609, with `bitmaps.map`,
+  `sounds.map`, `loc.map` in `custom_maps`) run on the PS3 as on the PC
+  builds; map sharing downloads them; the server browser's IF DOWNLOADABLE
+  then lists the games on maps the PS3 has or can download.
+- Why they do not run: `xbox/xbox_tag_swap.c` swaps the Xbox maps' tags
+  to big-endian at load (Invader's layouts, `xbox_tag_swap_tables.h`). No
+  such swap exists for Custom Edition caches, and the Custom Edition code
+  reads tag fields natively (`memcpy`), so `port_stubs.c` reports "none"
+  (`platform_custom_edition_root`, the texels, the tag cache).
+- What exists: the loader and conversions (`cache_file_formats.c`, which
+  reads every field little-endian through bounds-checked readers;
+  `custom_edition_cache.c`, `_geometry.c`, `_bitmaps.c`, `_sounds.c`,
+  `_scripts.c`, `_objects.c`, `_maps.c`; about 10,800 lines) already
+  compile in the PS3 build. `docs/custom_edition_caches.md`: 48 groups
+  have the Xbox's layout; `mod2`, `scex`, `devc`, `tagc` are Custom Edition
+  only (Invader has their layouts).
+- Steps (proposed):
+  1. The tag swap: `tools/ps3_tag_swap.py` also writes the Custom Edition
+     groups' layouts; a Custom Edition path in `xbox_tag_swap.c` (tag
+     index, tags, scripts, the BSP at its switch) before the Custom
+     Edition conversions run. A PC check: one map swapped, compared field
+     by field (as the drawcheck method).
+  2. The raw data that is not tags: model and BSP vertices (the Xbox
+     path's helpers), the PC bitmaps' pixels for the RSX
+     (`halo_custom_edition_texels_*`), the decoded sounds' samples.
+  3. Memory: the Custom Edition tag window (23 MB of address space on the
+     PC builds) against the PS3's free main memory (34.6 MB in the
+     2026-10-28 run).
+  4. The stubs taken out step by step: Custom Edition maps, map sharing's
+     downloads, the Custom Edition HUD.
+- The hardware tests: a stock-style map (Blood Gulch CE), then a community
+  map, then a map downloaded from a PC host.
+- Risks: layouts the footprint tool did not measure; large community maps
+  against the memory; each byte-order fault shows as a wrong picture or a
+  crash, so each conversion needs its own check.
 
 ## G1 progress
 

@@ -1314,6 +1314,11 @@ int p2p_lobby_filter(struct p2p_listing *games, int count, const struct p2p_lobb
 			continue;
 		if (choices->engine_type && game->engine_type != choices->engine_type)
 			continue;
+#ifdef HALO_PS3
+		/* port: no Custom Edition maps on the PS3 yet (G11 parked): a game on a map it has not is hidden */
+		if (state != P2P_LOBBY_MAP_INSTALLED)
+			continue;
+#endif
 		if ((choices->maps == P2P_LOBBY_MAPS_NO && state != P2P_LOBBY_MAP_INSTALLED) ||
 			(choices->maps == P2P_LOBBY_MAPS_DOWNLOADABLE && state == P2P_LOBBY_MAP_MISSING))
 		{

@@ -305,6 +305,24 @@ boolean collision_surface_edge_ring_continues(
 	return FALSE;
 }
 
+#ifdef HALO_PS3
+/* port: the report out of line, so that the check saves no register (a load-hit-store a call) */
+static boolean __attribute__((noinline)) collision_bsp_invalid_surface_index(
+	struct collision_bsp const *bsp,
+	long surface_index)
+{
+	if (!warned_about_collision_surface_index)
+	{
+		error(_error_silent, "collision surface #%ld is not one of the bsp's %ld",
+			surface_index,
+			bsp->surfaces.count);
+		warned_about_collision_surface_index = TRUE;
+	}
+
+	return FALSE;
+}
+#endif
+
 boolean collision_bsp_valid_surface_index(
 	struct collision_bsp const *bsp,
 	long surface_index)
@@ -313,6 +331,9 @@ boolean collision_bsp_valid_surface_index(
 	{
 		return TRUE;
 	}
+#ifdef HALO_PS3
+	return collision_bsp_invalid_surface_index(bsp, surface_index);
+#endif
 
 	if (!warned_about_collision_surface_index)
 	{

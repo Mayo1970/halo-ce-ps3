@@ -27,8 +27,9 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 - Upstream merges (2026-10-16): `port/ps3/xbox/` is tracked now (`git add -f`,
   `ec01a30`). The remote `upstream` is OpenCE's GitHub repository; the local
   graft `git replace --graft 4b4874c e3389991` joins the two histories.
-  OpenCE `main` at `8102e711` is merged (`63949dd`). The next merge: in a
-  worktree, `git -c core.autocrlf=false merge upstream/main` (the system
+  OpenCE `main` at `2ca5bbea` is merged (`b7f8d2b4`, 2026-10-28). The next
+  merge: `python tools/ps3_upstream_check.py --merge` (in
+  `../PS3-upstream-check`, with `core.autocrlf=false`: the system
   `autocrlf=true` would write CRLF), then a PS3 build and test.
 - The other documents:
   - `GOALS.md`: the goal stack, the G1 step details, the blocker analysis.
@@ -53,6 +54,22 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 
 ## Now (2026-10-22)
 
+- 2026-10-28: the next goal is G11, Custom Edition maps on the PS3 (Matt:
+  "Any way to fix the custom maps on Ps3?", then "mark this as next
+  goal"). Not started. The plan: GOALS.md ("G11 plan").
+- 2026-10-28: G11 analysis done (Matt: "Analysis first"): "G11
+  analysis". No code changed. Next: Matt's choice of the steps; Custom
+  Edition maps needed on the PC for the swap's PC check.
+- 2026-10-28: G11 parked (Matt: "park this goal and hide the custom maps
+  in the browser for now"). The browser hides each game on a map the PS3
+  has not (`p2p_lobby_filter`, a `HALO_PS3` block). Compiled
+  (`build/ps3_browser/`, that object only). No PKG, not committed.
+- 2026-10-28: OpenCE upstream merged (64 commits, to `2ca5bbea`; network
+  version 38 to 39): hardware SUCCESS (the run's log: a30, a PS3-hosted
+  internet co-op game with OpenCE Windows build 314, a version 39 host
+  joined). No dedicated server on the PS3. `b7f8d2b4` and `7b82fdf1` on
+  `main`. A new shader_keys sweep is due (a rasterizer file changed). See
+  the Log.
 - 2026-10-27: the BSP switch's stutter, options 1 and 2, and a spike log
   for the first combat (Matt: "go with option 1 and 2, and add a timer
   for the first combat"): the level's BSPs kept in RSX memory
@@ -1085,10 +1102,142 @@ This file is the handoff of the Halo CE PS3 port from one session to the next.
 | G4 Direct3D 8 on the RSX: the main menu shows | Done 2026-10-05 (hardware SUCCESS, run 5) |
 | G5 XInput on the pads and DirectSound on the audio port: the menu operates, with sound | Done 2026-10-05: the pads (run 1, hardware SUCCESS); Matt moved the sound to G6 |
 | G6 First playable level (a10) | Closed 2026-10-06 (Matt started G7): the sound works (run 1, hardware SUCCESS); a10 at 30 frames per second |
-| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, not tested; the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
+| G7 Performance and hardening: memory budget, saved games on the HDD, network | In progress: analysis done 2026-10-06 (see "G7 analysis"); step 1 (the measurement run) and the save items of step 2: hardware SUCCESS 2026-10-06 (a30; the larger maps not covered); map scan 2026-10-06 (see "G7 analysis"); step 3 (system link with the PC builds) built 2026-10-06, works (Matt, 2026-10-27); the swap of the messages the upstream merge brought built 2026-10-16, not tested; internet play and the Xbox menus' INTERNET PLAY screen built 2026-10-16, 4 public games joined in Matt's run (the log); LAN PLAY in SYSTEM LINK PLAY's place built 2026-10-16, not tested |
 | G8 60 frames per second and 720p: the frames between the 30 Hz ticks, each frame in 16.7 ms on the game thread and the RSX; the game drawn at 720p (Matt, 2026-10-18) | Analysis done 2026-10-18; the fixes run on hardware 2026-10-19 (menus 60, a30 heavy combat 33 to 37); step 5 (the Direct3D thread) runs on hardware 2026-10-19 (a30 heavy combat 38 to 47); the measurements after it done 2026-10-19; Matt chose its three next steps (collision time by user, the sound's decode off the game thread, the screen quads' timers): run on hardware 2026-10-19 (`sound_render` 1.10 / 2.15 to 0.30 / 0.70 ms a frame; the collision tests 3.63 / 5.89 ms a frame); the next steps 1 to 3 (the obstruction kept up to 4 ticks, the rays and the HUD timed inside) run on hardware 2026-10-19 (the sounds' rays 1.60 / 1.94 to 0.58 / 0.93 ms a frame; the rays' objects part 1.07 / 2.91); the SPEs and VMX candidates written down (see "G8 analysis", "SPEs and VMX"); the first SPE task (the SPU set-up, the DirectSound mixer's decode and mix on an SPU) run on hardware 2026-10-19 (the mixer thread's PPE time 469 to 107 us a chunk; SUCCESS); the second (the Direct3D thread's vertex conversions and index copies on an SPU) run on hardware 2026-10-19 (its vertices 3.3 to 0.5 ms a frame; SUCCESS), then its waits for the SPU at a command buffer segment's flush only (run on hardware: 0.6 to 2 waits a frame, before one a task); the conversions faster, exact VMX (the rays' objects part, `matrix4x3_multiply`) and each cluster's object list walked once run on hardware 2026-10-19 (SPU 22 to 26 cycles an element; a ray's objects part 37.2 to 23.3 us; SUCCESS); the node matrices, particles, point physics and AI timed inside, run on hardware 2026-10-19; the AI's perception, control and movement timed inside, and the validity checks without a branch each, run on hardware 2026-10-19 (the checks 0.15 to 0.09 ms a tick; the AI's line-of-sight rays 57 us each); the line of sight, action control and the move timed inside, and the wind's lookups kept for the tick, run on hardware 2026-10-19 (the wind 0.88 to 0.60 us a call; a guard's path build 1.8 to 3.6 ms; a flying vehicle pilot's vector avoidance 334 us); the path builds, the vector avoidance and the line-of-sight objects loop timed inside, run on hardware 2026-10-19 (a path search 1.1 ms and its path made 1.5; the heaviest combat 19.0 ms a tick); the checkpoint written by a thread of its own, the clusters' kept blocks, and timers inside the path search, the vehicles and the decisions, run on hardware 2026-10-19 (the checkpoint stutter gone: 30 ms on the game thread; the rays' iterator 19.5 to 9.3 us a ray; SUCCESS); the smoothing and physics timed inside, the search's debug copy skipped, the surfaces' edges kept, the checkpoint's used parts only, run on hardware 2026-10-19 on b40 after a fix (the first checkpoint's `free` of NULL) (59.9 frames per second on median; the kept edges no faster; the RSX's specular pass up to 9.0 ms a frame; SUCCESS); the kept edges out, the checkpoint's VMX copy, the specular part by split and by pixel shader, the weather, transparent geometry and old physics timed, the heap log, run on hardware 2026-10-19 (the checkpoint 38-40 to 10.4-11.9 ms; the specular part's shaders 36 to 96 RSX instructions; the heap's growth from the sound streams' buffers; SUCCESS); the shorter pixel shader translation, the sound streams' buffers kept, the translator's buffers fixed, the weather's point physics, ground planes and transparent sort timed, run on hardware 2026-10-20 (the RSX's specular part 5.6 to 4.4 ms a frame on median; the heap's growth stops; SUCCESS); the weather's rays without surfaces moved without the collision call and the transparent model order from kept boxes (the same results: PC checks), the ground planes' query, `render_model` and the lights and diffuse passes timed inside, the streams' pool of 64: built 2026-10-20; on hardware 2026-10-22 the kept boxes crashed the game thread twice (step 627, the transparent sort; cause not found): taken out (Matt: option 2), then a clean run (the weather in the snow 1.27 to 0.86 ms a frame); the stream buffers' blocks (no heap fragments: 22.3 MB free at the end, before 19.3), the sphere query on the kept blocks (13.3 to 10.3 us a call; the same answer: PC check), `render_model_parts` and the shadows timed inside: run on hardware 2026-10-22 (SUCCESS); the SPU candidates written down (the Log); the game thread's jobs on a third SPU (the checkpoint's copies, the shadows' surfaces, the weather, the particles' rays; PC check on the 23 maps): built 2026-10-22, run on hardware 2026-10-22 (the checkpoint 12.9-15.1 to 3.1 ms; the shadows' surfaces 103 to 4.7 us a shadow; the weather 1.2 to 0.05 ms a frame; the particles 3.8 to 2.9 us each); the pixel shaders' copies on the conversions' SPU and the particles' rays taken a frame late: built 2026-10-22 |
 | G9 The game thread's render on the SPEs (Matt, 2026-10-22) | Analysis done 2026-10-22, steps proposed (see "G9 analysis"); steps 2 to 5 (the render SPU: the lights' surfaces, the window's visible surfaces, the particles' sprites, the contrails' strips): run on hardware 2026-10-22 (a clean exit; render 9.0 to 7.8 ms a frame on median; the SPU waits 0); file reads in 128 KB calls (the BSP switch's stutter), the decals' batch in one call, the shadows' sort and triangles on the render SPU: built 2026-10-22; the handoff's items 2 to 4 (the generic shaders' definitions kept, the decals' vertices converted by the SPU, the shadows' kept node matrices and parts; Matt skipped 1 and 5): built 2026-10-24, run on hardware 2026-10-24 (the generic definitions all kept; the shadow models 78 to 57 us; the parts' setup never kept); the decals of a layer in one order over its clusters, the shadows' kept node matrices by hash, the transparent sort's model bounds in exact VMX, the server browser's log: built 2026-10-24, run on hardware 2026-10-24 (59.4 / 54.9 fps on median; the browser works: 28 to 34 games; the shadows and the sort no faster); the timers inside the model draws, the Direct3D thread, the node matrices, the render interpolation and the file reads, then the draw prologue's compares, the index ranges, the uniforms and the scissor: run on hardware 2026-10-24 (a draw's Direct3D work on the game thread 6.1 to 4.2 us; 59.6 / 51.5 fps) |
 | G10 The Direct3D thread's work on an SPU, so that the game thread has the PPE's core alone; and a dynamic resolution for the views where the RSX sets the rate (Matt, 2026-10-25) | The plan and the evidence: GOALS.md ("G10 plan"). The Direct3D thread's work on an SPU and the render interpolation's tick on the game SPU: built 2026-10-25 (PC checks: the same RSX commands, the same records), run on hardware 2026-10-25 (b40, a clean exit; 59.5 / 54.0 fps; the game thread waits 7.8 ms a frame; the RSX sets the rate in the heavy windows); the run's proposals 1 to 3 (the effects pass split on the RSX, the SPU's timers, pixel shader 76) built and run on hardware 2026-10-25 (pixel shader 76 107 to 78 us a draw; the particles 1.2 ms a frame on the RSX on median, up to 3.7); that run's proposals 1 to 3 (the unchanged fragments killed, the half resolution particles as a setting, `particles_update` on the game SPU) built 2026-10-25, PKG of 17:53, run on b40 the same day (59.9 / 54.25 fps; the drops the RSX's: the specular part, the effects); the kill's clean-up built 2026-10-25, PKG of 18:48, not tested on the PS3; the dynamic resolution (`display.dynamic_resolution`, EXTRA OPTIONS' DYNAMIC RESOLUTION) built 2026-10-26, PKG of 12:17, not tested on the PS3 |
+| G11 Custom Edition maps on the PS3: their tags, BSPs, vertices, bitmaps and sounds in the PS3's byte order, so that the PC builds' Custom Edition support runs; map sharing's downloads on (Matt, 2026-10-28) | Parked 2026-10-28 (Matt: "park this goal and hide the custom maps in the browser for now"). Analysis done 2026-10-28, steps proposed (see "G11 analysis"). The plan: GOALS.md ("G11 plan") |
+
+## G11 analysis (2026-10-28)
+
+Matt: "I'd like to work on custom maps support", then "Analysis first".
+No code changed.
+
+### What runs on the PC builds
+
+`custom_edition_cache_tags_load` (`custom_edition_cache.c`), then
+`custom_edition_cache_tags_convert`, in this order:
+
+| Part | Where | Reads tag data |
+| --- | --- | --- |
+| The loader: header, tag data read to `0x40440000`, tag index, BSP checks, resource-held tags read in and relocated | `cache_file_formats.c` `custom_edition_cache_load` | Little-endian readers (`read_u32`, 137 calls) |
+| Resource offsets combined | `cache_file_formats.c` | Little-endian readers |
+| Sounds decoded (Ogg Vorbis, PCM, ADPCM to Xbox ADPCM) | `custom_edition_sounds.c` `custom_edition_sounds_decode` | Native structs (`sound_definition`, pitch ranges, permutations) |
+| The conversion of bytes (shader types, `scex` to `schi`, bitmaps' and sounds' states, the HUD scale, the behaviours) | `cache_file_formats.c` `custom_edition_cache_convert` | Little-endian readers and writers |
+| The tag validator | `tag_validate.c` `tag_validate_custom_edition_tags` | Native structs |
+| Bitmaps checked, channel orders found | `custom_edition_bitmaps.c` | Native structs |
+| Scripts given this build's indices | `custom_edition_scripts.c` | Native structs |
+| Models (`mod2` to `mode`): 68-byte vertices from the model data compressed, strips copied, buffers made | `custom_edition_geometry.c` | Native structs; the model data by `csmemcpy` |
+| Each BSP at its load: header and range checked, the validator, the materials' vertices compressed | `cache_files.c`, `custom_edition_geometry.c` | Native structs |
+| Pixels and samples: by offset in the combined space (map, decoded sounds, `bitmaps.map`, `sounds.map`) | `custom_edition_cache_read` | Bytes |
+
+So one swap point serves almost all of it: after `custom_edition_cache_convert`
+(the last little-endian part), before the validator (the first native
+part). One native part runs before it: the sounds' decode.
+
+### What the PS3 has now
+
+- Every unit above compiles and links in the PS3 build (stb_vorbis too).
+  `port_stubs.c` turns them off: `halo_custom_edition_tag_cache` gives
+  NULL, so `custom_edition_cache_present`, the map lists, map sharing's
+  downloads (`map_share.c`) and the loader all refuse.
+- `xbox_tag_swap_tables.h` already has the Custom Edition groups (Invader
+  `696830ff80af`): `mod2` (`GBXModel`, its 0x84-byte part), `scex`, `devc`,
+  `tagc`. GOALS.md's step 1 assumed they were missing.
+- `cache_files.c` already calls `cache_files_swap_structure_bsp` for a
+  Custom Edition BSP too (the PS3 block is not conditional), before
+  `tag_validate_structure_bsp` and `custom_edition_structure_bsp_load`.
+  `bsp_keep_map(NULL, 0, 0)` turns the BSP keep off for such a map.
+- `d3d8_rsx.c` has a per-texture RSX remap (`entry->gpu.remap`): the
+  channel orders (`halo_custom_edition_texels_channels`) can use it.
+
+### The problems
+
+1. **The address.** Custom Edition tag data points into
+   `0x40440000`-`0x41B40000` (23 MB). The PS3 reserves only the Xbox window
+   at `0x80000000`. Whether lv2's mmapper gives a 256 MB area at
+   `0x40000000` is not known (no log has the areas' addresses). If it does
+   not, every pointer must be relocated: the swap walk knows each pointer
+   field (blocks, data, references, instances), so it can add a delta, and
+   the loader's `CUSTOM_EDITION_TAG_CACHE_ADDRESS` checks need the PS3's
+   base.
+2. **The memory.** lv2 backs no page lazily: the window's 1 MB chunks must
+   be mapped when used (the loader writes the tag data at the bottom, the
+   BSPs at the top). The lowest free main memory was 15.6 MB (a50,
+   2026-10-27). While a Custom Edition map runs, the Xbox tag cache
+   (`0x803A6000`, 22 MB, `physical_memory_map.c`) is not used
+   (`cache_files.c` takes `halo_custom_edition_tag_cache()` for it): its
+   chunks can be unmapped and the same amount mapped in the Custom Edition
+   window, then given back when the map unloads. Net cost: about 1 MB.
+3. **The tag header.** The Custom Edition tag header is 0x28 bytes with
+   `tags` at 0x24 (the Xbox's 0x24, at 0x20): `tag_swap_tag_data` refuses
+   it. A Custom Edition entry is needed (instances, scenario, checksum,
+   count, the model data's words; no D3D buffers).
+4. **The sounds' order.** `custom_edition_sounds_decode` reads native
+   structs before the conversion, and the conversion empties any sound
+   still not Xbox ADPCM or PCM after it. Options:
+   - a. On the PS3: decode after the swap, and the conversion's emptying
+     skipped (a `HALO_PS3` block in `cache_file_formats.c`); the decode
+     already empties a sound it cannot convert. (Recommended: one walk,
+     a small upstream change.)
+   - b. Swap to big-endian, decode, swap back, convert, swap again: no
+     upstream change, but a reverse walk and two more walks a load.
+5. **The model data.** The 68-byte vertices and the strips are read from
+   the map's model data into a buffer (`custom_edition_cache_models_convert`),
+   little-endian. They need a swap by the parts' offsets and counts (after
+   the tag swap), before `custom_edition_models_convert`.
+6. **Bitmaps.** The PC pixels are little-endian as the Xbox's are, and
+   `rasterizer_xbox_bitmap_rebuild_hardware_format` lays them out as an Xbox
+   cache would. So `d3d8_rsx.c` converts them as it converts the Xbox's.
+   To check: the rebuild's 16-bit and 32-bit texel copies on a big-endian
+   CPU. The channel orders (multipurpose maps, HUD meters) need
+   `halo_custom_edition_texels_channels` and `_forget` in `d3d8_rsx.c`
+   with the RSX remap (the PC's `xbox_textures.c` keeps a list by address).
+7. **Sounds.** The decode writes Xbox ADPCM byte by byte (its block
+   headers little-endian, `adpcm_encode`), as `dsound_ps3.c` reads it. To
+   check: `pcm_decode`'s reads of 16-bit PCM.
+8. **Texture memory.** The PS3's texture cache is the Xbox's 22 MB
+   (`halo_port_capacity.h`, as Android's). Large maps (Elite_Alpha_Siege,
+   bigass_v3) draw some textures as the default one. Not for this goal's
+   first test; the RSX's 256 MB could hold a larger cache later.
+9. **Unknowns for a PC check.** Whether a Custom Edition cache's GBX part
+   blocks (vertices, triangles) are empty (the walk must not follow
+   them: their geometry is in the model data); whether the BSP header's
+   vertex buffer words are 0 (the loader says "no Xbox vertex buffers").
+
+### Steps (proposed)
+
+1. **The address probe.** At boot, after the Xbox window: reserve the
+   256 MB area at `0x40000000` (`ps3_host_window_reserve`) and log the
+   result. One run on the PS3 decides problem 1. (Small; could go in the
+   next PKG of any goal.)
+2. **The swap, on the PC first.** In `xbox_tag_swap.c`: the Custom Edition
+   tag header, the GBX parts without their blocks, the model data's
+   vertices and strips; the relocation delta if step 1 says so. A PC check
+   in Docker (host GCC, as `tools/ps3_tag_swap_check.sh`): the loader and
+   the conversion (`cache_file_formats.c` is standalone C) on each Custom
+   Edition map at hand, then the swap with coverage: every byte reached
+   once, names and padding aside, 0 errors.
+3. **The game's side.** In `custom_edition_cache_tags_convert`, a
+   `HALO_PS3` block: the swap after `custom_edition_cache_convert`, the
+   sounds' decode after it (problem 4, option a), the model data's swap
+   before `custom_edition_models_convert`. `halo_custom_edition_tag_cache`
+   in `xbox_memory.c` (the window, its chunks traded with the Xbox tag
+   cache's while the map is loaded).
+4. **The renderer.** The channel orders in `d3d8_rsx.c` (RSX remap);
+   `hud_hires_asset_custom_edition` and the Custom Edition HUD meter stay
+   stubs for the first test.
+5. **The hardware tests.** Blood Gulch CE from `custom_maps` (New Game,
+   CUSTOM MULTIPLAYER), then a community map, then a download from a PC
+   host (map sharing).
+
+### Needed from Matt
+
+- Custom Edition maps on the PC for step 2's check: at least
+  `bloodgulch.map` and Custom Edition's `bitmaps.map`, `sounds.map`,
+  `loc.map` (none found under `E:\Users\Matteo\Desktop` or Program Files).
+  The same files on the PS3 in `/dev_hdd0/data/HaloCE/custom_maps` for
+  step 5.
 
 ## G9 analysis (2026-10-22)
 
@@ -6441,3 +6590,106 @@ then `./build.sh pkg LOG_IP=<address>`.
   order, each old part faded or ended (a50_02's 4 s fade under a50_03's
   start); a revert ended battle2_perc, and no part started after it
   before the end.
+- 2026-10-27: the tick's exact cuts (Matt: "Do the cut then", after
+  "will the exact cuts still keep online connectivity?"). The whole-game
+  profiler built again (the 2026-10-26 method; this session's
+  scratchpad `prof/`): a host layer on glibc, stubs for the RSX, SPUs,
+  audio, pads and sockets, `--wrap game_tick` markers, a PPE-model
+  plugin (caches, LHS, gshare, and register latencies: int 2, mul 7,
+  load 5, FP 10, fdiv 34). a50 fight from `init.txt` and cues: at 37 s
+  `(set cheat_deathless_player true)` (a cue line with a global must
+  start with its parenthesis: the console's space split), the player to
+  `hunter_safe_flag`, `ai_place` of covenant_area5's grunts_o, elites_o,
+  jackals_o, elites_g, grunts_g, jackals_g and marines_area4's marines_m
+  and marines_b: 22 actors. Ticks 1,500 to 2,300: 8.40 ms a tick in the
+  model, IPC 0.32; objects_update 4.72 (the sphere test 1.41, node
+  matrices 0.83, lights' reconnects 0.44), ai 3.36 (a path search 1.72:
+  this scene's, the PS3's a50 run had 0.04). LHS 52,000 a tick: small
+  functions that kept a TOC-loaded address in r31 for after an assert's
+  call (`global_structure_bsp_get`, `game_time_get`, ...).
+  - Built: `system_exit` and `halt_and_catch_fire` `noreturn` on the PS3
+    without HALO_RELEASE (`cseries.h`; they never return there), so an
+    assert's path keeps no register; `collision_bsp_valid_surface_index`'s
+    report out of line (a tail call); `object_bounds_cache_first_vector`'s
+    batch counts in registers. Code 0x8b25a8 to 0x859dc8 bytes (-4 %).
+  - The model, the same ticks: 8.40 to 8.01 ms a tick (-4.6 %),
+    instructions 8.55 to 8.15 M, LHS 6 to 4 % of the cycles; ai -7.6 %,
+    objects_update -2.6 %, lights' reconnects -8 %, projectiles -7 %.
+  - The same results: the 20 MB game state dumped at ticks 600, 1,200,
+    1,800 and 2,400; three base runs differ among themselves (the local
+    random's users: particles, contrails, decals, effects, decal
+    vertices; 2 bytes of objects), so a byte counts where the three
+    agree. The cut's bytes apart there: objects' and props'
+    `location.bonus`, actors' `secondary_look_direction` past its index
+    (stack leftovers no code reads, as on 2026-10-26), and the noisy
+    arrays. Nothing sent or agreed between machines changed: the network
+    version stays.
+  - `check`: 0 `r2off`, `.got` 0xbd70. PKG of 17:25 in `build/ps3_cut/`.
+    Not tested on the PS3.
+- 2026-10-27: Matt: a network game between the PS3 and a PC build worked
+  (an earlier PKG, before the exact cuts). The Log has those runs: the
+  03:08 run of 2026-10-16 (4 public games joined; the 44-player one at
+  10.8 fps) and the merge run of 2026-10-24 (a version 38 host's game
+  joined, lowest free main memory 36.6 MB). Matt: LAN system link with a
+  PC build works too (G7 step 3; no log here). Next: the PS3 as host, a
+  PC client joining.
+- 2026-10-27: the 17:25 PKG (`build/ps3_cut/`, the exact cuts) on a50
+  (Matt: "Done"; `[ps3] exit 0`; our listener stopped, UDP 18194 free;
+  `ps3log_cut.txt`). Played to a50_03's fight, one death and revert. 65
+  play windows: 57.7 fps on average (the 15:15 run 57.8), 59.8 the
+  median, 13 under 56 (the 15:15 run: 7). Medians all / under 56, this
+  run against the 15:15 run: a tick 11.0 / 13.5 ms (10.4 / 15.6), 0.50 /
+  0.57 a frame (0.50 / 0.61); objects 6.40 / 7.76 (6.22 / 9.14); ai 2.85
+  / 3.53 (2.53 / 4.00); actors 12.0 / 14.2 (11.0 / 16.5); render 8.4 /
+  10.8; the RSX 7.4 / 8.6. By actors: 10 to 15 actors, a tick 11.9 ms
+  (10.4), 0.958 ms an actor (0.914); 15 to 19, 13.0 (13.0), 0.753
+  (0.812). No change shows above the two plays' difference (this run
+  fought longer: projectiles 0.23 ms a tick on median, 0.13). The 38.2
+  fps window: a checkpoint (its writer 4.8 s, 2.3 s waiting for reads),
+  `rest` 9.9 ms a frame. Lowest free main memory 15.6 MB.
+- 2026-10-28: OpenCE upstream merged (Matt: "run it", "resolve them",
+  "A."; `tools/ps3_upstream_check.py --merge`): 64 commits, `5e27f3a2` to
+  `2ca5bbea`; network version 38 to 39 (the dedicated server's marks, the
+  messages `client_build` 92 and `fire_origins` 93, swapped by
+  `distributed_message_entries_byte_swap`).
+  - 10 comment-only conflicts taken from upstream by the script; 11 by
+    hand: `p2p.c`, `p2p_internal.h`, `render.c` and `render_objects.c`
+    keep both sides; `main.c` keeps `PS3_MAIN_STEP` and the throttle
+    timer around the server's pacing; `port_config.c` takes
+    `CONFIG_BUILD_PLATFORM` and the `config_value` split with
+    `CONFIG_LOCK` (also 3 new direct `pthread_mutex` calls);
+    `render_particles.c` keeps `render_particles_group` and takes the
+    first-person charge flag in `render_particles_gather`.
+  - No dedicated server on the PS3 (Matt: option A): `HALO_SERVER_BUILD`
+    0 as on Android and web (`server_mode.h`); `server_mode.c`,
+    `server_console.c`, `server_master.c` in `XBOX_SRCS` (their stub
+    halves); `master_list_*` and `port_mods_list` in `port_stubs.c` (the
+    browser: the brokers' games only); `port_config.c`'s server blocks
+    also `!defined(HALO_PS3)`. `long long` is `int int` under the PS3's
+    `#define long int`: `int64_t` in `posix_server.h`, `server_json.h`,
+    `server_log.h`, `map_share.c` (clang: the same type on i686 Linux and
+    Windows).
+  - `check`: 0 `r2off`, `.got` 0xbde0. PKG of 12:41 in
+    `../PS3-upstream-check/build/ps3_upstream_check/`. On the PS3 (Matt:
+    "done"; `ps3log_merge.txt`): a30 60.0 fps on median (18 windows, 1
+    under 56); a PS3-hosted internet co-op game on a30 with "OpenCE
+    Windows | build 314" (its `client_build` read), 60.0 fps on median,
+    one speed warning during the host's join spikes; a version 39 host
+    joined, its map `immure2` (Custom Edition) missing as expected.
+    Fast-forwarded to `main` (`b7f8d2b4`), then `7b82fdf1` (the
+    Makefile's and `ps3_game_mk.py`'s LF back). A new shader_keys sweep
+    is due.
+- 2026-10-28: G11 chosen as the next goal (Custom Edition maps on the
+  PS3; GOALS.md, "G11 plan").
+- 2026-10-28: G11 analysis (Matt: "Analysis first"): "G11 analysis". The
+  swap tables already have `mod2`, `scex`, `devc`, `tagc`; the BSP swap
+  already runs for Custom Edition BSPs. Open: the address `0x40440000` on
+  lv2 (a probe), the Custom Edition tag header in the swap, the sounds'
+  decode before the conversion, the model data's swap, the memory (the
+  Xbox tag cache's chunks traded). No code changed.
+- 2026-10-28: G11 parked (Matt: "park this goal and hide the custom maps
+  in the browser for now"). `p2p_lobby.c` `p2p_lobby_filter`: on the PS3
+  a game whose map state is not installed is hidden, whatever
+  `network.browser_maps` says (a Custom Edition map is never installed on
+  the PS3: `halo_custom_edition_tag_cache` is NULL). The unit compiled in
+  `build/ps3_browser/`; no PKG, not tested, not committed.

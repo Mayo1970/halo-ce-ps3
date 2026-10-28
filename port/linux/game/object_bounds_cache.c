@@ -250,17 +250,28 @@ long object_bounds_cache_first_vector(
 		if (entry != NONE)
 		{
 			long end = entry + count;
+			/* (the counts in registers: the batch's own were stored and read back at once) */
+			long batch_count = 0, known_count = 0;
 
 			ps3_bounds_read += (uint32_t)count; /* the timer build's (ps3_timers.h) */
 			for (; entry < end && room; entry++)
 			{
-				batch.objects[batch.count] = object_bounds_kept.objects[entry];
-				batch.known[batch.count++] = object_bounds_kept.known[entry];
-				if (object_bounds_kept.known[entry])
-					batch.spheres[batch.known_count++] = object_bounds_kept.spheres[entry];
-				if (batch.count == NUMBEROF(batch.objects))
+				boolean known = object_bounds_kept.known[entry];
+
+				batch.objects[batch_count] = object_bounds_kept.objects[entry];
+				batch.known[batch_count++] = known;
+				if (known)
+					batch.spheres[known_count++] = object_bounds_kept.spheres[entry];
+				if (batch_count == NUMBEROF(batch.objects))
+				{
+					batch.count = batch_count;
+					batch.known_count = known_count;
 					room = vector_batch_flush(&batch, iterator);
+					batch_count = known_count = 0;
+				}
 			}
+			batch.count = batch_count;
+			batch.known_count = known_count;
 			if (batch.count && room)
 				room = vector_batch_flush(&batch, iterator);
 			if (!room)
