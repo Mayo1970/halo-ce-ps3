@@ -45,9 +45,9 @@ SETTINGS > EXTRA OPTIONS in the main menu has these settings:
 |---|---|---|
 | WIDESCREEN | 16:9 over the whole display, or the Xbox's 4:3 in the middle | ON |
 | BUTTON ICONS | XBOX, STYLE A (colored circles, white symbols) or STYLE B (black circles, colored symbols) | STYLE A |
-| PRESET | QUALITY (30 fps), PERFORMANCE (60 fps, dynamic resolution) or CUSTOM | CUSTOM |
+| PRESET | QUALITY (30 fps), PERFORMANCE (60 fps, dynamic resolution) or CUSTOM | PERFORMANCE |
 | FRAME RATE | 60 or 30 frames per second | 60 |
-| DYNAMIC RESOLUTION | In heavy scenes, draws the 3D view smaller and scales it up | OFF |
+| DYNAMIC RESOLUTION | In heavy scenes, draws the 3D view smaller and scales it up | ON |
 
 ### Known limits
 
