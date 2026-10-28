@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
-The invite code converter, for GitHub Pages: an invite link (halo://join/...) to an 8-digit code that a console types,
-and a code to its link. The link is kept on public MQTT brokers, sealed with the code: port/linux/src/p2p_crypto.c.
+The invite code converter, for GitHub Pages: an invite link (halo://join/...) to an 8-digit code that a console types.
+The link is kept on public MQTT brokers, sealed with the code: port/linux/src/p2p_crypto.c.
 -->
 <html lang="en">
 <head>
@@ -161,8 +161,7 @@ and a code to its link. The link is kept on public MQTT brokers, sealed with the
 <body>
 <main>
   <h1>Invite Codes</h1>
-  <p class="lead">Turn an internet play invite link into a short code for a console, and a console's code back into its
-    link.</p>
+  <p class="lead">Turn an internet play invite link into a short code for a console.</p>
 
   <section class="card">
     <h2>Link to code</h2>
@@ -174,18 +173,6 @@ and a code to its link. The link is kept on public MQTT brokers, sealed with the
       </div>
     </form>
     <div id="make-result" class="result" aria-live="polite"></div>
-  </section>
-
-  <section class="card">
-    <h2>Code to link</h2>
-    <form id="find-form">
-      <label for="code-input">Invite code</label>
-      <div class="row">
-        <input id="code-input" inputmode="numeric" autocomplete="off" placeholder="1234 5678" maxlength="12">
-        <button id="find-button" type="submit">Find link</button>
-      </div>
-    </form>
-    <div id="find-result" class="result" aria-live="polite"></div>
   </section>
 
   <footer>
@@ -212,7 +199,6 @@ const InviteCodes = (() => {
   const PAYLOAD_SIZE = 2 + NONCE_SIZE + INVITE_SIZE + TAG_SIZE;
   const EXPIRY_SECONDS = 1800;
   const CONNECT_MS = 8000;
-  const LOOKUP_MS = 10000;
 
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -468,28 +454,6 @@ const InviteCodes = (() => {
     });
   }
 
-  // the invite retained under the topic on any broker, opened with the key; null if none in time
-  function lookUpEverywhere(topic, key, urls) {
-    const brokers = urls.map((url) => new Broker(url));
-    return new Promise((resolve) => {
-      let done = false;
-      const finish = (invite) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        brokers.forEach((broker) => broker.close());
-        resolve(invite);
-      };
-      const timer = setTimeout(() => finish(null), LOOKUP_MS);
-      brokers.forEach((broker) => broker.connect()
-        .then(() => broker.subscribe(topic, async (payload) => {
-          const invite = await open(key, payload);
-          if (invite) finish(invite);
-        }))
-        .catch(() => {}));
-    });
-  }
-
   // a new code for the link's invite: { code, expires } (a Date); throws with a message to show
   async function makeInviteCode(linkText, urls = BROKERS, expirySeconds = EXPIRY_SECONDS) {
     const invite = parseLink(linkText);
@@ -501,17 +465,7 @@ const InviteCodes = (() => {
     return { code: spaced(code), expires: new Date(Date.now() + expirySeconds * 1000) };
   }
 
-  // the link of a code: the link, or null if no game has it; throws with a message to show
-  async function findInviteLink(codeText, urls = BROKERS) {
-    const digits = parseCode(codeText);
-    if (!digits) throw new Error('A code has 8 digits.');
-    const key = await codeKey(digits);
-    const invite = await lookUpEverywhere(await codeTopic(key), key, urls);
-    return invite ? 'halo://join/' + hex(invite) : null;
-  }
-
-  return { makeInviteCode, findInviteLink, parseLink, parseCode, codeKey, codeTopic, seal, open, publishEverywhere,
-    hex, spaced };
+  return { makeInviteCode, parseLink, parseCode, codeKey, codeTopic, seal, open, publishEverywhere, hex, spaced };
 })();
 </script>
 
@@ -561,42 +515,6 @@ const InviteCodes = (() => {
     });
   });
 
-  element('find-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const result = element('find-result');
-    busy(element('find-button'), 'Finding...', async () => {
-      try {
-        const link = await InviteCodes.findInviteLink(element('code-input').value);
-        if (!link) {
-          show(result, [paragraph('No game has this code, or the code expired.', 'error')]);
-          return;
-        }
-        const linkNode = paragraph(link, 'link');
-        const copy = document.createElement('button');
-        copy.type = 'button';
-        copy.textContent = 'Copy link';
-        copy.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(link);
-            copy.textContent = 'Copied';
-          } catch {
-            copy.textContent = 'Select the link and copy it';
-          }
-        });
-        const openLink = document.createElement('a');
-        openLink.className = 'button';
-        openLink.href = link;
-        openLink.textContent = 'Open in the game';
-        const row = document.createElement('div');
-        row.className = 'row';
-        row.append(copy, openLink);
-        show(result, [linkNode, row,
-          paragraph('On the PC: open the link, or copy it and go back to the game, which joins it.', 'note')]);
-      } catch (error) {
-        show(result, [paragraph(error.message, 'error')]);
-      }
-    });
-  });
 })();
 </script>
 </body>

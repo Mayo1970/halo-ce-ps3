@@ -5041,10 +5041,17 @@ struct xbox_game_facts
 	boolean open, in_progress, has_teams, oddball_variant;
 };
 
+/* where a row's name must end: the description's left (272), less a margin */
+#define XBOX_INTERNET_TEXT_RIGHT 266
+
 static struct
 {
 	/* last frame's focused row and number of rows shown (a press past an end wraps the focus) */
 	short selected, shown;
+	/* the rows, and the font and room their names had when drawn (menu_functions_text_box_drawn); NONE: not yet */
+	struct widget_instance *rows[XBOX_INTERNET_ROWS];
+	long row_font;
+	short row_widths[XBOX_INTERNET_ROWS];
 } xbox_internet;
 
 /* how long INTERNET PLAY shows what went wrong with a code or a join, in place of the rows */
@@ -5053,9 +5060,11 @@ static struct
 /* INTERNET PLAY's invite codes (p2p.c) */
 static struct
 {
-	/* the keyboard's text, while it is up for it */
-	wchar_t text[16];
-	boolean typing;
+	/* the keyboard's text, while it is up for it; for a game's password (lobby_browser.password_game), else a code */
+	wchar_t text[PASSWORD_LENGTH];
+	boolean typing, password;
+	/* the password's keyboard, once A and START are up: the press that asked for it would press its DONE */
+	boolean password_pending;
 	/* the code looked up (as "1234 5678"), for the controller that typed it */
 	boolean looking;
 	char code[P2P_CODE_DIGITS + 2];
@@ -5175,7 +5184,8 @@ static boolean xbox_internet_begin(struct widget_instance *list, struct event_re
 	player_ui_clear_multiplayer_joins();
 	lobby_browser_begin();
 	xbox_internet.selected = xbox_internet.shown = 0;
-	xbox_code.typing = xbox_code.looking = FALSE;
+	xbox_internet.row_font = NONE;
+	xbox_code.typing = xbox_code.looking = xbox_code.password_pending = FALSE;
 	xbox_code.message_time = 0;
 	return ui_widget_port_browse(list, event, widget_deleted);
 }
@@ -5186,6 +5196,7 @@ static void xbox_internet_end(struct widget_instance *list)
 	lobby_browser_end();
 	p2p_stop_code_lookup();
 	xbox_code.looking = FALSE;
+	memset(xbox_internet.rows, 0, sizeof(xbox_internet.rows));
 	xbox_list_end(list);
 }
 
@@ -5225,17 +5236,33 @@ static void xbox_code_spaced(char const *text, char *spaced)
 /* "xbox internet code" (Y): the keyboard, for a game's invite code */
 static boolean xbox_internet_code(short controller)
 {
-	if (xbox_code.typing || xbox_code.looking || lobby_browser.joining)
+	if (xbox_code.typing || xbox_code.password_pending || xbox_code.looking || lobby_browser.joining)
 		return TRUE;
 	if (!config_boolean("network.online"))
 		return campaign_fail();
 	xbox_code.text[0] = 0;
-	if (!virtual_keyboard_launch(xbox_code.text, sizeof(xbox_code.text), 8))
+	if (!virtual_keyboard_launch(xbox_code.text, 16 * sizeof(wchar_t), 8))
 		return campaign_fail();
 	virtual_keyboard_port_caption(L"Enter the game's invite code");
 	xbox_code.typing = TRUE;
+	xbox_code.password = FALSE;
 	xbox_code.controller = controller;
 	return TRUE;
+}
+
+/* the password typed joins lobby_browser.password_game, as the server browser's password screen does */
+static void xbox_password_join(unsigned long now)
+{
+	struct p2p_listing game = lobby_browser.password_game;
+	char text[PASSWORD_LENGTH + 1];
+
+	wide_to_text(xbox_code.text, text, sizeof(text));
+	if (!p2p_listing_unlock(&game, text))
+		xbox_message(now, L"Wrong password for\r\n%s.", game.name);
+	else if (!lobby_browser_join(&game, xbox_code.controller))
+		xbox_message(now, L"Could not join\r\n%s.", game.name);
+	memset(text, 0, sizeof(text));
+	memset(xbox_code.text, 0, sizeof(xbox_code.text));
 }
 
 /* the code typed (once the keyboard closes) looked up; its game, once found, joined as a listed one is */
@@ -5243,17 +5270,36 @@ static void xbox_code_update(unsigned long now)
 {
 	char text[NUMBEROF(xbox_code.text)], link[P2P_LISTING_INVITE_SIZE];
 	unsigned char identifier[6];
-	short index;
 	int found;
 
+	if (xbox_code.password_pending)
+	{
+		struct gamepad_state const *pad = input_get_gamepad_state(xbox_code.controller);
+
+		if (pad && (pad->buttons[_gamepad_analog_button_a] || pad->buttons[_gamepad_binary_button_start]))
+			return;
+		xbox_code.password_pending = FALSE;
+		xbox_code.text[0] = 0;
+		if (!virtual_keyboard_launch(xbox_code.text, sizeof(xbox_code.text), 8))
+		{
+			campaign_fail();
+			return;
+		}
+		virtual_keyboard_port_caption(L"Enter the game's password");
+		xbox_code.typing = xbox_code.password = TRUE;
+		return;
+	}
 	if (xbox_code.typing && !virtual_keyboard_active())
 	{
 		xbox_code.typing = FALSE;
 		if (!virtual_keyboard_last_exit_saved_text())
 			return;
-		for (index = 0; xbox_code.text[index] && index < NUMBEROF(text) - 1; index++)
-			text[index] = xbox_code.text[index] < 128 ? (char)xbox_code.text[index] : '?';
-		text[index] = 0;
+		if (xbox_code.password)
+		{
+			xbox_password_join(now);
+			return;
+		}
+		wide_to_text(xbox_code.text, text, sizeof(text));
 		if (!p2p_look_up_code(text))
 		{
 			xbox_message(now, L"That is not an invite code\r\n(8 digits).", NULL);
@@ -5316,6 +5362,36 @@ static void xbox_internet_join_update(unsigned long now)
 	}
 }
 
+/* a row's text (ROW_TEXT_LENGTH) ending in "..." where it would run into the description, measured in its font */
+static void xbox_internet_row_fit(short row, wchar_t *text)
+{
+	static real_argb_color const white = { 1.0f, 1.0f, 1.0f, 1.0f };
+	wchar_t whole[ROW_TEXT_LENGTH];
+	rectangle2d bounds, text_bounds, cursor;
+	short length = (short)ustrnlen(text, ROW_TEXT_LENGTH - 1), kept;
+
+	if (xbox_internet.row_font == NONE || xbox_internet.row_widths[row] <= 0)
+		return;
+	memcpy(whole, text, length * sizeof(*whole));
+	bounds.x0 = 0;
+	bounds.y0 = 0;
+	bounds.x1 = 0x3FFF;
+	bounds.y1 = 480;
+	draw_string_set_draw_mode(xbox_internet.row_font, NONE, 0, 0, &white);
+	for (kept = length; kept >= 0; kept--)
+	{
+		if (kept < length)
+		{
+			memcpy(text, whole, kept * sizeof(*text));
+			text[kept] = text[kept + 1] = text[kept + 2] = '.';
+			text[kept + 3] = 0;
+		}
+		draw_unicode_string_compute_bounds(&bounds, text, &text_bounds, &cursor);
+		if (MAX(text_bounds.x1, cursor.x0) <= xbox_internet.row_widths[row])
+			return;
+	}
+}
+
 /* "xbox internet update": the rows (scrolled on past their ends), the focused game's description, and in place of
 the rows a status (looking, none found, a code looked up, joining, what went wrong) */
 static void xbox_internet_update(struct widget_instance *list)
@@ -5328,9 +5404,13 @@ static void xbox_internet_update(struct widget_instance *list)
 	short selected = list->parameters.list.selected_index;
 	short shown, index;
 	wchar_t text[ROW_TEXT_LENGTH * 2], name[P2P_LISTING_NAME_SIZE + 1];
+	/* (every game, but those on maps this machine has not: p2p_lobby_filter) */
+	struct p2p_lobby_choices choices = { P2P_LOBBY_SOURCE_ALL, TRUE, TRUE, 0, P2P_LOBBY_MAPS_YES };
 
 	lobby_browser.count = lobby_browser_valid_games(lobby_browser.games,
 		(short)p2p_lobby_games(lobby_browser.games, LOBBY_BROWSER_GAMES));
+	lobby_browser.count = (short)p2p_lobby_filter(lobby_browser.games, lobby_browser.count, &choices,
+		lobby_browser_map_state);
 	xbox_internet_join_update(now);
 	xbox_code_update(now);
 	/* (the engine wraps a press past the last row to the first, and before the first to the last: with more games
@@ -5371,6 +5451,8 @@ static void xbox_internet_update(struct widget_instance *list)
 
 		if (index == selected)
 			list->focused_child = row;
+		if (index < XBOX_INTERNET_ROWS)
+			xbox_internet.rows[index] = row;
 		if (index >= shown)
 			continue;
 		game = &lobby_browser.games[lobby_browser.first + index];
@@ -5378,6 +5460,8 @@ static void xbox_internet_update(struct widget_instance *list)
 		usnprintf(text, ROW_TEXT_LENGTH - 1, L"%s%s", game->failed ? L"(failed) " : game->locked ? L"(password) " :
 			!game->open ? L"(closed) " : L"", name);
 		text[ROW_TEXT_LENGTH - 1] = 0;
+		if (index < XBOX_INTERNET_ROWS)
+			xbox_internet_row_fit(index, text);
 		text_set(row, text);
 	}
 	lobby_browser.chosen = (short)(lobby_browser.first + selected);
@@ -5426,8 +5510,8 @@ static void xbox_internet_update(struct widget_instance *list)
 	text_set_length(status, text, NUMBEROF(text));
 }
 
-/* "xbox internet select" (A, START): the focused row's game joined (not one with a password, which nothing types
-here); the A press posted once its host is reached joins its game, on the Xbox's pregame screen */
+/* "xbox internet select" (A, START): the focused row's game joined (one with a password once the keyboard has it);
+the A press posted once its host is reached joins its game, on the Xbox's pregame screen */
 static boolean xbox_internet_select(struct widget_instance *list, short controller, boolean *widget_deleted)
 {
 	struct p2p_listing const *game;
@@ -5443,13 +5527,23 @@ static boolean xbox_internet_select(struct widget_instance *list, short controll
 			return FALSE;
 		return ui_widget_port_join(list, found, XBOX_PREGAME_NAME, widget_deleted);
 	}
-	if (lobby_browser.joining || xbox_code.looking)
+	if (lobby_browser.joining || xbox_code.looking || xbox_code.typing || xbox_code.password_pending)
 		return TRUE;
 	if (!xbox_internet.shown || lobby_browser.chosen >= lobby_browser.count)
 		return campaign_fail();
 	game = &lobby_browser.games[lobby_browser.chosen];
-	if (!game->open || game->locked)
+	if (!game->open)
+	{
+		platform_log("menus: INTERNET PLAY: %s is closed%s", game->name, game->locked ? " (password)" : "");
 		return campaign_fail();
+	}
+	if (game->locked)
+	{
+		lobby_browser.password_game = *game;
+		xbox_code.password_pending = TRUE;
+		xbox_code.controller = controller;
+		return TRUE;
+	}
 	return lobby_browser_join(game, controller) || campaign_fail();
 }
 
@@ -5565,11 +5659,12 @@ static boolean xbox_lan_create(boolean if_none)
 }
 
 /* "xbox mp type desc" (for "multiplayer type menu update desc"): LAN PLAY has SYSTEM LINK PLAY's picture and a
-description in its place; INTERNET PLAY and HOST ONLINE, after it, that picture and the descriptions added last */
+description in its place; INTERNET PLAY and HOST ONLINE, after it, that picture and the descriptions added last;
+no SPLIT SCREEN (menu_tags.c) */
 static void xbox_multiplayer_type_description(struct widget_instance *list)
 {
-	static short const frames[] = { 0, 1, 2, 2, 2, 3 };
-	static short const strings[] = { 0, 1, 2, 4, 5, 3 };
+	static short const frames[] = { 0, 2, 2, 2, 3 };
+	static short const strings[] = { 0, 2, 4, 5, 3 };
 	static struct xbox_text_place place;
 	struct widget_instance *description = list->parameters.list.extended_description;
 	short index = ui_widget_port_list_index(list);
@@ -5580,7 +5675,7 @@ static void xbox_multiplayer_type_description(struct widget_instance *list)
 		description->child->animation.current_frame_index = frames[index];
 		description->child->next->parameters.text_box.string_list_index = strings[index];
 		/* (HOST ONLINE's four lines) */
-		xbox_text_raise(&place, description->child->next, index == 4);
+		xbox_text_raise(&place, description->child->next, index == 3);
 	}
 }
 
@@ -6361,6 +6456,18 @@ void menu_functions_text_box_drawn(struct widget_instance *widget, rectangle2d c
 {
 	short row;
 
+#ifdef HALO_PS3
+	/* (INTERNET PLAY's rows: the font and room their names are fitted in, xbox_internet_row_fit) */
+	for (row = 0; row < XBOX_INTERNET_ROWS; row++)
+	{
+		if (xbox_internet.rows[row] == widget)
+		{
+			xbox_internet.row_font = draw_string_get_font();
+			xbox_internet.row_widths[row] = (short)(XBOX_INTERNET_TEXT_RIGHT - bounds->x0);
+			return;
+		}
+	}
+#endif
 	/* (the Mods screen's texts: the fonts and widths their lines are
 	measured in, mods_text_fits) */
 	for (row = 0; widget->name && row < NUMBER_OF_MOD_TEXT_BOXES; row++)

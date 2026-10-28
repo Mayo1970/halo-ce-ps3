@@ -1,5 +1,6 @@
 # Halo CE PS3 (PSL1GHT). Build in the ps3dev Docker image: ./build.sh [pkg|self|check|bringup|clean]
 # Set LOG_IP to the PC that listens for the UDP log (nc -ul 18194). See port/ps3/README.md.
+# DEBUG=0 is the retail build: no UDP log (no socket, nothing formatted or sent).
 ifeq ($(strip $(PS3DEV)),)
 $(error "PS3DEV is not set: build with ./build.sh")
 endif
@@ -12,6 +13,7 @@ TITLE_ID   := HALOCE000
 CONTENT_ID := UP0001-$(TITLE_ID)_00-0000000000000000
 BUILD      ?= build/ps3
 LOG_IP     ?= 192.168.178.99
+DEBUG      ?= 1
 # XMB icon, 320x176 PNG
 ICON0      ?= ICON/ICON0.PNG
 
@@ -47,6 +49,9 @@ HOST_OBJS += $(BUILD)/obj/port/linux/src/posix_dtls.o
 CFLAGS := -std=gnu99 -O2 -Wall -mcpu=cell -mhard-float -mno-altivec -fno-strict-aliasing \
           -D__PS3__ -DPS3_LOG_IP=\"$(LOG_IP)\" \
           -I$(PS3_DIR)/include -I$(PS3_DIR)/src -I$(PS3_DIR)/spu -I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include
+ifeq ($(DEBUG),1)
+CFLAGS += -DPS3_LOG
+endif
 ASFLAGS := -mcpu=cell -mno-altivec
 
 # --no-multi-toc: a TOC over 64 KB must fail the link; split-TOC r2off stubs hang the PS3 at boot.
@@ -57,7 +62,7 @@ LDFLAGS := -Wl,--no-multi-toc -L$(PSL1GHT)/ppu/lib -L$(PS3DEV)/portlibs/ppu/lib 
 
 LIBS := -lrsx -lgcm_sys -lio -laudio -lsysutil -lsysfs -lsysmodule -lnet -lnetctl -lrt -llv2 -lm
 
-# ---------- the game's units (GOALS.md G1, G2)
+# ---------- the game's units
 
 GAME_MK   := $(BUILD)/game.mk
 SEMANTICS := $(BUILD)/halo_msvc_semantics.h

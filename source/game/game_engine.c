@@ -8303,6 +8303,21 @@ static boolean internal_rasterize_score(
 			buffer,
 			format,
 			buffer_size);
+#ifdef HALO_PS3
+		/* port: the Xbox's BACK is the PS3 pad's SELECT */
+		{
+			long i;
+
+			for (i = 0; format[i] && i + 4 < buffer_size; i++)
+			{
+				if (format[i] == L'B' && format[i + 1] == L'A' && format[i + 2] == L'C' && format[i + 3] == L'K')
+				{
+					usnprintf(buffer + i, buffer_size - i, L"SELECT%s", format + i + 4);
+					break;
+				}
+			}
+		}
+#endif
 		break;
 	default:
 		result = FALSE;

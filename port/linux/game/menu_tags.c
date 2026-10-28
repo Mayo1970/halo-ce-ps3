@@ -2130,6 +2130,7 @@ after it, copies of System Link's game list for this network's games and for the
 #define XBOX_PREGAME XBOX_MULTIPLAYER "connected\\pregame\\"
 #define XBOX_SOLO_LEVELS "ui\\shell\\main_menu\\solo_level_select\\"
 #define XBOX_DIFFICULTY "ui\\shell\\main_menu\\difficulty_select\\"
+#define XBOX_SPLIT_SCREEN_ITEM 1
 #define XBOX_SYSTEM_LINK_ITEM 2
 #define XBOX_ITEM_SPACING 33
 /* the server list's description's child that says it is looking for games */
@@ -2147,6 +2148,8 @@ button, which CREATE GAME's centres in 180 units */
 #define XBOX_VARIANT_DESCRIPTIONS 36
 #define XBOX_SLOTS_TEXT_LEFT 22
 #define XBOX_SLOTS_TEXT_WIDTH 90
+/* INTERNET PLAY's rows, moved left for the names' room before the description (menu_functions.c's XBOX_INTERNET_*) */
+#define XBOX_INTERNET_ROWS_LEFT 16
 
 enum
 {
@@ -2158,6 +2161,7 @@ enum
 	_xbox_host_texts,
 	_xbox_host_descriptions,
 	_xbox_slots_text,
+	_xbox_internet_title,
 	_xbox_lan_item,
 	_xbox_lan_screen,
 	_xbox_lan_list,
@@ -2166,6 +2170,7 @@ enum
 	_xbox_internet_list,
 	_xbox_internet_description,
 	_xbox_internet_status,
+	_xbox_internet_header,
 	_xbox_code_button,
 	_xbox_code_key,
 	_xbox_invite_code,
@@ -2247,6 +2252,7 @@ static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
 	XBOX_HOST "host_options",
 	XBOX_HOST "host_option_descriptions",
 	XBOX_PREGAME "slots_button",
+	XBOX_INTERNET "internet_title",
 	XBOX_MULTIPLAYER "multiplayer_type_lan_item",
 	XBOX_LAN "lan_screen",
 	XBOX_LAN "lan_list",
@@ -2255,6 +2261,7 @@ static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
 	XBOX_INTERNET "internet_list",
 	XBOX_INTERNET "internet_extended_desc",
 	XBOX_INTERNET "internet_status_text",
+	XBOX_INTERNET "header_internet_games",
 	XBOX_INTERNET "enter_code_button",
 	XBOX_INTERNET "enter_code_key",
 	XBOX_PREGAME "invite_code_text",
@@ -3077,6 +3084,7 @@ static void xbox_multiplayer_patch(void)
 	char const *lan_text = "LAN PLAY";
 	char const *internet_text = "INTERNET PLAY";
 	char const *code_text = "= ENTER CODE";
+	char const *internet_title = "INTERNET GAMES";
 	/* (HOST ONLINE's screen is also LAN PLAY's CREATE GAME, its header and descriptions those of the mode) */
 	char const *host_text[] = { "HOST ONLINE", "CREATE GAME" };
 	char const *host_texts[] = { "CO-OP CAMPAIGN", "MULTIPLAYER" };
@@ -3118,6 +3126,7 @@ static void xbox_multiplayer_patch(void)
 	long type_screen = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_select_screen");
 	long type_list = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_select_list");
 	long system_link = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_conn_item");
+	long split_screen = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_type_split_item");
 	long options_text = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "multiplayer_options_txt");
 	long descriptions = tag_loaded(UNICODE_STRING_LIST_TAG, XBOX_MULTIPLAYER "multiplayer_option_descriptions");
 	long map_select = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_MULTIPLAYER "connected\\connected_map_select_wrapper");
@@ -3133,7 +3142,7 @@ static void xbox_multiplayer_patch(void)
 	struct ui_widget_definition *lan_item, *lan_screen, *lan_list, *internet_item, *internet_screen, *internet_list;
 	struct ui_widget_definition *code_button, *code_key, *invite_code, *host_item, *slots_key, *slots_button;
 	struct ui_widget_child_reference *list_children, *description_children, *key_children, *pregame_children;
-	struct ui_widget_child_reference *slots_children;
+	struct ui_widget_child_reference *slots_children, *internet_rows;
 	struct ui_widget_event_handler_reference *host_handlers, *pregame_handlers;
 	struct ui_widget_game_data_input_reference *invite_code_input;
 	struct string_list const *stock_descriptions;
@@ -3147,7 +3156,7 @@ static void xbox_multiplayer_patch(void)
 	long index, type_description, blue_line = NONE, teams_child = NONE, key_bar_child = NONE, count;
 	boolean settings;
 
-	if (type_screen == NONE || type_list == NONE || system_link == NONE || options_text == NONE ||
+	if (type_screen == NONE || type_list == NONE || system_link == NONE || split_screen == NONE || options_text == NONE ||
 		descriptions == NONE || map_select == NONE || server_screen == NONE || server_list == NONE ||
 		server_description == NONE || looking == NONE || create_key == NONE || create_button == NONE ||
 		pregame_screen == NONE || choose_teams == NONE)
@@ -3183,6 +3192,8 @@ static void xbox_multiplayer_patch(void)
 	if (list->child_widgets.count != 4 || list->game_data_inputs.count != 1 || blue_line == NONE ||
 		((struct ui_widget_child_reference *)list->child_widgets.address)[XBOX_SYSTEM_LINK_ITEM].widget_tag.index !=
 			system_link ||
+		((struct ui_widget_child_reference *)list->child_widgets.address)[XBOX_SPLIT_SCREEN_ITEM].widget_tag.index !=
+			split_screen ||
 		options->text_label_string_list.index != descriptions || stock_descriptions->strings.count != 4 ||
 		description->child_widgets.count != 5 ||
 		((struct ui_widget_child_reference *)description->child_widgets.address)[XBOX_LOOKING_CHILD].widget_tag.index !=
@@ -3219,6 +3230,9 @@ static void xbox_multiplayer_patch(void)
 	definitions[_xbox_internet_description] = description =
 		xbox_widget_copy(server_description, "internet_extended_desc");
 	definitions[_xbox_internet_status] = status = xbox_widget_copy(looking, "internet_status_text");
+	/* INTERNET PLAY's header: INTERNET GAMES in text, in SYSTEM LINK GAMES' picture's place */
+	definitions[_xbox_internet_title] = string_list_build(&internet_title, NULL, 1, NULL);
+	definitions[_xbox_internet_header] = xbox_widget_copy(system_link, "header_internet_games");
 	/* INTERNET PLAY's Y key (a copy of CREATE GAME's), and the pregame screen's invite code */
 	definitions[_xbox_code_text] = string_list_build(&code_text, NULL, 1, NULL);
 	definitions[_xbox_code_button] = code_button = xbox_widget_copy(create_button, "enter_code_button");
@@ -3298,6 +3312,15 @@ static void xbox_multiplayer_patch(void)
 	xbox_host_wire(&host_stock, definitions, tags, map_select);
 	xbox_screen_set(lan_screen, server_list, tags[_xbox_lan_list], NONE);
 	xbox_screen_set(internet_screen, server_list, tags[_xbox_internet_list], tags[_xbox_code_key]);
+	for (index = 0; !build.failed && index < internet_screen->child_widgets.count; index++)
+	{
+		struct ui_widget_child_reference *child = (struct ui_widget_child_reference *)internet_screen->child_widgets.address +
+			index;
+
+		if (tag_name_ends(child->widget_tag.index, "\\header_found_games"))
+			xbox_child_set(child, tags[_xbox_internet_header], "header_internet_games");
+	}
+	xbox_header_set(definitions[_xbox_internet_header], tags[_xbox_internet_title]);
 	reference_set(&code_button->text_label_string_list, UNICODE_STRING_LIST_TAG, tags[_xbox_code_text]);
 	code_button->string_list_index = 0;
 	memcpy(key_children, code_key->child_widgets.address, 2 * sizeof(*key_children));
@@ -3330,6 +3353,15 @@ static void xbox_multiplayer_patch(void)
 		map_select);
 	reference_set(&internet_list->extended_description_widget, UI_WIDGET_DEFINITION_TAG,
 		tags[_xbox_internet_description]);
+	internet_rows = allocate(internet_list->child_widgets.count * sizeof(*internet_rows));
+	if (internet_rows)
+	{
+		memcpy(internet_rows, internet_list->child_widgets.address, internet_list->child_widgets.count *
+			sizeof(*internet_rows));
+		for (index = 0; index < internet_list->child_widgets.count; index++)
+			internet_rows[index].horizontal_offset -= XBOX_INTERNET_ROWS_LEFT;
+		internet_list->child_widgets.address = internet_rows;
+	}
 	/* INTERNET PLAY's description: System Link's, its message a text box the list's update writes */
 	description_children = allocate(description->child_widgets.count * sizeof(*description_children));
 	if (description_children)
@@ -3359,10 +3391,17 @@ static void xbox_multiplayer_patch(void)
 	xbox_child_set(&list_children[XBOX_SYSTEM_LINK_ITEM + 1], tags[_xbox_internet_item], internet_item->name);
 	xbox_child_set(&list_children[XBOX_SYSTEM_LINK_ITEM + 2], tags[_xbox_host_item], host_item->name);
 	list->child_widgets.count = list->child_widgets.count + 2;
+	/* no SPLIT SCREEN: the PS3 cannot draw four players' views; the items after it move up */
+	for (index = XBOX_SPLIT_SCREEN_ITEM; index + 1 < list->child_widgets.count; index++)
+	{
+		list_children[index] = list_children[index + 1];
+		list_children[index].vertical_offset -= XBOX_ITEM_SPACING;
+	}
+	list->child_widgets.count--;
 	list->child_widgets.address = list_children;
 	((struct ui_widget_game_data_input_reference *)list->game_data_inputs.address)->function = (short)type_description;
 	((struct ui_widget_child_reference *)screen->child_widgets.address)[blue_line].vertical_offset +=
-		2 * XBOX_ITEM_SPACING;
+		XBOX_ITEM_SPACING;
 	reference_set(&options->text_label_string_list, UNICODE_STRING_LIST_TAG, tags[_xbox_descriptions]);
 	/* the pregame screen's invite code: a child as "Choose teams using D-pad" is, on its bar's right */
 	memcpy(pregame_children, pregame->child_widgets.address, pregame->child_widgets.count * sizeof(*pregame_children));
@@ -3403,7 +3442,7 @@ static void xbox_multiplayer_patch(void)
 	if (settings)
 		xbox_settings_open(&settings_stock, tags[_xbox_settings_screen]);
 	menu_tags.xbox_patched = TRUE;
-	platform_log("menus: the multiplayer menu has LAN PLAY, INTERNET PLAY and HOST ONLINE%s",
+	platform_log("menus: the multiplayer menu has LAN PLAY, INTERNET PLAY and HOST ONLINE, no SPLIT SCREEN%s",
 		settings && !build.failed ? "; SETTINGS has EXTRA OPTIONS" : "");
 	memset(&build, 0, sizeof(build));
 	return;

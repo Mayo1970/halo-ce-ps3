@@ -3,11 +3,10 @@
 The PS3 port builds with PSL1GHT (ppu-gcc 7.2) in the Docker image
 `ps3dev-latest:latest`. The EBOOT links the whole game. It loads the first
 map, swaps the map data to the PS3's byte order, and draws the game with the
-RSX (G4 in `GOALS.md`). The PS3 pads are its Xbox gamepads (G5). Its
+RSX (G4). The PS3 pads are its Xbox gamepads (G5). Its
 DirectSound plays on the PS3 audio port (G6). Its Winsock and XNet use the
 PSL1GHT sockets, for system link with the PC builds on the LAN and for
 internet play (G7).
-`GOALS.md` in the root folder gives the plan and the blockers.
 
 The code is in four parts:
 
@@ -50,7 +49,7 @@ between the parts. They have only fixed-width types, because `long` has a differ
 | `xbox/xbox_files.c` | The Win32 file API and the Xbox paths. |
 | `xbox/bsp_keep.c` | The level's structure BSPs kept in RSX memory (`source/cache/cache_files.c`'s hooks), so that a BSP switch does not wait for the disk. A BSP read, swapped and checked (`tag_validate_structure_bsp`, its corrections made) is copied there by the PPE (aligned doubleword stores: RSX memory is cache-inhibited), before the vertex buffers' register writes into it; its loads then skip the swap and the checks (the checks find nothing more in the bytes they made); a thread (priority below the game's) reads the level's other BSPs there as they are on the disk, 128 KB at a time, while the game moves no file bytes for 100 ms, after the loaded BSP first. A load of a kept BSP: the RSX copies it into its place (the Direct3D SPU's copy record, the BSP's 1 MB pages mapped for the RSX during the copy, a label after it), checked by sums against the copy, swapped and checked if it was kept as read; a copy that fails or differs is dropped and the BSP is read from the disk. A copy is kept only while 32 MB of RSX memory stay free; an allocation of the Direct3D device that finds no room drops them first. Another map's load drops them (the menu's map keeps them). Not with the Direct3D records on the PPE, nor for Custom Edition maps (their reads are in memory). |
 | `xbox/xbox_tag_swap.c` | The swap of the map data (header, tag data, structure BSPs) to the PS3's byte order when the game reads it. Its layouts are `xbox/xbox_tag_swap_tables.h`, which `tools/ps3_tag_swap.py` writes from Invader's tag definitions (GPLv3). |
-| `xbox/d3d8_rsx.c` | The Direct3D 8 device on `src/ps3_gpu.c`, from `port/linux/src/d3d8_gl.c`: state, vertex shaders, render targets as RSX surfaces (the screen's at the display's resolution, EXTRA OPTIONS), a texture cache in RSX memory (converted again when the texels change; the button icons' textures in their bitmaps' places, `xbox/hud_hires_rsx.c`; the texels of the game's texture cache are checked only after it loads them again, see trap 34 in ROADMAP.md), vertices converted to floats: the map's once, into a vertex cache in RSX memory that each map or BSP load empties, the models' indices with them; the rest at each draw. The game's thread records the calls in a 4 MB ring (state changes, draws with the vertices and indices that are not in the tag cache, the present); the Direct3D thread (priority 1000, the PPE's other hardware thread) runs them one frame behind. A texture's `Lock` holds its last draw (`IsBusy`, the texture cache's evictions). The vertex conversions, the vertex cache's and the index copies are SPU tasks (`spu/spu_vertices.c`): each flush of the RSX's commands (the present, a wait for the RSX, a full segment of the command buffer) comes after them, and a record's ring room comes back once its tasks are done (a list of such records, checked while the game's thread waits for room; all of them when the Direct3D thread goes idle). |
+| `xbox/d3d8_rsx.c` | The Direct3D 8 device on `src/ps3_gpu.c`, from `port/linux/src/d3d8_gl.c`: state, vertex shaders, render targets as RSX surfaces (the screen's at the display's resolution, EXTRA OPTIONS), a texture cache in RSX memory (converted again when the texels change; the button icons' textures in their bitmaps' places, `xbox/hud_hires_rsx.c`; the texels of the game's texture cache are checked only after it loads them again), vertices converted to floats: the map's once, into a vertex cache in RSX memory that each map or BSP load empties, the models' indices with them; the rest at each draw. The game's thread records the calls in a 4 MB ring (state changes, draws with the vertices and indices that are not in the tag cache, the present); the Direct3D thread (priority 1000, the PPE's other hardware thread) runs them one frame behind. A texture's `Lock` holds its last draw (`IsBusy`, the texture cache's evictions). The vertex conversions, the vertex cache's and the index copies are SPU tasks (`spu/spu_vertices.c`): each flush of the RSX's commands (the present, a wait for the RSX, a full segment of the command buffer) comes after them, and a record's ring room comes back once its tasks are done (a list of such records, checked while the game's thread waits for room; all of them when the Direct3D thread goes idle). |
 | `xbox/xbox_texture_layout.c` | The layout of Xbox textures, and their texels for the RSX: 8- and 16-bit texels at their size where the RSX has the format (with a remap to the Xbox's channels), the rest as A8R8G8B8, in the same order (the RSX swizzles as the NV2A does); DXT blocks as they are. |
 | `xbox/xinput_ps3.c` | XInput on `src/ps3_input.c`: each pad takes the lowest free Xbox port (0 to 3) and keeps it until it disconnects. The game's polls read the pads once a frame. |
 | `xbox/dsound_ps3.c` | DirectSound on `src/ps3_audio.c`, after `port/linux/src/dsound_sdl.c`: a mixer thread (priority 1000) keeps the port's ring 43 ms ahead. Each mixer pass takes the streams' unfinished packets with the lock held, decodes (Xbox ADPCM or PCM, little-endian, to floats into a 128-aligned buffer `Process` takes: 16, 32 or 64 KB, cut from blocks of its own, a first of 4 MB and then 1 MB more, never freed; a buffer given back is kept for the next packets) and mixes them without it, and gives the results back with it. The decode and the mix are an SPU job (`spu/spu_mixer.c`); the mixer thread computes the gains and waits for the job, or does the work itself when the SPU is off; a flush during a pass voids the pass's results for that stream, and its buffers are given back after the pass. The packets complete on the game's thread, in `DirectSoundDoWork` and `Flush`. Buffers loop (the loading screen's tones), mixed with the lock held. A voice's settings (volume, pitch, position) are stored without the mixer's lock: the mixer reads them once a chunk. 3D voices get the Linux build's distance and pan. |
@@ -100,6 +99,10 @@ It also shows the loaded segments. Their size comes out of the main memory.
 The log goes to `192.168.178.99`. For a different computer, give `LOG_IP`:
 `./build.sh clean` and then `./build.sh pkg LOG_IP=192.168.1.10`. Make does
 not rebuild for a changed flag.
+
+`DEBUG=0` makes the retail build: `./build.sh clean` and then
+`./build.sh pkg DEBUG=0`. It has no UDP log: it opens no socket, and
+formats and sends nothing. The default is `DEBUG=1`, with the log.
 
 ## Install
 
@@ -331,7 +334,7 @@ encrypted with a key that comes from the code (`p2p_code_*` in
   while the PS3 hosts. The log has it too (`Internet play: this game's invite
   code is`).
 - The converter page, `port/ps3/invite/index.html`, makes a code from a PC's
-  link, and finds the link of a PS3's code. It is one file with no other
+  link. It is one file with no other
   files: publish it with GitHub Pages, or open it from the disk.
 
 Anyone who has a code can join the game while the code lasts.
