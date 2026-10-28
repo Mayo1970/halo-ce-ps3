@@ -1,3 +1,0 @@
-# Not part of the packaged chart: unit tests and CI values files.
-tests/
-ci/
