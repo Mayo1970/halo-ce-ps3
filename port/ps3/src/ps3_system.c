@@ -55,8 +55,10 @@ static double memory_lowest_seconds;
 
 static void log_send(const char *text, int length)
 {
+#ifdef PS3_LOG
 	if (log_socket >= 0 && length > 0)
 		sendto(log_socket, text, (size_t)length, 0, (struct sockaddr *)&log_address, sizeof(log_address));
+#endif
 }
 
 int ps3_log_vprintf(const char *format, va_list ap)
@@ -65,6 +67,10 @@ int ps3_log_vprintf(const char *format, va_list ap)
 	static char buffer[2048];
 	int length;
 
+#ifndef PS3_LOG
+	/* the retail build (DEBUG=0): nothing formatted, nothing sent */
+	return 0;
+#endif
 	if (log_mutex_ready)
 		sysMutexLock(log_mutex, 0);
 	length = vsnprintf(buffer, sizeof(buffer), format, ap);
@@ -121,6 +127,9 @@ static void log_init(void)
 {
 	sys_mutex_attr_t attributes;
 
+#ifndef PS3_LOG
+	return;
+#endif
 	sysMutexAttrInitialize(attributes);
 	log_mutex_ready = sysMutexCreate(&log_mutex, &attributes) == 0;
 
