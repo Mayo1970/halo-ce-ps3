@@ -359,7 +359,9 @@ boolean game_state_read_from_file(
 			FALSE,
 			csprintf(temporary, "couldn't read saved game file (#%d)", GetLastError()));
 	}
-	free(image);
+	/* port: NULL when the read went into the game state; debug_free halts on NULL */
+	if (image)
+		free(image);
 
 	return result;
 }
@@ -449,7 +451,9 @@ void game_state_read_core(
 		"game state has been corrupted (thank you, come again)");
 	(void)buffer;
 	CloseHandle(file);
-	free(image);
+	/* port: NULL when the read went into the game state; debug_free halts on NULL */
+	if (image)
+		free(image);
 
 	return;
 }
@@ -719,7 +723,9 @@ void game_state_read_from_persistent_storage(
 			delete_persistent_storage();
 		}
 		(void)buffer;
-		free(image);
+		/* port: NULL when the read went into the game state; debug_free halts on NULL */
+		if (image)
+			free(image);
 		CloseHandle(file);
 	}
 
