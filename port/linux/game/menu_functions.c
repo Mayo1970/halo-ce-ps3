@@ -7613,7 +7613,7 @@ static void xbox_extra_options_update(struct widget_instance *list)
 	static short const frame_rates[] = { NONE, 1, 0 };
 	static short const dynamics[] = { NONE, 1, 0 };
 	/* (PRESET's place among the rows, menu_tags.c's xbox_settings_wire) */
-	enum { preset_row = 2 };
+	enum { preset_row = 3 };
 	static struct
 	{
 		struct widget_instance *list;

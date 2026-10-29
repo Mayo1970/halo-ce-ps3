@@ -326,7 +326,8 @@ struct action_specification const global_action_functions[NUMBER_OF_ACTOR_ACTION
 		&action_uncover_modify_color,
 		NULL,
 		&action_uncover_flush_position_indices,
-		NULL
+		/* port: was NULL, so a BSP switch kept the old BSP's cluster (scenario.c's PVS assert) */
+		&action_uncover_flush_structure_indices
 	},
 	{
 		6,
@@ -358,7 +359,7 @@ struct action_specification const global_action_functions[NUMBER_OF_ACTOR_ACTION
 		NULL,
 		NULL,
 		&action_search_flush_position_indices,
-		NULL
+		&action_search_flush_structure_indices /* port: was NULL (uncover's) */
 	},
 	{
 		8,
@@ -390,7 +391,7 @@ struct action_specification const global_action_functions[NUMBER_OF_ACTOR_ACTION
 		NULL,
 		NULL,
 		NULL,
-		NULL
+		&action_vehicle_flush_structure_indices /* port: was NULL (uncover's) */
 	},
 	{
 		10,
@@ -422,7 +423,7 @@ struct action_specification const global_action_functions[NUMBER_OF_ACTOR_ACTION
 		NULL,
 		NULL,
 		NULL,
-		NULL
+		&action_obey_flush_structure_indices /* port: was NULL (uncover's) */
 	},
 	{
 		12,

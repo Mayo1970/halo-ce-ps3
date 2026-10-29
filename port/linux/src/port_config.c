@@ -325,6 +325,11 @@ static const struct config_setting config_settings[] =
 		"The touch controls' swipe aiming gets a controller's aim assist: the\n"
 		"aim slows over a target and follows a moving one. false: none, as a\n"
 		"mouse (the bullets' own autoaim stays)." },
+#ifdef HALO_PS3
+	{ "input.toggle_crouch", _config_boolean, "false", "HALO_TOGGLE_CROUCH", _environment_value, _platform_android,
+		"EXTRA OPTIONS' TOGGLE CROUCH: a press of the crouch button crouches,\n"
+		"the next stands up; false crouches while it is held, as on the Xbox." },
+#endif
 	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_desktop,
 		"How far the view turns for the mouse's movement." },
 	{ "input.playstation_kernel_driver", _config_boolean, "false", "HALO_PLAYSTATION_KERNEL_DRIVER",

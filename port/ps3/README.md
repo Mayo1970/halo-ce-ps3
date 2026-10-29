@@ -166,14 +166,16 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 
 SETTINGS in the main menu opens a screen of two items (`menu_tags.c`,
 `xbox_settings_wire`): PLAYER PROFILES, the Xbox's profile screens, and
-EXTRA OPTIONS. EXTRA OPTIONS has five rows, at the places of ADVANCED
-CONTROLS' five. A or START keeps the changes in `config.toml`, and
-they apply from the next frame; B goes back without them.
+EXTRA OPTIONS. EXTRA OPTIONS has six rows, at the places of ADVANCED
+CONTROLS' five and one row below them. A or START keeps the changes in
+`config.toml`, and they apply from the next frame; B goes back without
+them.
 
 | Row | Values | Setting |
 | --- | --- | --- |
 | WIDESCREEN | ON (the default): 852x480 of the game, drawn at 1280x720 over the whole display. OFF: the Xbox's 640x480, drawn at 960x720 in the middle | `display.screen_width`: 0 for the display's shape, 640 for 4:3 |
 | BUTTON ICONS | XBOX: the maps' own buttons. STYLE A (the default): the PS3's, colored circles with white symbols. STYLE B: black circles with colored symbols | `display.button_icons`: `"xbox"`, `"style_a"` or `"style_b"` |
+| TOGGLE CROUCH | ON: a press of the crouch button crouches, the next press stands up; a new life starts standing (`player_control.c`). OFF (the default): crouch while the button is held, as on the Xbox | `input.toggle_crouch`: true or false |
 | PRESET | CUSTOM: FRAME RATE and DYNAMIC RESOLUTION as set. QUALITY: 30 and OFF. PERFORMANCE (the default): 60 and ON. Choosing QUALITY or PERFORMANCE sets those two rows and hides them; CUSTOM shows them, and a change of one of them sets CUSTOM (`menu_functions.c`, "xbox extra options update") | `display.preset`: `"custom"`, `"quality"` or `"performance"` |
 | FRAME RATE | 60 (the default): a frame at each refresh, blended between the game's 30 ticks a second (`port/linux/game/render_interpolation.c`). 30: a frame a tick, as on the Xbox | `display.interpolation`: true or false |
 | DYNAMIC RESOLUTION | ON (the default): in heavy scenes the 3D view is drawn smaller, then scaled up under the HUD (below). OFF: always whole | `display.dynamic_resolution`: true or false |

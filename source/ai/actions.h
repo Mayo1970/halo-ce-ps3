@@ -656,6 +656,8 @@ void action_vehicle_update(
 	long actor_index);
 void action_vehicle_control(
 	long actor_index);
+void action_vehicle_flush_structure_indices( /* port: the action table's */
+	long actor_index);
 boolean action_vehicle_setup_specific(
 	long actor_index,
 	long vehicle_index,
@@ -727,6 +729,8 @@ void action_uncover_control(
 	long actor_index);
 void action_uncover_flush_position_indices(
 	long actor_index);
+void action_uncover_flush_structure_indices( /* port: the action table's */
+	long actor_index);
 void action_uncover_modify_color(
 	long actor_index,
 	real_argb_color *color);
@@ -753,6 +757,8 @@ boolean action_search_setup_undirected(
 void action_search_update(
 	long actor_index);
 void action_search_flush_position_indices(
+	long actor_index);
+void action_search_flush_structure_indices( /* port: the action table's */
 	long actor_index);
 void action_search_control(
 	long actor_index);

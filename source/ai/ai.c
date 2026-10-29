@@ -41,6 +41,7 @@ upstream halo-ce-universal copy of source/ai/ai.c. */
 #include "saved games/game_state.h"
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
+#include "structures/structure_bsp_definitions.h" /* port: (ai_test_line_of_sight's cluster count) */
 #include "tag_files/tag_files.h"
 #include "tag_files/tag_groups.h"
 
@@ -2137,7 +2138,11 @@ short ai_test_line_of_sight(
 		_collision_user_ai_lineofsight;
 	ai_profile.meters[_ai_meter_line_of_sight].accumulator++;
 
-	if (p0_cluster_index != NONE && p1_cluster_index != NONE && !scenario_test_pvs(p0_cluster_index, p1_cluster_index))
+	/* port: a cluster outside the current bsp (scenario.c's PVS assert) skips the PVS test: the ray decides */
+	if (p0_cluster_index != NONE && p1_cluster_index != NONE &&
+		VALID_INDEX(p0_cluster_index, global_structure_bsp_get()->clusters.count) &&
+		VALID_INDEX(p1_cluster_index, global_structure_bsp_get()->clusters.count) &&
+		!scenario_test_pvs(p0_cluster_index, p1_cluster_index))
 		goto obstructed;
 
 	collision_flags =

@@ -2200,6 +2200,7 @@ enum
 	_xbox_extra_frame_rate_values,
 	_xbox_extra_button_values,
 	_xbox_extra_dynamic_values,
+	_xbox_extra_crouch_values,
 	_xbox_extra_preset_values,
 	_xbox_extra_help,
 	_xbox_settings_screen,
@@ -2225,6 +2226,9 @@ enum
 	_xbox_extra_dynamic_row,
 	_xbox_extra_dynamic_label,
 	_xbox_extra_dynamic_spinner,
+	_xbox_extra_crouch_row,
+	_xbox_extra_crouch_label,
+	_xbox_extra_crouch_spinner,
 	_xbox_extra_preset_row,
 	_xbox_extra_preset_label,
 	_xbox_extra_preset_spinner,
@@ -2289,6 +2293,7 @@ static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
 	XBOX_EXTRA "var_frame_rate",
 	XBOX_EXTRA "var_button_icons",
 	XBOX_EXTRA "var_dynamic_resolution",
+	XBOX_EXTRA "var_toggle_crouch",
 	XBOX_EXTRA "var_preset",
 	XBOX_EXTRA "extra_help_strings",
 	XBOX_SETTINGS "settings_select_screen",
@@ -2314,6 +2319,9 @@ static char const *const xbox_tag_names[NUMBER_OF_XBOX_TAGS] =
 	XBOX_EXTRA "op_dynamic_resolution",
 	XBOX_EXTRA "dynamic_resolution_label",
 	XBOX_EXTRA "dynamic_resolution_spinner",
+	XBOX_EXTRA "op_toggle_crouch",
+	XBOX_EXTRA "toggle_crouch_label",
+	XBOX_EXTRA "toggle_crouch_spinner",
 	XBOX_EXTRA "op_preset",
 	XBOX_EXTRA "preset_label",
 	XBOX_EXTRA "preset_spinner",
@@ -2464,7 +2472,7 @@ static void xbox_child_set(struct ui_widget_child_reference *child, long tag_ind
 }
 
 /* ---------- SETTINGS (the PS3's): a screen of PLAYER PROFILES and EXTRA OPTIONS, a copy of the multiplayer menu's;
-EXTRA OPTIONS' five rows, a copy of the profile's ADVANCED CONTROLS, written to config.toml */
+EXTRA OPTIONS' six rows, a copy of the profile's ADVANCED CONTROLS, written to config.toml */
 
 /* the headers' place and colour, those of the maps' header pictures' text (in the menu's large font) */
 #define XBOX_HEADER_TOP 46
@@ -2552,16 +2560,18 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 	char const *descriptions[] =
 	{
 		"Create, edit or delete the\r\nplayer profiles: name,\r\ncontrols and color.",
-		"Choose the picture's shape,\r\nthe frame rate, the button\r\nicons, the resolution and a\r\npreset.",
+		"Choose the picture's shape,\r\nbutton icons, crouching,\r\nframe rate, resolution and\r\na preset.",
 	};
 	char const *settings_title = "SETTINGS";
 	char const *extra_title = "EXTRA OPTIONS";
 	/* (in the rows' order, xbox_settings_wire's; the helps too, each row's values in turn) */
-	char const *labels[] = { "WIDESCREEN", "BUTTON ICONS", "PRESET", "FRAME RATE", "DYNAMIC RESOLUTION" };
+	char const *labels[] = { "WIDESCREEN", "BUTTON ICONS", "TOGGLE CROUCH", "PRESET", "FRAME RATE",
+		"DYNAMIC RESOLUTION" };
 	char const *widescreen_values[] = { "ON", "OFF" };
 	char const *frame_rate_values[] = { "60", "30" };
 	char const *button_values[] = { "XBOX", "STYLE A", "STYLE B" };
 	char const *dynamic_values[] = { "ON", "OFF" };
+	char const *crouch_values[] = { "ON", "OFF" };
 	char const *preset_values[] = { "CUSTOM", "QUALITY", "PERFORMANCE" };
 	char const *help[] =
 	{
@@ -2570,6 +2580,8 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 		"The Xbox's buttons, as the maps draw them.",
 		"The PS3's buttons: colored circles with white\r\nsymbols.",
 		"The PS3's buttons: black circles with colored\r\nsymbols.",
+		"Press the crouch button to crouch, and press it\r\nagain to stand up.",
+		"Hold the crouch button to crouch, as on the Xbox.",
 		"FRAME RATE and DYNAMIC RESOLUTION as you set\r\nthem. Split screen always plays at 30.",
 		"30 frames a second, the world always drawn at the\r\nfull resolution. Split screen always plays at 30.",
 		"60 frames a second, the world drawn smaller in\r\nheavy scenes. Split screen always plays at 30.",
@@ -2588,6 +2600,7 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 	definitions[_xbox_extra_frame_rate_values] = string_list_build(frame_rate_values, NULL, NUMBEROF(frame_rate_values), NULL);
 	definitions[_xbox_extra_button_values] = string_list_build(button_values, NULL, NUMBEROF(button_values), NULL);
 	definitions[_xbox_extra_dynamic_values] = string_list_build(dynamic_values, NULL, NUMBEROF(dynamic_values), NULL);
+	definitions[_xbox_extra_crouch_values] = string_list_build(crouch_values, NULL, NUMBEROF(crouch_values), NULL);
 	definitions[_xbox_extra_preset_values] = string_list_build(preset_values, NULL, NUMBEROF(preset_values), NULL);
 	definitions[_xbox_extra_help] = string_list_build(help, NULL, NUMBEROF(help), NULL);
 	definitions[_xbox_settings_screen] = xbox_widget_copy(stock->type_screen, "settings_select_screen");
@@ -2622,6 +2635,10 @@ static void xbox_settings_define(struct xbox_settings_stock const *stock, void *
 		"dynamic_resolution_label");
 	definitions[_xbox_extra_dynamic_spinner] = xbox_widget_copy(xbox_child_tag(stock->second_row, 1),
 		"dynamic_resolution_spinner");
+	definitions[_xbox_extra_crouch_row] = xbox_widget_copy(stock->second_row, "op_toggle_crouch");
+	definitions[_xbox_extra_crouch_label] = xbox_widget_copy(xbox_child_tag(stock->second_row, 0), "toggle_crouch_label");
+	definitions[_xbox_extra_crouch_spinner] = xbox_widget_copy(xbox_child_tag(stock->second_row, 1),
+		"toggle_crouch_spinner");
 	definitions[_xbox_extra_preset_row] = xbox_widget_copy(stock->second_row, "op_preset");
 	definitions[_xbox_extra_preset_label] = xbox_widget_copy(xbox_child_tag(stock->second_row, 0), "preset_label");
 	definitions[_xbox_extra_preset_spinner] = xbox_widget_copy(xbox_child_tag(stock->second_row, 1), "preset_spinner");
@@ -2722,7 +2739,7 @@ static void xbox_setting_add(long definition_index, char const *setting, char co
 	entry->value_count = index;
 }
 
-/* the screens' references, children and handlers, and their five settings */
+/* the screens' references, children and handlers, and their six settings */
 static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **definitions, long const *tags)
 {
 	/* (display.screen_width: 0 is the display's shape, 640 the Xbox's 4:3) */
@@ -2730,6 +2747,7 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 	static char const *const frame_rate_values[] = { "true", "false" };
 	static char const *const button_values[] = { "xbox", "style_a", "style_b" };
 	static char const *const dynamic_values[] = { "true", "false" };
+	static char const *const crouch_values[] = { "true", "false" };
 	static char const *const preset_values[] = { "custom", "quality", "performance" };
 	/* (in their order on the screen) */
 	static long const rows[][4] =
@@ -2737,6 +2755,7 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 		{ _xbox_extra_widescreen_row, _xbox_extra_widescreen_label, _xbox_extra_widescreen_spinner,
 			_xbox_extra_widescreen_values },
 		{ _xbox_extra_button_row, _xbox_extra_button_label, _xbox_extra_button_spinner, _xbox_extra_button_values },
+		{ _xbox_extra_crouch_row, _xbox_extra_crouch_label, _xbox_extra_crouch_spinner, _xbox_extra_crouch_values },
 		{ _xbox_extra_preset_row, _xbox_extra_preset_label, _xbox_extra_preset_spinner, _xbox_extra_preset_values },
 		{ _xbox_extra_frame_rate_row, _xbox_extra_frame_rate_label, _xbox_extra_frame_rate_spinner,
 			_xbox_extra_frame_rate_values },
@@ -2796,7 +2815,8 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 	reference_set(&text->text_label_string_list, UNICODE_STRING_LIST_TAG, tags[_xbox_settings_descriptions]);
 	text->string_list_index = 0;
 
-	/* EXTRA OPTIONS: ADVANCED CONTROLS' list at its five rows' places, its header the port's, its key */
+	/* EXTRA OPTIONS: ADVANCED CONTROLS' list at its five rows' places and a sixth below, its header the port's, its
+	key */
 	{
 		long template_children[] = { 0, 1, 2 };
 		long children[] = { tags[_xbox_extra_list], tags[_xbox_extra_header], NONE };
@@ -2807,13 +2827,21 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 	extra_screen->event_handlers.count = 0;
 	xbox_header_set(definitions[_xbox_extra_header], tags[_xbox_extra_title]);
 	{
-		long template_children[] = { 0, 1, 2, 3, 4 };
+		long template_children[] = { 0, 1, 2, 3, 4, 4 };
 		long children[] = { tags[_xbox_extra_widescreen_row], tags[_xbox_extra_button_row],
-			tags[_xbox_extra_preset_row], tags[_xbox_extra_frame_rate_row], tags[_xbox_extra_dynamic_row] };
-		char const *names[] = { "op_widescreen", "op_button_icons", "op_preset", "op_frame_rate",
-			"op_dynamic_resolution" };
+			tags[_xbox_extra_crouch_row], tags[_xbox_extra_preset_row], tags[_xbox_extra_frame_rate_row],
+			tags[_xbox_extra_dynamic_row] };
+		char const *names[] = { "op_widescreen", "op_button_icons", "op_toggle_crouch", "op_preset",
+			"op_frame_rate", "op_dynamic_resolution" };
 
 		xbox_children_set(extra_list, template_children, NUMBEROF(children), children, names);
+		/* (the sixth a row's step below the fifth: 223, the help text at 321) */
+		if (!build.failed)
+		{
+			struct ui_widget_child_reference *records = extra_list->child_widgets.address;
+
+			records[5].vertical_offset = (short)(2 * records[4].vertical_offset - records[3].vertical_offset);
+		}
 	}
 	/* (PRESET's rule, then the help line of the row and value focused, as the Xbox's: menu_functions.c) */
 	xbox_input_set(extra_list, "xbox extra options update");
@@ -2848,6 +2876,7 @@ static void xbox_settings_wire(struct xbox_settings_stock const *stock, void **d
 	xbox_setting_add(tags[_xbox_extra_widescreen_spinner], "display.screen_width", widescreen_values, 2);
 	xbox_setting_add(tags[_xbox_extra_frame_rate_spinner], "display.interpolation", frame_rate_values, 2);
 	xbox_setting_add(tags[_xbox_extra_button_spinner], "display.button_icons", button_values, 3);
+	xbox_setting_add(tags[_xbox_extra_crouch_spinner], "input.toggle_crouch", crouch_values, 2);
 	xbox_setting_add(tags[_xbox_extra_dynamic_spinner], "display.dynamic_resolution", dynamic_values, 2);
 	xbox_setting_add(tags[_xbox_extra_preset_spinner], "display.preset", preset_values, 3);
 	/* BUTTON ICONS' and PRESET's values are wider than ON or 60: their spinners and left arrows reach further left */

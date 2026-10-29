@@ -1409,6 +1409,31 @@ static void get_local_player_input_blob(
 					}
 				}
 
+#ifdef HALO_PS3
+				/* port: input.toggle_crouch (EXTRA OPTIONS, menu_tags.c): a press of crouch switches it on or off;
+				off again for a new unit */
+				{
+					extern int config_boolean(char const *name);
+					static boolean crouch_held[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+					static boolean crouch_on[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+					static long crouch_unit_index[MAXIMUM_NUMBER_OF_LOCAL_PLAYERS];
+					boolean held = effective_buttons[_button_crouch] != 0;
+
+					if (!config_boolean("input.toggle_crouch") ||
+						crouch_unit_index[local_player_index] != player->unit_index)
+					{
+						crouch_on[local_player_index] = FALSE;
+					}
+					else if (held && !crouch_held[local_player_index])
+					{
+						crouch_on[local_player_index] = !crouch_on[local_player_index];
+					}
+					crouch_held[local_player_index] = held;
+					crouch_unit_index[local_player_index] = player->unit_index;
+					if (config_boolean("input.toggle_crouch"))
+						effective_buttons[_button_crouch] = (byte)crouch_on[local_player_index];
+				}
+#endif
 				if (player->unit_index != NONE)
 				{
 					struct biped_datum *biped = biped_try_and_get(player->unit_index);

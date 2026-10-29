@@ -30,6 +30,7 @@ upstream halo-ce-universal copy of source/ai/ai_communication.c. */
 #include "scenario/scenario.h"
 #include "scenario/scenario_definitions.h"
 #include "sound/game_sound.h"
+#include "structures/structure_bsp_definitions.h" /* port: (the PVS test's cluster count) */
 #include "tag_files/tag_files.h"
 #include "units/dialogue_definitions.h"
 #include "units/units.h"
@@ -2343,8 +2344,11 @@ real ai_communication_get_player_rating(
 						object_get(object_get_ultimate_parent(player->unit_index))->
 							object.location.cluster_index;
 
+					/* port: and both of the current bsp (scenario.c's PVS assert), else the ray decides */
 					if (cluster_index != NONE &&
 						player_cluster_index != NONE &&
+						VALID_INDEX(cluster_index, global_structure_bsp_get()->clusters.count) &&
+						VALID_INDEX(player_cluster_index, global_structure_bsp_get()->clusters.count) &&
 						!scenario_test_pvs(cluster_index, player_cluster_index))
 					{
 						continue;
