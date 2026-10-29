@@ -1,5 +1,3 @@
-# OpenCE-PS3
-
 Halo: Combat Evolved ported to the PlayStation 3. built with the open-source [PSL1GHT](https://github.com/ps3dev/PSL1GHT) SDK.
 
 The game's own code, from the decompilation of the Xbox build 2342, is compiled for the PS3.
