@@ -10,8 +10,8 @@ from pathlib import Path
 # the game's folders that its 64-bit builds rewrite (tools/lp64_build.py's rewritten_inputs), and port/console
 GAME_ROOTS = ("source", "port/linux/game", "port/linux/src", "port/linux/include", "port/include",
               "port/third_party/kcp", "port/third_party/tomlc17", "port/console/game", "port/console/include")
-# ours: the Xbox layer and the headers the game units include (ps3_spu_game.h includes ../spu/spu_game.h)
-PORT_ROOTS = ("port/ps3/xbox", "port/ps3/include", "port/ps3/spu")
+# ours: the Xbox layer, our game units and the headers they include (ps3_spu_game.h includes ../spu/spu_game.h)
+PORT_ROOTS = ("port/ps3/xbox", "port/ps3/game", "port/ps3/include", "port/ps3/spu")
 SUFFIXES = (".c", ".h", ".inl", ".inc")
 
 

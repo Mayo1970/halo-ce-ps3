@@ -537,13 +537,24 @@ int browser_version_state(int version)
 	return 0;
 }
 
+/* the lists' filter (All, Multiplayer, Co-op), kept for the session: browser.c's, which ONLINE GAMES' Y turns */
+static int list_filter;
+
+int browser_list_filter(void)
+{
+	return list_filter;
+}
+
 void browser_list_filter_cycle(void)
 {
+	list_filter = (list_filter + 1) % 3;
 }
 
 const char *browser_list_filter_name(void)
 {
-	return "ALL";
+	static const char *const names[3] = { "ALL", "MULTIPLAYER", "CO-OP" };
+
+	return names[list_filter];
 }
 
 int browser_list_filter_allows(const char *map)

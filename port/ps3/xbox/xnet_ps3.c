@@ -6,7 +6,11 @@ internet play's peers (p2p.c) through its stand-ins, else plain IPv4, enough for
 
 #include "port_config.h"
 #include "p2p.h"
+#include "ps3_game_list.h"
 #include "ps3_net.h"
+
+/* the cached signed legacy table read, and the network rules told of its layouts (port/linux/src/delta.c) */
+void delta_legacy_start(void);
 
 /* the game units' halo_ws_fd_set: FD_SETSIZE HALO_PORT_FD_SETSIZE (256), as ps3_platform.h sets it */
 typedef char halo_ws_fd_set_size_assert[sizeof(halo_ws_fd_set) == 0x404 ? 1 : -1];
@@ -325,6 +329,9 @@ int WSAAPI WSAStartup(WORD version_requested, LPWSADATA data)
 	net_settings_read();
 	brokers_file_write();
 	p2p_initialize(local_address_setting(&local) ? local : loopback_address());
+	/* (then the first game list and the newest table, on a thread: src/ps3_online.c) */
+	delta_legacy_start();
+	ps3_online_start();
 	if (data)
 	{
 		memset(data, 0, sizeof(*data));

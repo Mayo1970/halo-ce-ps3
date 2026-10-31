@@ -39,6 +39,8 @@ def main() -> None:
     sources += listed((args.game / config["game_sources"]).glob("*.c"))
     # the consoles' shared game code: the maps' byte order
     sources += listed((args.game / "port/console/game").glob("*.c"))
+    # ours (port/ps3/game: the ONLINE GAMES screen), from the repository's root as the LP64 copy has them
+    sources += sorted(path.as_posix() for path in Path("port/ps3/game").glob("*.c"))
 
     includes = [shell_quote(f"-I{args.lp64}/{directory}") for directory in game.get("include_dirs", [])]
     # (the originals after the copies, for what is not rewritten: port/third_party/stb)

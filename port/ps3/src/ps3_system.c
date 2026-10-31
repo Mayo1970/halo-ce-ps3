@@ -2,6 +2,7 @@
 (ps3_sys.c, ps3_main.c) and xashPS3 (sys_ps3.c). */
 
 #include "ps3_system.h"
+#include "ps3_osk.h"
 
 #include <dirent.h>
 #include <stdint.h>
@@ -165,6 +166,8 @@ static void sysutil_callback(u64 status, u64 parameter, void *user_data)
 		overlay_drawing = status == SYSUTIL_DRAW_BEGIN;
 	if (status == SYSUTIL_MENU_OPEN || status == SYSUTIL_MENU_CLOSE)
 		overlay_menu = status == SYSUTIL_MENU_OPEN;
+	if (status >= SYSUTIL_OSK_LOADED && status <= SYSUTIL_OSK_INPUT_CANCELED)
+		ps3_osk_event(status);
 }
 
 /* the monitor's 100 ms pass alone saw the XMB up to 6 frames late; one thread at a time, the other skips */

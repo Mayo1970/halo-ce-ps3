@@ -35,6 +35,10 @@ TOML_DIR    := port/third_party/tomlc17
 MUSL_DIR    := $(GAME)/port/third_party/musl-math
 ZLIB_DIR    := $(GAME)/port/third_party/zlib
 KCP_DIR     := port/third_party/kcp
+HTTPS_DIR   := $(GAME)/port/console/https
+MBEDTLS_DIR := $(GAME)/port/third_party/mbedtls
+# the game's version, which Delta Peer's build string carries
+GAME_VERSION := $(shell tr -d '\r\n' < $(GAME)/VERSION)
 
 # written before make reads its rules, so that the depfiles' headers are there and current
 LP64_SYNC := $(shell python3 tools/ps3_lp64_tree.py --game $(GAME) --out $(LP64) >&2 && echo ok)
@@ -44,7 +48,7 @@ endif
 
 # ---------- the host layer (port/ps3/src): lv2 and newlib with their own 64-bit long
 
-# (no HTTPS yet: the game's port/console/https takes the place of ps3_mbedtls.c's, MIGRATION.md M4)
+# (not the old tree's ps3_mbedtls.c: the game's port/console/https defines mbedtls_hardware_poll itself)
 HOST_SRCS := $(filter-out %/ps3_mbedtls.c,$(wildcard $(PS3_DIR)/src/*.c))
 HOST_ASMS := $(wildcard $(PS3_DIR)/src/*.S)
 HOST_OBJS := $(patsubst %,$(BUILD)/obj/%.o,$(basename $(HOST_SRCS) $(HOST_ASMS)))
@@ -80,6 +84,10 @@ GAME_WIDE := wcslen wcsnlen wcschr wcsrchr wcscmp wcsncmp wcscpy wcsncpy wcscat 
 GAME_ABI = -O2 -mcpu=cell -mhard-float -mno-altivec -fsigned-char -fms-extensions -fshort-wchar -fcommon \
            -fno-strict-aliasing -fwrapv -fno-delete-null-pointer-checks -ffp-contract=off -DHALO_64BIT \
            $(addprefix -fno-builtin-,$(GAME_WIDE))
+# the players the network tables hold: 16, the Xbox's, as on every console build (the game's tools/console_build.py)
+GAME_ABI += -DHALO_CONSOLE_PLAYERS=16
+# Delta Peer as a client, as the consoles' builds have it (the game's docs/building.md, "Console ports")
+GAME_ABI += -DHALO_CONSOLE_DELTA
 # the conversions that cut a 64-bit pointer are errors, as in the game's 64-bit builds (lp64_game_flags); GCC's -w
 # would hide them too, so the other warnings it has on by default are turned off one by one
 GAME_WARN ?= -Werror=int-to-pointer-cast -Werror=pointer-to-int-cast -Werror=int-conversion \
@@ -112,7 +120,7 @@ define game_compile
 @$(CC) $(GAME_CFLAGS) -MMD -MP -c "$<" -o $@
 endef
 
-$(GAME_MK): $(GAME)/port/linux/port.json tools/ps3_game_mk.py
+$(GAME_MK): $(GAME)/port/linux/port.json tools/ps3_game_mk.py $(wildcard $(PS3_DIR)/game/*.c)
 	@python3 tools/ps3_game_mk.py --game $(GAME) --lp64 $(LP64) --build $(BUILD) --output $@
 
 -include $(GAME_MK)
@@ -138,7 +146,8 @@ XBOX_UNITS := $(wildcard $(PS3_DIR)/xbox/*.c) \
               $(addprefix port/linux/src/,bink_null.c d3d8_resources.c halo_linker_common.c msvc_crt.c \
               msvc_wide.c port_config.c xbdm.c xbox_xapi.c p2p.c p2p_copies.c p2p_crypto.c p2p_discord.c \
               p2p_lobby.c p2p_probe.c p2p_signal.c log_address.c thread_stop.c ui_point.c build_identity.c \
-              discord_activity.c delta.c delta_compat.c port_folders.c) \
+              discord_activity.c delta.c delta_compat.c port_folders.c delta_wire.c delta_peer.c delta_chat.c \
+              delta_chat_words.c delta_chat_bridge.c delta_peer_game.c) \
               $(KCP_DIR)/ikcp.c
 XBOX_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(XBOX_UNITS))
 
@@ -161,6 +170,9 @@ $(BUILD)/brokers_txt.h: $(GAME)/port/assets/network/brokers.txt
 	@sed -e 's/\r$$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' $< > $@
 
 $(BUILD)/obj/$(KCP_DIR)/ikcp.o: XBOX_DEFINES := -w
+# the signed legacy table over the consoles' HTTPS (src/ps3_online.c fetches it); Delta Peer's build string
+$(BUILD)/obj/port/linux/src/delta.o: XBOX_DEFINES := -DHALO_CONSOLE_HTTPS -I$(HTTPS_DIR)
+$(BUILD)/obj/port/linux/src/delta_peer_game.o: XBOX_DEFINES := -DHALO_VERSION=\"$(GAME_VERSION)\"
 $(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: $(BUILD)/brokers_txt.h
 $(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: XBOX_DEFINES := -I$(BUILD)
 
@@ -219,6 +231,21 @@ $(THIRD_PARTY_OBJS): $(BUILD)/obj/%.o: $(GAME)/%.c
 	@mkdir -p $(dir $@)
 	@echo "CC $<"
 	@$(CC) $(CFLAGS) -std=gnu11 -w -MMD -MP -c $< -o $@
+
+# HTTPS for the game list and the signed legacy table: the game's port/console/https and Mbed TLS 3.6.7 with the
+# consoles' configuration and the host's long, their headers before the image's portlibs Mbed TLS 2.28
+HTTPS_SRCS  := $(addprefix $(HTTPS_DIR)/,console_https.c console_https_trust.c console_https_roots.c console_pins.c) \
+               $(wildcard $(MBEDTLS_DIR)/library/*.c)
+HTTPS_OBJS  := $(patsubst $(GAME)/%.c,$(BUILD)/obj/%.o,$(HTTPS_SRCS))
+HTTPS_FLAGS := -DMBEDTLS_CONFIG_FILE=\"console_mbedtls_config.h\" -I$(HTTPS_DIR) -I$(MBEDTLS_DIR)/include \
+               -I$(MBEDTLS_DIR)/library -I$(GAME)/port/third_party/monocypher
+
+$(HTTPS_OBJS): $(BUILD)/obj/%.o: $(GAME)/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(HTTPS_FLAGS) $(CFLAGS) -std=gnu99 -mminimal-toc -w -MMD -MP -c $< -o $@
+
+$(BUILD)/obj/$(PS3_DIR)/src/ps3_online.o: CFLAGS += -I$(HTTPS_DIR)
 
 # the one unit with VMX (exact, for the simulation: no fused multiply-adds of its own)
 $(BUILD)/obj/$(PS3_DIR)/src/ps3_vmx.o: CFLAGS += -maltivec -ffp-contract=off
@@ -288,7 +315,7 @@ all: $(BUILD)/$(TARGET).elf
 xbox: $(XBOX_OBJS)
 
 # the host objects come first, before libc, so ps3_setjmp.o replaces its setjmp
-ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) \
+ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) $(HTTPS_OBJS) \
            $(SPU_OBJS) $(PACK_OBJ) $(GAME_OBJS)
 
 $(BUILD)/$(TARGET).elf: $(ALL_OBJS)
@@ -308,7 +335,7 @@ $(BUILD)/obj/%.o: %.S
 # the G0 bring-up test, without the game: build/ps3/halo_ps3_bringup.elf (bringup-self: its EBOOT.BIN)
 BRINGUP_OBJS := $(BUILD)/obj/$(PS3_DIR)/bringup/ps3_bringup.o \
                 $(filter-out %/ps3_main.o %/ps3_host.o %/ps3_posix.o %/ps3_gpu.o %/ps3_rsx_asm.o %/ps3_rsx_vp.o \
-                %/ps3_rsx_fp.o %/ps3_spu.o,$(HOST_OBJS))
+                %/ps3_rsx_fp.o %/ps3_spu.o %/ps3_online.o %/game_list_parse.o %/game_list_text.o,$(HOST_OBJS))
 
 $(BUILD)/$(TARGET)_bringup.elf: $(BRINGUP_OBJS)
 	@echo "LD $@"
@@ -354,4 +381,4 @@ clean:
 	@rm -rf $(BUILD)
 
 -include $(HOST_OBJS:.o=.d) $(XBOX_OBJS:.o=.d) $(TOML_OBJS:.o=.d) $(MUSL_OBJS:.o=.d) $(ZLIB_OBJS:.o=.d) \
-	$(THIRD_PARTY_OBJS:.o=.d) $(GAME_OBJS:.o=.d) $(BRINGUP_OBJS:.o=.d)
+	$(THIRD_PARTY_OBJS:.o=.d) $(HTTPS_OBJS:.o=.d) $(GAME_OBJS:.o=.d) $(BRINGUP_OBJS:.o=.d)
