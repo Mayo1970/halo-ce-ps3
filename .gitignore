@@ -1,0 +1,7 @@
+build/
+__pycache__
+
+# Working notes of the PS3 port (kept local)
+GOALS.md
+ROADMAP.md
+MIGRATION.md
