@@ -1,6 +1,6 @@
 # Halo CE PS3 (PSL1GHT) on ChupathingyCE (chupathingyce/, a submodule). Build in the ps3dev Docker image:
 # ./build.sh [pkg|self|check|bringup|clean]. Set LOG_IP to the PC that listens for the UDP log (nc -ul 18194).
-# DEBUG=0 is the retail build: no UDP log (no socket, nothing formatted or sent).
+# DEBUG=0 is the retail build: no UDP log (no socket, nothing formatted or sent), no campaign levels opened.
 ifeq ($(strip $(PS3DEV)),)
 $(error "PS3DEV is not set: build with ./build.sh")
 endif
@@ -62,6 +62,8 @@ CFLAGS := -std=gnu99 -O2 -Wall -mcpu=cell -mhard-float -mno-altivec -fno-strict-
           -iquote $(GAME)/port/linux/src
 ifeq ($(DEBUG),1)
 CFLAGS += -DPS3_LOG
+# (and every campaign level open: player_profile.c's player_profile_get)
+GAME_DEBUG := -DPS3_DEBUG
 endif
 ASFLAGS := -mcpu=cell -mno-altivec
 
@@ -98,7 +100,7 @@ GAME_CFLAGS = -std=gnu89 -D__STRICT_ANSI__ $(GAME_WARN) $(GAME_ABI) $(GAME_TOC) 
               -include $(LP64)/$(PS3_DIR)/include/halo_ps3_prefix.h -include $(SEMANTICS) \
               -I$(LP64)/$(PS3_DIR)/include -I$(LP64)/port/linux/include -I$(LP64)/port/console/include \
               -iquote $(LP64)/port/linux/game $(GAME_DEFINES) $(GAME_INCLUDES) \
-              -idirafter $(LP64)/port/include/xdk $(GAME_UNIT_FLAGS) $(GAME_EXTRA)
+              -idirafter $(LP64)/port/include/xdk $(GAME_UNIT_FLAGS) $(GAME_DEBUG) $(GAME_EXTRA)
 
 # the game's main() is called by the PS3's (port/ps3/src/ps3_main.c)
 $(BUILD)/obj/source/shell/shell_xbox.o: GAME_UNIT_FLAGS := -Dmain=halo_xbox_main

@@ -102,7 +102,8 @@ not rebuild for a changed flag.
 
 `DEBUG=0` makes the retail build: `./build.sh clean` and then
 `./build.sh pkg DEBUG=0`. It has no UDP log: it opens no socket, and
-formats and sends nothing. The default is `DEBUG=1`, with the log.
+formats and sends nothing. The default is `DEBUG=1`, with the log, and
+with every campaign level open on every difficulty in every profile.
 
 ## Install
 

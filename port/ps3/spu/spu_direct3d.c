@@ -770,6 +770,10 @@ static inline void command_word(uint32_t word)
 	commands_stream(&word, 1);
 }
 
+/* 0x1710 before the next draw: the vertex arena grew, or a chunk went out (the RSX can run its last draw, whose
+fetch reads past its vertices, before the next scratch bytes are written there) */
+static int vertex_cache_dirty;
+
 /* the chunk ends in a RETURN and goes to the service thread; the next starts 16-aligned after it */
 static void chunk_publish(void)
 {
@@ -805,6 +809,7 @@ static void chunk_publish(void)
 	put_echo();
 	event_send(SPU_D3D_SERVICE_PORT, chunks_published);
 	chunk_start = end;
+	vertex_cache_dirty = 1;
 }
 
 /* the PPE's answer to a request; the chunk before it published */
@@ -1475,7 +1480,6 @@ static struct
 static gpu_texture textures[TEXTURE_UNITS];
 static uint8_t texture_states[TEXTURE_UNITS];
 static int texture_cache_dirty;
-static int vertex_cache_dirty;
 static uint8_t attribute_enabled[ATTRIBUTE_COUNT];
 /* ZCull's surface (the PPE binds it with a target's tiles) */
 static uint32_t zcull_offset, zcull_width, zcull_height;
