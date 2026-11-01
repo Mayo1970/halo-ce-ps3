@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
-The invite code converter, for GitHub Pages: an invite link (halo://join/...) to an 8-digit code that a console types.
-The link is kept on public MQTT brokers, sealed with the code: port/linux/src/p2p_crypto.c.
+The invite code converter, for GitHub Pages: a ChupathingyCE invite link (halo://join/...) to an 8-digit code that a PS3
+types, and a code (a PS3 host's) to its link. Links are sealed with the code on public MQTT brokers: p2p_crypto.c.
 -->
 <html lang="en">
 <head>
@@ -161,10 +161,12 @@ The link is kept on public MQTT brokers, sealed with the code: port/linux/src/p2
 <body>
 <main>
   <h1>Invite Codes</h1>
-  <p class="lead">Turn an internet play invite link into a short code for a console.</p>
+  <p class="lead">Turn a Chupathingy invite link into a short code that a PS3 types, and a PS3's code back into its
+    link.</p>
 
   <section class="card">
     <h2>Link to code</h2>
+    <p class="note">Host an internet game on the PC, then copy its invite link.</p>
     <form id="make-form">
       <label for="link-input">Invite link</label>
       <div class="row">
@@ -175,18 +177,34 @@ The link is kept on public MQTT brokers, sealed with the code: port/linux/src/p2
     <div id="make-result" class="result" aria-live="polite"></div>
   </section>
 
+  <section class="card">
+    <h2>Code to link</h2>
+    <p class="note">A PS3 that hosts shows its code in SERVER SETUP and in the lobby.</p>
+    <form id="find-form">
+      <label for="code-input">Invite code</label>
+      <div class="row">
+        <input id="code-input" inputmode="numeric" autocomplete="off" placeholder="1234 5678" maxlength="12">
+        <button id="find-button" type="submit">Find link</button>
+      </div>
+    </form>
+    <div id="find-result" class="result" aria-live="polite"></div>
+  </section>
+
   <footer>
-    <p>A code works for 30 minutes. Anyone who has the code can join the game until then.</p>
-    <p>The page keeps the link on public MQTT brokers (EMQX, HiveMQ, Eclipse Mosquitto), encrypted with the code.</p>
+    <p>A code made here works for 30 minutes; a PS3's works while the PS3 hosts. Anyone who has the code can join the
+      game.</p>
+    <p>The page keeps the link on public MQTT brokers that the game also uses (EMQX, HiveMQ, Eclipse Mosquitto),
+      encrypted with the code.</p>
   </footer>
 </main>
 
 <script id="core">
 'use strict';
 
-// the invite codes of port/linux/src/p2p_crypto.c and p2p_signal.c: a key from the code's digits, the topic it names,
-// and the invite (the host's key hash and the token) sealed with it, retained on the brokers for EXPIRY_SECONDS
+// the PS3's invite codes (p2p_crypto.c, p2p.c, p2p_signal.c): a key from the code's digits, the topic it names, and
+// the invite (the host's key hash and the token) sealed with it, retained on the brokers for EXPIRY_SECONDS
 const InviteCodes = (() => {
+  // the WebSocket ports of brokers in the game's brokers.txt (mqtt.chupathingy.org states no WebSocket port)
   const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt',
     'wss://test.mosquitto.org:8081/mqtt'];
   const SALT = 'hceu invite code 1';
@@ -199,6 +217,7 @@ const InviteCodes = (() => {
   const PAYLOAD_SIZE = 2 + NONCE_SIZE + INVITE_SIZE + TAG_SIZE;
   const EXPIRY_SECONDS = 1800;
   const CONNECT_MS = 8000;
+  const LOOKUP_MS = 10000;
 
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -454,8 +473,34 @@ const InviteCodes = (() => {
     });
   }
 
+  // the invite retained under the topic on any broker, opened with the key; null if none in time
+  function lookUpEverywhere(topic, key, urls) {
+    const brokers = urls.map((url) => new Broker(url));
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (invite) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        brokers.forEach((broker) => broker.close());
+        resolve(invite);
+      };
+      const timer = setTimeout(() => finish(null), LOOKUP_MS);
+      brokers.forEach((broker) => broker.connect()
+        .then(() => broker.subscribe(topic, async (payload) => {
+          const invite = await open(key, payload);
+          if (invite) finish(invite);
+        }))
+        .catch(() => {}));
+      if (!brokers.length) finish(null);
+    });
+  }
+
   // a new code for the link's invite: { code, expires } (a Date); throws with a message to show
   async function makeInviteCode(linkText, urls = BROKERS, expirySeconds = EXPIRY_SECONDS) {
+    if (/halo:\/\/join\/p[0-9a-f]/i.test(linkText))
+      throw new Error('That is the link of a game with a password, which the PS3 cannot join. Remove the password ' +
+        'in Server Setup, then copy the new link.');
     const invite = parseLink(linkText);
     if (!invite) throw new Error('That is not an invite link. It looks like halo://join/ and 64 letters and digits.');
     const code = makeCode();
@@ -465,7 +510,17 @@ const InviteCodes = (() => {
     return { code: spaced(code), expires: new Date(Date.now() + expirySeconds * 1000) };
   }
 
-  return { makeInviteCode, parseLink, parseCode, codeKey, codeTopic, seal, open, publishEverywhere, hex, spaced };
+  // the link of a code: the link, or null if no game has it; throws with a message to show
+  async function findInviteLink(codeText, urls = BROKERS) {
+    const digits = parseCode(codeText);
+    if (!digits) throw new Error('A code has 8 digits.');
+    const key = await codeKey(digits);
+    const invite = await lookUpEverywhere(await codeTopic(key), key, urls);
+    return invite ? 'halo://join/' + hex(invite) : null;
+  }
+
+  return { makeInviteCode, findInviteLink, parseLink, parseCode, codeKey, codeTopic, seal, open, publishEverywhere,
+    hex, spaced };
 })();
 </script>
 
@@ -507,8 +562,45 @@ const InviteCodes = (() => {
         const codeNode = paragraph(code, 'code');
         const time = expires.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         show(result, [codeNode,
-          paragraph('On the PS3: MULTIPLAYER > INTERNET PLAY, press Y and type the code.', 'note'),
+          paragraph('On the PS3: JOIN GAME > DIRECT LINK, select ENTER CODE and type the code.', 'note'),
           paragraph('The code works until ' + time + '.', 'note')]);
+      } catch (error) {
+        show(result, [paragraph(error.message, 'error')]);
+      }
+    });
+  });
+
+  element('find-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const result = element('find-result');
+    busy(element('find-button'), 'Finding...', async () => {
+      try {
+        const link = await InviteCodes.findInviteLink(element('code-input').value);
+        if (!link) {
+          show(result, [paragraph('No game has this code, or the code expired.', 'error')]);
+          return;
+        }
+        const linkNode = paragraph(link, 'link');
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.textContent = 'Copy link';
+        copy.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(link);
+            copy.textContent = 'Copied';
+          } catch {
+            copy.textContent = 'Select the link and copy it';
+          }
+        });
+        const openLink = document.createElement('a');
+        openLink.className = 'button';
+        openLink.href = link;
+        openLink.textContent = 'Open in the game';
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.append(copy, openLink);
+        show(result, [linkNode, row,
+          paragraph('On the PC: open the link, or copy it and select PASTE LINK in Join Game > Direct Link.', 'note')]);
       } catch (error) {
         show(result, [paragraph(error.message, 'error')]);
       }

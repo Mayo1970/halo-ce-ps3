@@ -28,6 +28,10 @@ void ps3_gpu_timestamp(int part);
 (ps3_timers.h's key and part), read with the frame's timestamps; 1 if this frame's draws are stamped */
 void ps3_gpu_draw_stamps(int on);
 int ps3_gpu_draw_stamp(uint16_t stamp);
+/* a visibility test: the Z-pass pixel count cleared and on (begin), then written into test index's report and off */
+void ps3_gpu_visibility(int begin, uint32_t index);
+/* the bound target's pixels the RSX last counted for test index (0 before its first report) */
+uint32_t ps3_gpu_visibility_count(uint32_t index);
 /* changes when the RSX's state kept here is reset (each frame): the units, programs and states set before are unknown */
 uint32_t ps3_gpu_state_epoch(void);
 /* the thread that draws ends at stop_drawing (the process ends, or the display thread takes the RSX back) */
@@ -198,6 +202,20 @@ void ps3_gpu_set_texture(uint32_t unit, const struct ps3_gpu_texture *texture);
 void ps3_gpu_textures_written(void);
 /* its calls so far */
 uint32_t ps3_gpu_textures_written_count(void);
+
+/* a linear A8R8G8B8 target's pixels into a level of a swizzled A8R8G8B8 texture (64-aligned offset, a power of two
+from 4x2 to 1024x1024) */
+struct ps3_gpu_swizzle_level
+{
+	uint32_t source_offset;
+	uint32_t source_pitch;
+	uint32_t offset;
+	uint16_t width;
+	uint16_t height;
+};
+
+/* the levels copied by the 2D engine after the draws so far, and sampled after it through a flushed texture cache */
+void ps3_gpu_swizzle_levels(const struct ps3_gpu_swizzle_level *levels, uint32_t count);
 
 /* ---------- vertices and draws */
 

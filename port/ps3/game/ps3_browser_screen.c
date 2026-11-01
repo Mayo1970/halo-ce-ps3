@@ -1,7 +1,7 @@
 /* The Multiplayer menu's ONLINE GAMES on the PS3 (HALO_CONSOLE_ONLINE_GAMES): the console game list
 (src/ps3_online.c) on a screen of code, the Wii U's wiiu_browser_screen.c (warthog-wiiu) without Link Profile. */
-/* Up and down pick, left and right page, A joins through the game's invite (the tunnel, p2p.c), X refreshes, Y
-filters, B goes back. */
+/* Up and down pick, left and right page, A joins through the game's invite (the tunnel, p2p.c), START joins by an
+invite code typed on the system keyboard (port/ps3/invite), X refreshes, Y filters, B goes back. */
 
 #include "cseries/cseries.h"
 #include "cseries/cseries_windows.h"
@@ -28,15 +28,24 @@ filters, B goes back. */
 
 /* (ui_widget.c's, ui_widget_event_handler_functions.c's, network_client_manager.c's) */
 long ui_widget_online_games_font(boolean heading);
+char const *ui_widget_ps3_screen_name(void);
 boolean ui_online_games_start_network(void);
 long network_game_client_join_invite_host(char const *invite);
 boolean create_global_network_game_client(void);
 void game_connection_set(short connection);
-/* (port/linux/src: internet play's tunnel to an invite's host, the lists' filter, the settings) */
+/* (port/linux/src: internet play's tunnel to an invite's host and its invite codes, the lists' filter, the settings) */
 int p2p_join_invite(char const *text);
+int p2p_look_up_code(char const *text);
+int p2p_code_found(char *link, int size);
+void p2p_stop_code_lookup(void);
+int p2p_invite_code(char *code, int size);
 int browser_list_filter(void);
 void browser_list_filter_cycle(void);
 int config_boolean(char const *name);
+/* (src/ps3_osk.c: the system keyboard) */
+int ps3_osk_open_digits(char const *title, int maximum_length);
+int ps3_osk_active(void);
+int ps3_osk_take_digits(char *text, int size);
 
 /* ---------- constants */
 
@@ -59,6 +68,8 @@ enum
 	STATUS_DURATION = 5000,
 	/* how long the tunnel and the host's advertisement may take */
 	CONNECT_TIMEOUT = 45000,
+	/* an invite code as typed: 8 digits, with spaces or dashes between them */
+	CODE_CHARACTERS = 12,
 	/* a held direction: the first repeat after this long, then this often; a longer gap is a new press */
 	STEP_FIRST_REPEAT_DELAY = 350,
 	STEP_REPEAT_INTERVAL = 110,
@@ -88,6 +99,9 @@ enum
 	PICTURE_RIGHT = PICTURE_LEFT + 120,
 	DETAIL_TEXT = PICTURE_RIGHT + 14,
 };
+
+/* the Xbox's lobby, which a joined game opens and the Chupathingy menus' START GAME too */
+#define LOBBY_SCREEN_NAME "ui\\shell\\main_menu\\multiplayer_type_select\\connected\\pregame\\connected_pregame_screen"
 
 /* the screen's colors (pixel32, 0xAARRGGBB); the background is opaque, as a screen the menus open */
 #define COLOR_BACKGROUND 0xFF050B18
@@ -126,6 +140,10 @@ static struct
 	boolean connecting;
 	char connecting_invite[GAME_LIST_INVITE_LENGTH + 1];
 	unsigned long connecting_time;
+	/* the keyboard up for an invite code; the code looked up on the brokers, since when */
+	boolean code_keyboard;
+	boolean code_looking;
+	unsigned long code_time;
 } browser_screen;
 
 /* ---------- private code */
@@ -260,9 +278,7 @@ static void wait_for_host(
 		browser_screen.connecting = FALSE;
 		browser_screen.active = FALSE;
 		ui_widgets_close_all();
-		ui_widget_load_by_name_or_tag(
-			"ui\\shell\\main_menu\\multiplayer_type_select\\connected\\pregame\\connected_pregame_screen",
-			NONE, NULL, NONE, NONE, NONE, NONE);
+		ui_widget_load_by_name_or_tag(LOBBY_SCREEN_NAME, NONE, NULL, NONE, NONE, NONE, NONE);
 	}
 	else if (joined == -2)
 	{
@@ -285,6 +301,51 @@ static void wait_for_host(
 	}
 }
 
+/* the code typed, once the keyboard has closed: looked up on the brokers (none if the keyboard was cancelled) */
+static void take_code(
+	void)
+{
+	char code[CODE_CHARACTERS + 1];
+	int looked_up;
+
+	browser_screen.code_keyboard = FALSE;
+	if (!ps3_osk_take_digits(code, sizeof(code)))
+		return;
+	if (!config_boolean("network.online"))
+	{
+		set_status("Internet play is off (network.online).");
+		return;
+	}
+	looked_up = p2p_look_up_code(code);
+	if (looked_up < 0)
+		set_status("Internet play is off.");
+	else if (!looked_up)
+		set_status("An invite code is 8 digits.");
+	else
+	{
+		browser_screen.code_looking = TRUE;
+		browser_screen.code_time = system_milliseconds();
+	}
+}
+
+/* the code's invite, once found: joined as a listed game's */
+static void wait_for_code(
+	void)
+{
+	char link[16 + GAME_LIST_INVITE_LENGTH];
+	int found = p2p_code_found(link, sizeof(link));
+
+	if (!found)
+		return;
+	browser_screen.code_looking = FALSE;
+	if (found == -2)
+		set_status("Could not look up the code. Check your network settings.");
+	else if (found < 0)
+		set_status("No game has that code. Check it, or make a new one.");
+	else
+		join_invite(link + strlen("halo://join/"), "the invite code's game");
+}
+
 /* ---------- public code */
 
 boolean browser_screen_active(
@@ -304,6 +365,9 @@ void browser_screen_open(
 	/* (the list as it came last; a fresh one asked for) */
 	browser_screen.lists = 0;
 	browser_screen.connecting = FALSE;
+	browser_screen.code_keyboard = FALSE;
+	browser_screen.code_looking = FALSE;
+	p2p_stop_code_lookup();
 	take_list();
 	refresh();
 	/* the network searching, as System Link's list starts it: the joined host's advertisement comes through the
@@ -374,8 +438,8 @@ void browser_screen_process(
 			case _gamepad_binary_button_dpad_left: move = -browser_screen.rows; break;
 			case _gamepad_binary_button_dpad_right: move = browser_screen.rows; break;
 			case _gamepad_analog_button_a:
-				if (!browser_screen.connecting && system_milliseconds() - browser_screen.opened_time > OPEN_SETTLE &&
-					selected_game())
+				if (!browser_screen.connecting && !browser_screen.code_looking &&
+					system_milliseconds() - browser_screen.opened_time > OPEN_SETTLE && selected_game())
 				{
 					struct game_list_game const *game = selected_game();
 
@@ -384,6 +448,16 @@ void browser_screen_process(
 						set_status("That game is not accepting players.");
 					else
 						join_invite(game->invite, game->name);
+				}
+				break;
+			case _gamepad_binary_button_start:
+				if (!browser_screen.connecting && !browser_screen.code_looking)
+				{
+					ui_play_audio_feedback_sound(_browser_sound_forward);
+					if (ps3_osk_open_digits("Invite code", CODE_CHARACTERS))
+						browser_screen.code_keyboard = TRUE;
+					else
+						set_status("Could not open the keyboard.");
 				}
 				break;
 			case _gamepad_analog_button_y:
@@ -401,10 +475,12 @@ void browser_screen_process(
 				break;
 			case _gamepad_analog_button_b:
 				ui_play_audio_feedback_sound(_browser_sound_back);
-				/* (B stops a join under way; again, goes back) */
-				if (browser_screen.connecting)
+				/* (B stops a join or a code's lookup under way; again, goes back) */
+				if (browser_screen.connecting || browser_screen.code_looking)
 				{
+					p2p_stop_code_lookup();
 					browser_screen.connecting = FALSE;
+					browser_screen.code_looking = FALSE;
 					set_status("Stopped.");
 				}
 				else
@@ -428,6 +504,10 @@ void browser_screen_process(
 		}
 	}
 	remember_selected();
+	if (browser_screen.code_keyboard && !ps3_osk_active())
+		take_code();
+	if (browser_screen.active && browser_screen.code_looking)
+		wait_for_code();
 	if (browser_screen.active && browser_screen.connecting)
 		wait_for_host();
 	/* (the widgets behind take nothing while the screen is up) */
@@ -590,9 +670,13 @@ static void draw_details(
 	draw_map_picture(game->map, DETAIL_TOP + 6, DETAIL_BOTTOM - 6);
 	text(font, _justify_left, text_color, DETAIL_TEXT, y, SCREEN_RIGHT - 8, y + height, game->name);
 	y += height;
+	/* (a line that would pass the panel's bottom is left out, so none runs into the buttons) */
 #define DETAIL_LINE(label, value) \
-	text(font, _justify_left, label_color, DETAIL_TEXT, y, DETAIL_TEXT + 80, y + height, label); \
-	text(font, _justify_left, text_color, DETAIL_TEXT + 84, y, SCREEN_RIGHT - 8, y + height, value); \
+	if (y + height <= DETAIL_BOTTOM) \
+	{ \
+		text(font, _justify_left, label_color, DETAIL_TEXT, y, DETAIL_TEXT + 80, y + height, label); \
+		text(font, _justify_left, text_color, DETAIL_TEXT + 84, y, SCREEN_RIGHT - 8, y + height, value); \
+	} \
 	y += height;
 	game_list_game_map_name(game, value, sizeof(value));
 	DETAIL_LINE("Map", value);
@@ -609,7 +693,10 @@ void browser_screen_render(
 	void)
 {
 	long heading_font = ui_widget_online_games_font(TRUE);
-	long font = ui_widget_online_games_font(FALSE);
+	long prompt_font = ui_widget_online_games_font(FALSE);
+	/* (the list and details in the menus' small font: the menu's own, large_ui, fits 7 rows and cuts the names) */
+	long small_font = tag_loaded(FONT_GROUP_TAG, "ui\\small_ui");
+	long font = small_font != NONE ? small_font : prompt_font;
 	struct game_list const *list = ps3_game_list_get(NULL);
 	struct game_list_game const *selected = selected_game();
 	real_argb_color title_color, head_color, text_color, dim_color, note_color;
@@ -697,12 +784,18 @@ void browser_screen_render(
 		text(font, _justify_left, color, column_players, ty, column_region - CELL_INSET, y1, line);
 		text(font, _justify_left, color, column_region, ty, SCREEN_RIGHT, y1, game->region[0] ? game->region : "-");
 	}
-	/* under the list: what A or X last did (a while), else the list's state; and the page */
+	/* under the list: a code's lookup, else what A or X last did (a while), else the list's state; and the page */
 	{
 		short y0 = (short)(LIST_TOP + rows * row_height + 2);
 		short y1 = (short)(y0 + line_height(font) + 2);
 
-		if (browser_screen.status[0] && system_milliseconds() - browser_screen.status_time < STATUS_DURATION)
+		if (browser_screen.code_looking)
+		{
+			snprintf(line, sizeof(line), "Looking up the invite code... %d s",
+				(int)((system_milliseconds() - browser_screen.code_time) / 1000));
+			text(font, _justify_left, &note_color, SCREEN_LEFT + CELL_INSET, y0, SCREEN_RIGHT, y1, line);
+		}
+		else if (browser_screen.status[0] && system_milliseconds() - browser_screen.status_time < STATUS_DURATION)
 		{
 			text(font, _justify_left, &note_color, SCREEN_LEFT + CELL_INSET, y0, SCREEN_RIGHT, y1,
 				browser_screen.status);
@@ -722,14 +815,14 @@ void browser_screen_render(
 	draw_details(selected, font, &head_color, &text_color);
 
 	/* the buttons, each icon by its word from the left (centered text would part the icons from their words) */
-	if (font != NONE)
+	if (prompt_font != NONE)
 	{
-		/* (Y names the filter it is on) */
+		/* (Y names the filter it is on; START is a word: ui.map's menu icons have a blank START) */
 		static wchar_t const *const buttons[] =
 		{
-			L"%a-button Join   %x-button Refresh   %y-button Filter: All   %b-button Back",
-			L"%a-button Join   %x-button Refresh   %y-button Filter: Multiplayer   %b-button Back",
-			L"%a-button Join   %x-button Refresh   %y-button Filter: Co-op   %b-button Back",
+			L"%a-button Join   START Code   %x-button Refresh   %y-button Filter: All   %b-button Back",
+			L"%a-button Join   START Code   %x-button Refresh   %y-button Filter: Multiplayer   %b-button Back",
+			L"%a-button Join   START Code   %x-button Refresh   %y-button Filter: Co-op   %b-button Back",
 		};
 		rectangle2d bounds;
 
@@ -737,14 +830,15 @@ void browser_screen_render(
 		bounds.y0 = PROMPT_TOP;
 		bounds.x1 = SCREEN_RIGHT;
 		bounds.y1 = PROMPT_BOTTOM;
-		draw_string_set_draw_mode(font, NONE, _justify_left, 0, &text_color);
+		draw_string_set_draw_mode(prompt_font, NONE, _justify_left, 0, &text_color);
 		draw_string_and_hack_in_icons(&bounds, &bounds, NULL, 0,
-			browser_screen.connecting ? L"%b-button Stop" :
+			browser_screen.connecting || browser_screen.code_looking ? L"%b-button Stop" :
 				buttons[browser_list_filter() == 2 ? 2 : browser_list_filter() == 1 ? 1 : 0], FALSE);
 	}
 }
 
-/* ---------- the desktop's other screens of code (moderation, the clipboard's invite): never up on the PS3 */
+/* ---------- the desktop's other screens of code (moderation, the clipboard's invite): never up on the PS3; in the
+clipboard prompt's place, the host's invite code over the lobby */
 
 boolean moderation_screen_active(
 	void)
@@ -768,7 +862,29 @@ void moderation_screen_render(
 {
 }
 
+/* (no clipboard: the code others type, at the lobby's top right, as GAME SETUP's INVITE CODE row shows it) */
 void invite_prompt_render(
 	void)
 {
+	long heading_font = tag_loaded(FONT_GROUP_TAG, "ui\\small_ui");
+	long font = tag_loaded(FONT_GROUP_TAG, "ui\\large_ui");
+	char const *screen = ui_widget_ps3_screen_name();
+	real_argb_color head_color, text_color;
+	char code[16], shown[16];
+	short y;
+
+	if (browser_screen.active || !global_network_game_server_get() || !screen || strcmp(screen, LOBBY_SCREEN_NAME) ||
+		!p2p_invite_code(code, sizeof(code)))
+	{
+		return;
+	}
+	snprintf(shown, sizeof(shown), "%.4s %s", code, code + 4);
+	set_color(&head_color, 1.0f, 0.5f, 0.69f, 1.0f);
+	set_color(&text_color, 1.0f, 0.9f, 0.93f, 0.99f);
+	y = 24;
+	quad(SCREEN_RIGHT - 160, y, SCREEN_RIGHT, y + line_height(heading_font) + line_height(font) + 12, COLOR_PANEL);
+	text(heading_font, _justify_right, &head_color, SCREEN_RIGHT - 156, y + 4, SCREEN_RIGHT - 8,
+		y + 4 + line_height(heading_font), "INVITE CODE");
+	y = (short)(y + 6 + line_height(heading_font));
+	text(font, _justify_right, &text_color, SCREEN_RIGHT - 156, y, SCREEN_RIGHT - 8, y + line_height(font), shown);
 }

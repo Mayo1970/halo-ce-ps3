@@ -1,11 +1,10 @@
-/* The Linux build's services the PS3 has not yet (menu_files.c, hud_hires.c, text_hires.c, sdl_platform.c, voice_audio.c,
-xbox_textures.c's Custom Edition texels, memory_watch.c, port_mods.c, d3d8_gl.c's extras): each reports "none". */
+/* The Linux build's services the PS3 has not yet (hud_hires.c, text_hires.c, sdl_platform.c, voice_audio.c, xbox_textures.c's
+Custom Edition texels, memory_watch.c, port_mods.c, d3d8_gl.c's extras): each reports "none". */
 
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "halo_menus.h"
 #include "port_config.h"
 
 /* ---------- voice chat (voice_audio.c): no microphone, and the others' voices are not played */
@@ -55,43 +54,6 @@ void voice_audio_forget_all(void)
 void voice_audio_set_volume(float volume)
 {
 	(void)volume;
-}
-
-/* ---------- the PC menus: none, so the game keeps the Xbox's */
-
-struct halo_menus const *halo_menus_load(void)
-{
-	return NULL;
-}
-
-long halo_menus_utf16(char const *utf8, unsigned short *out, long capacity)
-{
-	long count = 0;
-
-	/* ASCII only: the Xbox menus' INTERNET PLAY strings (menu_tags.c) */
-	while (count + 1 < capacity && utf8[count])
-	{
-		out[count] = (unsigned char)utf8[count];
-		count++;
-	}
-	if (capacity > 0)
-		out[count++] = 0;
-	return count;
-}
-
-void halo_menus_log(char const *file, long line, char const *message, char const *detail)
-{
-	platform_log("menus: %s:%ld: %s %s", file ? file : "", (long)line, message ? message : "", detail ? detail : "");
-}
-
-void halo_menus_art_register(void const *texture, char const *png)
-{
-	(void)texture;
-	(void)png;
-}
-
-void halo_menus_art_forget(void)
-{
 }
 
 /* ---------- the high-res HUD and text: none, so the maps' own bitmaps and fonts draw (the button icons:

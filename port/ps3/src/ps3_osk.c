@@ -31,8 +31,10 @@ static u16 osk_text[OSK_TEXT];
 static oskCallbackReturnParam osk_return;
 static char osk_entered[OSK_TEXT];
 static volatile int osk_entered_ready;
+/* a digits keyboard's line (ONLINE GAMES' invite code), which chat's take leaves */
+static int osk_digits, osk_entered_digits;
 
-int ps3_osk_open(const char *title, int maximum_length)
+static int osk_open(const char *title, int maximum_length, int digits)
 {
 	oskParam param;
 	oskInputFieldInfo input;
@@ -59,9 +61,11 @@ int ps3_osk_open(const char *title, int maximum_length)
 	input.startText = osk_text;
 	input.maxLength = maximum_length;
 	memset(&param, 0, sizeof(param));
-	param.allowedPanels = OSK_PANEL_TYPE_ALPHABET | OSK_PANEL_TYPE_NUMERAL | OSK_PANEL_TYPE_URL;
-	param.firstViewPanel = OSK_PANEL_TYPE_ALPHABET;
+	param.allowedPanels = digits ? OSK_PANEL_TYPE_NUMERAL :
+		OSK_PANEL_TYPE_ALPHABET | OSK_PANEL_TYPE_NUMERAL | OSK_PANEL_TYPE_URL;
+	param.firstViewPanel = digits ? OSK_PANEL_TYPE_NUMERAL : OSK_PANEL_TYPE_ALPHABET;
 	param.prohibitFlags = OSK_PROHIBIT_RETURN;
+	osk_digits = digits;
 	oskSetKeyLayoutOption(OSK_FULLKEY_PANEL);
 	oskSetInitialKeyLayout(OSK_INITIAL_FULLKEY_PANEL);
 	oskSetInitialInputDevice(OSK_DEVICE_PAD);
@@ -80,20 +84,44 @@ int ps3_osk_open(const char *title, int maximum_length)
 	return 1;
 }
 
+int ps3_osk_open(const char *title, int maximum_length)
+{
+	return osk_open(title, maximum_length, 0);
+}
+
+int ps3_osk_open_digits(const char *title, int maximum_length)
+{
+	return osk_open(title, maximum_length, 1);
+}
+
 int ps3_osk_active(void)
 {
 	return osk_state != _osk_idle;
 }
 
-int ps3_osk_take_text(char *text, int size)
+static int take_line(char *text, int size, int digits)
 {
+	/* (after the caller's look at ps3_osk_active: a line entered is ready before the state goes idle) */
+	__sync_synchronize();
 	if (!osk_entered_ready || size <= 0)
 		return 0;
 	__sync_synchronize();
+	if (osk_entered_digits != digits)
+		return 0;
 	strncpy(text, osk_entered, (size_t)size - 1);
 	text[size - 1] = 0;
 	osk_entered_ready = 0;
 	return 1;
+}
+
+int ps3_osk_take_text(char *text, int size)
+{
+	return take_line(text, size, 0);
+}
+
+int ps3_osk_take_digits(char *text, int size)
+{
+	return take_line(text, size, 1);
 }
 
 void ps3_osk_event(uint64_t status)
@@ -128,12 +156,14 @@ void ps3_osk_event(uint64_t status)
 					osk_entered[length++] = (char)osk_text[index];
 			}
 			osk_entered[length] = 0;
+			osk_entered_digits = osk_digits;
 			if (length)
 			{
 				__sync_synchronize();
 				osk_entered_ready = 1;
 			}
 			sysMemContainerDestroy(osk_container);
+			__sync_synchronize();
 			osk_state = _osk_idle;
 			ps3_log_printf("[osk] closed (%d characters)\n", length);
 		}

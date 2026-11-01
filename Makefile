@@ -37,6 +37,7 @@ ZLIB_DIR    := $(GAME)/port/third_party/zlib
 KCP_DIR     := port/third_party/kcp
 HTTPS_DIR   := $(GAME)/port/console/https
 MBEDTLS_DIR := $(GAME)/port/third_party/mbedtls
+EXPAT_DIR   := $(GAME)/port/third_party/expat
 # the game's version, which Delta Peer's build string carries
 GAME_VERSION := $(shell tr -d '\r\n' < $(GAME)/VERSION)
 
@@ -84,8 +85,6 @@ GAME_WIDE := wcslen wcsnlen wcschr wcsrchr wcscmp wcsncmp wcscpy wcsncpy wcscat 
 GAME_ABI = -O2 -mcpu=cell -mhard-float -mno-altivec -fsigned-char -fms-extensions -fshort-wchar -fcommon \
            -fno-strict-aliasing -fwrapv -fno-delete-null-pointer-checks -ffp-contract=off -DHALO_64BIT \
            $(addprefix -fno-builtin-,$(GAME_WIDE))
-# the players the network tables hold: 16, the Xbox's, as on every console build (the game's tools/console_build.py)
-GAME_ABI += -DHALO_CONSOLE_PLAYERS=16
 # Delta Peer as a client, as the consoles' builds have it (the game's docs/building.md, "Console ports")
 GAME_ABI += -DHALO_CONSOLE_DELTA
 # the conversions that cut a 64-bit pointer are errors, as in the game's 64-bit builds (lp64_game_flags); GCC's -w
@@ -147,7 +146,7 @@ XBOX_UNITS := $(wildcard $(PS3_DIR)/xbox/*.c) \
               msvc_wide.c port_config.c xbdm.c xbox_xapi.c p2p.c p2p_copies.c p2p_crypto.c p2p_discord.c \
               p2p_lobby.c p2p_probe.c p2p_signal.c log_address.c thread_stop.c ui_point.c build_identity.c \
               discord_activity.c delta.c delta_compat.c port_folders.c delta_wire.c delta_peer.c delta_chat.c \
-              delta_chat_words.c delta_chat_bridge.c delta_peer_game.c) \
+              delta_chat_words.c delta_chat_bridge.c delta_peer_game.c menu_files.c) \
               $(KCP_DIR)/ikcp.c
 XBOX_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(XBOX_UNITS))
 
@@ -184,6 +183,18 @@ $(BUILD)/ps3_buttons.h: tools/ps3_button_assets.py $(wildcard port/assets/button
 
 $(BUILD)/obj/$(PS3_DIR)/xbox/hud_hires_rsx.o: $(BUILD)/ps3_buttons.h
 $(BUILD)/obj/$(PS3_DIR)/xbox/hud_hires_rsx.o: XBOX_DEFINES := -I$(BUILD)
+
+# the Chupathingy menus: their XML and their pictures at 1x (port/assets/menus/ps3, tools/ps3_menu_art.py build)
+MENU_INPUTS := $(shell find $(GAME)/port/assets/menus -name '*.xml' -o -name '*.png' -o -name menus.json)
+$(BUILD)/ps3_menu_assets.h: tools/ps3_menu_art.py $(wildcard port/assets/menus/ps3/*) $(MENU_INPUTS)
+	@mkdir -p $(dir $@)
+	@echo "GEN $@"
+	@python3 tools/ps3_menu_art.py embed --out $@
+
+$(BUILD)/obj/$(PS3_DIR)/xbox/menu_art_rsx.o: $(BUILD)/ps3_menu_assets.h
+$(BUILD)/obj/$(PS3_DIR)/xbox/menu_art_rsx.o: XBOX_DEFINES := -I$(BUILD)
+# (Expat's own header, unrewritten: its objects have the host's long)
+$(BUILD)/obj/port/linux/src/menu_files.o: XBOX_DEFINES := -I$(EXPAT_DIR)
 
 $(PLATFORM_SEMANTICS): FORCE
 	@python3 tools/ps3_msvc_semantics.py --output $@ --inlines $(GAME)/port/include/xdk
@@ -246,6 +257,15 @@ $(HTTPS_OBJS): $(BUILD)/obj/%.o: $(GAME)/%.c
 	@$(CC) $(HTTPS_FLAGS) $(CFLAGS) -std=gnu99 -mminimal-toc -w -MMD -MP -c $< -o $@
 
 $(BUILD)/obj/$(PS3_DIR)/src/ps3_online.o: CFLAGS += -I$(HTTPS_DIR)
+
+# Expat, the menus' XML parser (menu_files.c), with the host's long, as the game's 64-bit builds have it
+EXPAT_SRCS := $(addprefix $(EXPAT_DIR)/,xmlparse.c xmlrole.c xmltok.c)
+EXPAT_OBJS := $(patsubst $(GAME)/%.c,$(BUILD)/obj/%.o,$(EXPAT_SRCS))
+
+$(EXPAT_OBJS): $(BUILD)/obj/%.o: $(GAME)/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC $<"
+	@$(CC) $(CFLAGS) -std=gnu99 -mminimal-toc -w -I$(EXPAT_DIR) -MMD -MP -c $< -o $@
 
 # the one unit with VMX (exact, for the simulation: no fused multiply-adds of its own)
 $(BUILD)/obj/$(PS3_DIR)/src/ps3_vmx.o: CFLAGS += -maltivec -ffp-contract=off
@@ -316,7 +336,7 @@ xbox: $(XBOX_OBJS)
 
 # the host objects come first, before libc, so ps3_setjmp.o replaces its setjmp
 ALL_OBJS = $(HOST_OBJS) $(XBOX_OBJS) $(TOML_OBJS) $(MUSL_OBJS) $(ZLIB_OBJS) $(THIRD_PARTY_OBJS) $(HTTPS_OBJS) \
-           $(SPU_OBJS) $(PACK_OBJ) $(GAME_OBJS)
+           $(EXPAT_OBJS) $(SPU_OBJS) $(PACK_OBJ) $(GAME_OBJS)
 
 $(BUILD)/$(TARGET).elf: $(ALL_OBJS)
 	@echo "LD $@"
@@ -381,4 +401,4 @@ clean:
 	@rm -rf $(BUILD)
 
 -include $(HOST_OBJS:.o=.d) $(XBOX_OBJS:.o=.d) $(TOML_OBJS:.o=.d) $(MUSL_OBJS:.o=.d) $(ZLIB_OBJS:.o=.d) \
-	$(THIRD_PARTY_OBJS:.o=.d) $(HTTPS_OBJS:.o=.d) $(GAME_OBJS:.o=.d) $(BRINGUP_OBJS:.o=.d)
+	$(THIRD_PARTY_OBJS:.o=.d) $(HTTPS_OBJS:.o=.d) $(EXPAT_OBJS:.o=.d) $(GAME_OBJS:.o=.d) $(BRINGUP_OBJS:.o=.d)
