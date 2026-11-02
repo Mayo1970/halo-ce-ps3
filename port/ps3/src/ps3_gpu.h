@@ -18,6 +18,11 @@ int ps3_gpu_initialize(void);
 /* draws a colour surface pixel for pixel in the middle of the display (scaled down to fit if larger), flips at the
 next vsync and starts the next frame (its scratch, after the RSX has finished the frame before last) */
 void ps3_gpu_present(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t height);
+/* BRIGHTNESS's levels (display.brightness), the game's own picture at the middle one */
+#define PS3_GPU_BRIGHTNESS_LEVELS 11
+#define PS3_GPU_BRIGHTNESS_NEUTRAL 5
+/* the presents from the next one at a brightness level; returns their blit's fragment program offset (the SPU's) */
+uint32_t ps3_gpu_brightness(int level);
 /* returns when the RSX has done every command so far (a backend label, written once its pipeline drains) */
 void ps3_gpu_wait_idle(void);
 /* the display's size, and whether it is 16:9 */

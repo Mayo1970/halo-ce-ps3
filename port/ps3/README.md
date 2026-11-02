@@ -166,14 +166,15 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 ## Extra options (G8)
 
 The PS3 shows the Chupathingy menus as a console (`HALO_CONSOLE_MENU_PLATFORM`
-`"ps3"`): the rows marked `console` or `ps3` (`tools/port_settings.py`). Six
-rows are the PS3's own: WIDESCREEN, PRESET, FRAME RATE and DYNAMIC
-RESOLUTION in DISPLAY, BUTTON ICONS in DISPLAY's INTERFACE, TOGGLE CROUCH in
-CONTROLS. DISPLAY's FRAME RATE (`display.max_fps`), ADVANCED's SHADOW
-RESOLUTION, PER-PIXEL LIGHTING and ANISOTROPIC FILTERING, and AUDIO's
+`"ps3"`): the rows marked `console` or `ps3` (`tools/port_settings.py`). Seven
+rows are the PS3's own: WIDESCREEN, PRESET, FRAME RATE, DYNAMIC RESOLUTION
+and BRIGHTNESS in DISPLAY, BUTTON ICONS in DISPLAY's INTERFACE, TOGGLE
+CROUCH in CONTROLS. DISPLAY's FRAME RATE (`display.max_fps`), ADVANCED's
+SHADOW RESOLUTION, PER-PIXEL LIGHTING and ANISOTROPIC FILTERING, and AUDIO's
 HEADPHONE 3D, REVERB and DOPPLER are left out: the PS3 has none of them.
-Accept keeps the changes in `config.toml`, and they apply from the next
-frame.
+ADVANCED's FULL MODEL DETAIL and FAR CLIP are left out too, as too costly
+for the RSX, so DISPLAY has no ADVANCED row. Accept keeps the changes in
+`config.toml`, and they apply from the next frame.
 
 The menus' XML is built in; their pictures are drawn at their size in the
 640x480 menu (1x), not from the PNGs: `tools/ps3_menu_art.py build` shrinks
@@ -191,6 +192,7 @@ menus (a map's change).
 | PRESET | CUSTOM: FRAME RATE and DYNAMIC RESOLUTION as set. QUALITY: 30 and OFF. PERFORMANCE (the default): 60 and ON. Choosing QUALITY or PERFORMANCE sets those two rows and hides them; CUSTOM shows them, and a change of one of them sets CUSTOM (`menu_functions.c`, `preset_rows_show`) | `display.preset`: `"custom"`, `"quality"` or `"performance"` |
 | FRAME RATE | 60 (the default): a frame at each refresh, blended between the game's 30 ticks a second (`port/linux/game/render_interpolation.c`). 30: a frame a tick, as on the Xbox | `display.interpolation`: true or false |
 | DYNAMIC RESOLUTION | ON (the default): in heavy scenes the 3D view is drawn smaller, then scaled up under the HUD (below). OFF: always whole | `display.dynamic_resolution`: true or false |
+| BRIGHTNESS | 5 (the default): the game's own picture. Higher lifts the dark and middle tones, lower darkens them; black and white stay. The present's blit applies it to the whole frame, the HUD and the menus with it (`src/ps3_gpu.c`, `brightness_programs_build`) | `display.brightness`: 0 to 10 |
 
 Split screen (two or more players on the PS3) always plays at 30 frames per
 second, without the dynamic resolution, whatever FRAME RATE, DYNAMIC

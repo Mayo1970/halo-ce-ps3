@@ -338,6 +338,70 @@ const char *ps3_data_root(void)
 	return data_root;
 }
 
+/* ---------- user name */
+
+/* the XMB user (offline), else the PSN nickname (signed in); each ID needs its own buffer size, else
+INVALID_VALUE (ioQuake3-PS3's Sys_GetCurrentUser) */
+static void read_user_name(char *name)
+{
+	int result = sysUtilGetSystemParamString(SYSUTIL_SYSTEMPARAM_ID_CURRENT_USERNAME, name,
+		SYSUTIL_SYSTEMPARAM_CURRENT_USERNAME_SIZE);
+
+	name[SYSUTIL_SYSTEMPARAM_CURRENT_USERNAME_SIZE - 1] = 0;
+	ps3_log_printf("[ps3] user name: CURRENT_USERNAME=%d '%s'\n", result, name);
+	if (result == 0 && name[0])
+		return;
+	name[0] = 0;
+	result = sysUtilGetSystemParamString(SYSUTIL_SYSTEMPARAM_ID_NICKNAME, name, SYSUTIL_SYSTEMPARAM_NICKNAME_SIZE);
+	name[SYSUTIL_SYSTEMPARAM_NICKNAME_SIZE - 1] = 0;
+	ps3_log_printf("[ps3] user name: NICKNAME=%d '%s'\n", result, name);
+	if (result != 0)
+		name[0] = 0;
+}
+
+int ps3_user_name(uint16_t *name, int size)
+{
+	static char user[SYSUTIL_SYSTEMPARAM_NICKNAME_SIZE];
+	static int user_read;
+	const unsigned char *text = (const unsigned char *)user;
+	int length = 0;
+
+	if (!user_read)
+	{
+		read_user_name(user);
+		user_read = 1;
+	}
+	if (size <= 0)
+		return 0;
+	/* UTF-8 to UTF-16, BMP only; a broken sequence ends the name */
+	while (*text && length < size - 1)
+	{
+		uint32_t character;
+		int extra;
+
+		if (*text < 0x80)
+			character = *text, extra = 0;
+		else if ((*text & 0xe0) == 0xc0)
+			character = *text & 0x1f, extra = 1;
+		else if ((*text & 0xf0) == 0xe0)
+			character = *text & 0x0f, extra = 2;
+		else
+			break;
+		text++;
+		for (; extra > 0; extra--, text++)
+		{
+			if ((*text & 0xc0) != 0x80)
+				break;
+			character = (character << 6) | (*text & 0x3f);
+		}
+		if (extra > 0)
+			break;
+		name[length++] = (uint16_t)character;
+	}
+	name[length] = 0;
+	return length > 0;
+}
+
 /* ---------- init and shutdown */
 
 void ps3_system_init(void)

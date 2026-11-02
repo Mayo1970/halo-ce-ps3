@@ -475,6 +475,19 @@ void halo_screen_ui_offset(unsigned char centered)
 void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
 void hud_hires_style_commit(void);
 
+/* DISPLAY's BRIGHTNESS (display.brightness), read on the game thread as the width is; the presents use it */
+static volatile int brightness = PS3_GPU_BRIGHTNESS_NEUTRAL;
+
+static void brightness_commit(void)
+{
+	static unsigned long read_at = (unsigned long)-1;
+
+	if (read_at == config_changes())
+		return;
+	read_at = config_changes();
+	brightness = (int)config_integer("display.brightness");
+}
+
 /* EXTRA OPTIONS' WIDESCREEN (display.screen_width), between frames: the game's layout and the targets must agree
 for a whole frame (rasterizer_xbox.c). Returns the width the game draws. */
 long halo_screen_commit(void)
@@ -484,6 +497,7 @@ long halo_screen_commit(void)
 
 	/* (BUTTON ICONS' style, read on the game thread as the width is) */
 	hud_hires_style_commit();
+	brightness_commit();
 	if (!screen_width)
 		return halo_screen_width();
 	if (screen_read_at == config_changes())
@@ -5690,6 +5704,7 @@ static void spu_present_end(const uint32_t *words, spu_d3d_response *answer)
 	}
 	hires_key_update();
 	answer->words[21] = (uint32_t)hires_key;
+	answer->words[22] = ps3_gpu_brightness(brightness);
 	answer->status = 1;
 }
 
@@ -6572,6 +6587,7 @@ static void present_run(void)
 		scale_end();
 		surface_words_read(&device.back_buffer, &words);
 		back_buffer = render_target_get(&words, FALSE);
+		ps3_gpu_brightness(brightness);
 		if (back_buffer)
 			ps3_gpu_present(back_buffer->offset, back_buffer->pitch, (uint32_t)back_buffer->width,
 				(uint32_t)back_buffer->height);

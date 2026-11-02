@@ -39,4 +39,7 @@ double ps3_time_seconds(void);
 /* the folder with maps/ (Xbox d:\), on the HDD or a USB drive */
 const char *ps3_data_root(void);
 
+/* the XMB user's name (else the PSN nickname) as UTF-16, cut to size - 1 characters: 0 if none */
+int ps3_user_name(uint16_t *name, int size);
+
 #endif

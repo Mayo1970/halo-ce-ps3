@@ -311,6 +311,9 @@ static struct
 	uint32_t fragment_offset;
 	/* the half resolution particles' depth program (particles_depth_build) */
 	uint32_t particles_depth_offset;
+	/* the present's programs by brightness level (brightness_programs_build), and the one it uses */
+	uint32_t brightness_offsets[PS3_GPU_BRIGHTNESS_LEVELS];
+	uint32_t present_offset;
 } blit;
 
 static struct
@@ -1348,6 +1351,61 @@ static int particles_depth_build(void)
 	return fragment_program_store(instructions, 5, &blit.particles_depth_offset);
 }
 
+/* the present's blit at each brightness level: x + k x (1 - x) on each colour, k from -1 to 1 (0 at the neutral level,
+the plain blit). Black and white stay, and the curve keeps rising */
+static int brightness_programs_build(void)
+{
+	struct rsx_instruction instructions[3];
+	int level, index;
+
+	for (level = 0; level < PS3_GPU_BRIGHTNESS_LEVELS; level++)
+	{
+		float k = (float)(level - PS3_GPU_BRIGHTNESS_NEUTRAL) / PS3_GPU_BRIGHTNESS_NEUTRAL;
+
+		if (level == PS3_GPU_BRIGHTNESS_NEUTRAL)
+		{
+			blit.brightness_offsets[level] = blit.fragment_offset;
+			continue;
+		}
+		for (index = 0; index < 3; index++)
+		{
+			blit_instruction_defaults(&instructions[index]);
+			instructions[index].destination_type = _rsx_register_temporary;
+			instructions[index].mask = _rsx_xyzw;
+		}
+		/* TEX R0, f[TEX0]; MAD R1, -R0, R0, R0; MAD R0.xyz, R1, k, R0 */
+		instructions[0].opcode = _rsx_fp_tex;
+		instructions[0].source[0].type = _rsx_register_input;
+		instructions[0].source[0].index = _rsx_fp_input_texture0;
+		instructions[1].opcode = _rsx_fp_mad;
+		instructions[1].destination = 1;
+		for (index = 0; index < 3; index++)
+			instructions[1].source[index].type = _rsx_register_temporary;
+		instructions[1].source[0].negate = 1;
+		instructions[2].opcode = _rsx_fp_mad;
+		instructions[2].mask = _rsx_xyz;
+		instructions[2].source[0].type = _rsx_register_temporary;
+		instructions[2].source[0].index = 1;
+		instructions[2].source[1].type = _rsx_register_constant;
+		instructions[2].source[2].type = _rsx_register_temporary;
+		for (index = 0; index < 4; index++)
+			instructions[2].constant[index] = k;
+		if (fragment_program_store(instructions, 3, &blit.brightness_offsets[level]) != 0)
+			return -1;
+	}
+	blit.present_offset = blit.fragment_offset;
+	return 0;
+}
+
+uint32_t ps3_gpu_brightness(int level)
+{
+	if (!ready)
+		return blit.fragment_offset;
+	level = level < 0 ? 0 : level >= PS3_GPU_BRIGHTNESS_LEVELS ? PS3_GPU_BRIGHTNESS_LEVELS - 1 : level;
+	blit.present_offset = blit.brightness_offsets[level];
+	return blit.present_offset;
+}
+
 /* a quad of the display (pixels from the top left) with texture unit 0 */
 static void blit_quad(unsigned display_width, unsigned display_height, float left, float top, float right, float bottom)
 {
@@ -1423,7 +1481,7 @@ static void blit_draw(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t 
 	}
 
 	ps3_gpu_set_vertex_program(&blit.vertex);
-	fragment_program_load(blit.fragment_offset, 0x40, 2, 1, 1);
+	fragment_program_load(blit.present_offset, 0x40, 2, 1, 1);
 	fragment.program = NULL;
 
 	memset(&texture, 0, sizeof(texture));
@@ -1985,7 +2043,7 @@ int ps3_gpu_initialize(void)
 	ps3_log_printf("[gpu] RSX local memory %u KB, display buffers %u KB\n", (unsigned)(configuration.localSize / 1024),
 		ps3_video_memory_bytes() / 1024);
 	scratch.base = ps3_gpu_memory_allocate(2 * SCRATCH_HALF_SIZE, 128, _ps3_gpu_memory_scratch, &scratch.offset);
-	if (!scratch.base || blit_programs_build() != 0 || particles_depth_build() != 0)
+	if (!scratch.base || blit_programs_build() != 0 || particles_depth_build() != 0 || brightness_programs_build() != 0)
 	{
 		ps3_log_printf("[gpu] out of RSX memory at the start\n");
 		return -1;

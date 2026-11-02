@@ -171,9 +171,11 @@ $(BUILD)/brokers_txt.h: $(GAME)/port/assets/network/brokers.txt
 	@sed -e 's/\r$$//' -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/"/' -e 's/$$/\\n"/' $< > $@
 
 $(BUILD)/obj/$(KCP_DIR)/ikcp.o: XBOX_DEFINES := -w
-# the signed legacy table over the consoles' HTTPS (src/ps3_online.c fetches it); Delta Peer's build string
+# the signed legacy table over the consoles' HTTPS (src/ps3_online.c fetches it); Delta Peer's build string and the
+# PS3's platform number, for the PlayStation icon (the game's docs/delta.md, "Platform numbers")
 $(BUILD)/obj/port/linux/src/delta.o: XBOX_DEFINES := -DHALO_CONSOLE_HTTPS -I$(HTTPS_DIR)
-$(BUILD)/obj/port/linux/src/delta_peer_game.o: XBOX_DEFINES := -DHALO_VERSION=\"$(GAME_VERSION)\"
+$(BUILD)/obj/port/linux/src/delta_peer_game.o: XBOX_DEFINES := -DHALO_VERSION=\"$(GAME_VERSION)\" \
+                                                -DHALO_DELTA_PLATFORM=_delta_platform_ps3
 $(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: $(BUILD)/brokers_txt.h
 $(BUILD)/obj/$(PS3_DIR)/xbox/xnet_ps3.o: XBOX_DEFINES := -I$(BUILD)
 

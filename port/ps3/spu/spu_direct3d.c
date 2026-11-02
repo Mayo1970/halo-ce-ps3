@@ -2163,6 +2163,8 @@ static float byte_floats[256] __attribute__((aligned(16)));
 static int button_style;
 /* (d3d8_rsx.c's hires_key: an entry's hires_style, so its stand-in is looked up again when it changes) */
 static int hires_key = 3;
+/* the present's blit program at BRIGHTNESS's level (ps3_gpu.c's ps3_gpu_brightness), from each present's answer */
+static uint32_t present_program;
 static uint32_t texture_frame = 1;
 static uint32_t texture_epoch;
 static uint32_t render_target_generation;
@@ -5451,7 +5453,7 @@ static void blit_draw(uint32_t display_width, uint32_t display_height, uint32_t 
 	blit.output_mask = 0x4000;
 	blit.register_count = 1;
 	gpu_set_vertex_program(&blit);
-	rsx_fragment_program_location(setup.blit_fragment_offset, 0x40, 2, 1, 1);
+	rsx_fragment_program_location(present_program, 0x40, 2, 1, 1);
 	fragment.program = 0;
 	memset(&texture, 0, sizeof(texture));
 	texture.offset = offset;
@@ -5745,6 +5747,7 @@ static void present_run(const spu_d3d_record_present *present)
 		placeholders[index].asset = (int32_t)answer->words[6 + 2 * index];
 	}
 	hires_key = (int)answer->words[21];
+	present_program = answer->words[22];
 	stamps.count = 0;
 	stamps.eighths = 0;
 	caches_invalidate();
@@ -6045,6 +6048,7 @@ static void initial_state(void)
 		placeholders[index].asset = (int32_t)initial->placeholders[index][1];
 	}
 	hires_key = initial->hires_key;
+	present_program = setup.blit_fragment_offset;
 	frame_index = setup.frame_index;
 	frame_starts[frame_index % SPU_D3D_FRAMES] = 0;
 	caches_invalidate();
