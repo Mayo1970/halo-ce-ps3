@@ -73,6 +73,8 @@ typedef int BOOL;
 #define NV40TCL_STENCIL_BACK_MASK 0x0000032c
 #define NV40TCL_STENCIL_BACK_OP_FAIL 0x0000033c
 #define NV40TCL_STENCIL_BACK_ENABLE 0x00000328
+#define NV40TCL_QUERY_RESET 0x000017c8
+#define NV40TCL_QUERY_ENABLE 0x000017cc
 #define NV40TCL_QUERY_GET 0x00001800
 #define NV40TCL_CLEAR_ZCULL_SURFACE 0x00001438
 #define NV40TCL_ZCULL_ENABLE 0x00001d84
@@ -117,6 +119,22 @@ typedef int BOOL;
 #define NV0039_SET_CONTEXT_DMA_BUFFER_IN 0x00002184
 #define NV0039_OFFSET_IN 0x0000230c
 #define NV0039_LINE_LENGTH_MAX 0x003fffffu
+/* librsx's rsxSetWaitForIdle (subchannel 0), its scaled image (NV3089) on subchannel 6 and swizzled surface (NV309E)
+on subchannel 4, with the object handle rsxSetTransferScaleMode binds for GCM_TRANSFER_SWIZZLE */
+#define NV40TCL_WAIT_FOR_IDLE 0x00000110
+#define NV3089_SET_CONTEXT_DMA_IMAGE 0x0000c184
+#define NV3089_SET_CONTEXT_SURFACE 0x0000c198
+#define NV3089_SET_COLOR_CONVERSION 0x0000c2fc
+#define NV3089_IMAGE_IN_SIZE 0x0000c400
+#define NV309E_SET_CONTEXT_DMA_IMAGE 0x00008184
+#define NV309E_SET_FORMAT 0x00008300
+#define NV309E_OBJECT 0x31337a73u
+#define GCM_TRANSFER_CONVERSION_TRUNCATE 1
+#define GCM_TRANSFER_SCALE_FORMAT_A8R8G8B8 3
+#define GCM_TRANSFER_OPERATION_SRCCOPY 3
+#define GCM_TRANSFER_ORIGIN_CORNER 2
+#define GCM_TRANSFER_INTERPOLATOR_NEAREST 0
+#define GCM_TRANSFER_SURFACE_FORMAT_A8R8G8B8 0xa
 
 #define GCM_DMA_MEMORY_FRAME_BUFFER 0xFEED0000u
 #define GCM_DMA_MEMORY_HOST_BUFFER 0xFEED0001u
@@ -280,6 +298,8 @@ typedef int BOOL;
 #define D3DCOLORWRITEENABLE_ALPHA (1u << 24)
 #define D3DPT_POLYGON 10
 #define D3DVSDT_NONE 0x02
+#define D3DFMT_A8R8G8B8 6
+#define D3DFMT_X8R8G8B8 7
 #define D3DFMT_D24S8 42
 #define D3DFMT_F24S8 43
 #define D3DFMT_D16 44
@@ -332,6 +352,9 @@ typedef int BOOL;
 #define DRAW_STAMP_FRAMES 8
 #define DRAW_STAMP_START 0xffff
 #define REPORT_TIMESTAMP 1
+#define REPORT_ZPASS_PIXEL_COUNT 1
+#define VISIBILITY_REPORT_BASE SPU_D3D_VISIBILITY_REPORT_BASE
+#define VISIBILITY_TESTS SPU_D3D_VISIBILITY_TESTS
 #define FRAME_LABEL 64
 #define CHANGED_SAMPLER(stage) (1u << (stage))
 #define CHANGED_TEXTURE_MODES 0x10u
@@ -747,6 +770,10 @@ static inline void command_word(uint32_t word)
 	commands_stream(&word, 1);
 }
 
+/* 0x1710 before the next draw: the vertex arena grew, or a chunk went out (the RSX can run its last draw, whose
+fetch reads past its vertices, before the next scratch bytes are written there) */
+static int vertex_cache_dirty;
+
 /* the chunk ends in a RETURN and goes to the service thread; the next starts 16-aligned after it */
 static void chunk_publish(void)
 {
@@ -782,6 +809,7 @@ static void chunk_publish(void)
 	put_echo();
 	event_send(SPU_D3D_SERVICE_PORT, chunks_published);
 	chunk_start = end;
+	vertex_cache_dirty = 1;
 }
 
 /* the PPE's answer to a request; the chunk before it published */
@@ -1452,11 +1480,12 @@ static struct
 static gpu_texture textures[TEXTURE_UNITS];
 static uint8_t texture_states[TEXTURE_UNITS];
 static int texture_cache_dirty;
-static int vertex_cache_dirty;
 static uint8_t attribute_enabled[ATTRIBUTE_COUNT];
 /* ZCull's surface (the PPE binds it with a target's tiles) */
 static uint32_t zcull_offset, zcull_width, zcull_height;
 static int zcull_bound, zcull_valid;
+/* the ZCULL_ENABLE last sent: on only while the data is good (a full clear since the last invalidate) */
+static int zcull_on;
 static struct
 {
 	uint32_t program;
@@ -1538,6 +1567,11 @@ static void zcull_invalidate(void)
 		rsx_zcull_invalidate();
 		zcull_valid = 0;
 	}
+	if (zcull_on)
+	{
+		rsx_zcull_enable(0, 0);
+		zcull_on = 0;
+	}
 }
 
 static void gpu_set_surface(const gpu_surface *target)
@@ -1551,7 +1585,10 @@ static void gpu_set_surface(const gpu_surface *target)
 	rsx_surface(target->color_offset, target->color_pitch, target->depth_offset, target->depth_pitch, target->width,
 		target->height);
 	if (zcull_bound)
-		rsx_zcull_enable(target->depth_offset == zcull_offset ? 1 : 0, 0);
+	{
+		zcull_on = target->depth_offset == zcull_offset && zcull_valid;
+		rsx_zcull_enable(zcull_on, 0);
+	}
 	viewport_valid = 0;
 	texture_cache_dirty = 1;
 }
@@ -1616,6 +1653,11 @@ static void gpu_clear(uint32_t flags, uint32_t argb, uint32_t depth_stencil, uin
 		if (!x && !y && ((width >= zcull_width && height >= zcull_height) ||
 			(surface.smaller && width >= surface.width && height >= surface.height)))
 		{
+			if (!zcull_on)
+			{
+				rsx_zcull_enable(1, 0);
+				zcull_on = 1;
+			}
 			rsx_clear_zcull_surface(1, 0);
 			zcull_valid = 1;
 		}
@@ -1941,6 +1983,73 @@ static void gpu_set_attribute(uint32_t index, uint32_t offset, uint32_t stride, 
 	attribute_enabled[index] = 1;
 }
 
+/* ps3_gpu.h's struct ps3_gpu_swizzle_level */
+typedef struct
+{
+	uint32_t source_offset;
+	uint32_t source_pitch;
+	uint32_t offset;
+	uint16_t width;
+	uint16_t height;
+} swizzle_level;
+
+static void rsx_wait_for_idle(void)
+{
+	rsx_method1(NV40TCL_WAIT_FOR_IDLE, 0);
+}
+
+/* ps3_gpu_swizzle_levels: rsxSetWaitForIdle, rsxSetTransferScaleMode (local to local, swizzle), each level's
+rsxSetTransferScaleSwizzle, rsxSetWaitForIdle, word for word */
+static void gpu_swizzle_levels(const swizzle_level *levels, uint32_t count)
+{
+	uint32_t *c, index;
+
+	if (!count)
+		return;
+	rsx_wait_for_idle();
+	c = commands(6);
+	c[0] = METHOD(NV3089_SET_CONTEXT_DMA_IMAGE, 1);
+	c[1] = GCM_DMA_MEMORY_FRAME_BUFFER;
+	c[2] = METHOD(NV309E_SET_CONTEXT_DMA_IMAGE, 1);
+	c[3] = GCM_DMA_MEMORY_FRAME_BUFFER;
+	c[4] = METHOD(NV3089_SET_CONTEXT_SURFACE, 1);
+	c[5] = NV309E_OBJECT;
+	cmd += 6;
+	for (index = 0; index < count; index++)
+	{
+		const swizzle_level *level = &levels[index];
+		uint32_t log2_width = 31 - spu_extract(spu_cntlz(spu_promote((uint32_t)level->width, 0)), 0);
+		uint32_t log2_height = 31 - spu_extract(spu_cntlz(spu_promote((uint32_t)level->height, 0)), 0);
+		uint32_t in_width = level->width < 16 ? 16 : (level->width + 1u) & ~1u;
+		uint32_t size = ((uint32_t)level->height << 16) | level->width;
+
+		c = commands(18);
+		c[0] = METHOD(NV309E_SET_FORMAT, 2);
+		c[1] = GCM_TRANSFER_SURFACE_FORMAT_A8R8G8B8 | (log2_width << 16) | (log2_height << 24);
+		c[2] = level->offset;
+		c[3] = METHOD(NV3089_SET_COLOR_CONVERSION, 9);
+		c[4] = GCM_TRANSFER_CONVERSION_TRUNCATE;
+		c[5] = GCM_TRANSFER_SCALE_FORMAT_A8R8G8B8;
+		c[6] = GCM_TRANSFER_OPERATION_SRCCOPY;
+		/* the clip and the output at (0, 0), the level's size; 1:1 in 12.20 */
+		c[7] = 0;
+		c[8] = size;
+		c[9] = 0;
+		c[10] = size;
+		c[11] = 1u << 20;
+		c[12] = 1u << 20;
+		c[13] = METHOD(NV3089_IMAGE_IN_SIZE, 4);
+		c[14] = ((uint32_t)level->height << 16) | in_width;
+		c[15] = (GCM_TRANSFER_INTERPOLATOR_NEAREST << 24) | (GCM_TRANSFER_ORIGIN_CORNER << 16) |
+			(level->source_pitch & 0xffff);
+		c[16] = level->source_offset;
+		c[17] = 0;
+		cmd += 18;
+	}
+	rsx_wait_for_idle();
+	texture_cache_dirty = 1;
+}
+
 static void draw_begin(void)
 {
 	if (texture_cache_dirty)
@@ -2052,6 +2161,10 @@ static float screen_scale[2];
 static uint32_t static_begin, static_end;
 static float byte_floats[256] __attribute__((aligned(16)));
 static int button_style;
+/* (d3d8_rsx.c's hires_key: an entry's hires_style, so its stand-in is looked up again when it changes) */
+static int hires_key = 3;
+/* the present's blit program at BRIGHTNESS's level (ps3_gpu.c's ps3_gpu_brightness), from each present's answer */
+static uint32_t present_program;
 static uint32_t texture_frame = 1;
 static uint32_t texture_epoch;
 static uint32_t render_target_generation;
@@ -2275,6 +2388,9 @@ typedef struct
 	uint32_t pitch;
 	uint32_t last_rendered;
 	uint32_t memory;
+	/* d3d8_rsx.c's: moves at each bind to draw or clear; a mip composite took it since */
+	uint32_t written;
+	uint32_t copied;
 } render_target;
 
 static render_target targets[SPU_D3D_TARGETS];
@@ -2349,8 +2465,13 @@ static render_target *render_target_lookup(uint32_t data, uint32_t units_width, 
 	zcull_offset = answer->words[4];
 	zcull_width = answer->words[5];
 	zcull_height = answer->words[6];
+	/* (a new binding's enable is unknown: the next surface sends it) */
 	if (answer->words[7])
+	{
 		zcull_valid = 0;
+		zcull_on = 0;
+		surface_valid = 0;
+	}
 	texture_epoch++;
 	return target;
 }
@@ -2381,6 +2502,116 @@ static render_target *render_target_find(uint32_t data)
 			best = target;
 	}
 	return best;
+}
+
+/* xgpu_texture_level_offset */
+static uint32_t level_offset(const texture_description *d, uint32_t level)
+{
+	uint32_t offset = 0, index;
+
+	for (index = 0; index < level && index < d->levels; index++)
+		offset += level_bytes(d, index);
+	return offset;
+}
+
+/* d3d8_rsx.c's struct mip_composite; its memory the PPE's (freed with the targets) */
+typedef struct
+{
+	uint32_t data;
+	uint32_t width, height, levels;
+	uint32_t offset;
+	uint32_t rendered;
+	uint32_t written[SPU_D3D_MIP_LEVELS];
+} mip_composite;
+
+static mip_composite composites[SPU_D3D_MIP_COMPOSITES];
+static uint32_t composite_count;
+
+/* d3d8_rsx.c's mip_composite_levels */
+static uint32_t mip_composite_levels(const texture_description *d)
+{
+	uint32_t level;
+
+	for (level = 0; level < d->levels && level < SPU_D3D_MIP_LEVELS; level++)
+	{
+		if ((d->width >> level) < 4 || (d->height >> level) < 2 || (level_offset(d, level) & 63))
+			break;
+	}
+	return level;
+}
+
+/* d3d8_rsx.c's mip_composite_get */
+static mip_composite *mip_composite_get(const spu_d3d_stage_texture *texture, render_target *target)
+{
+	texture_description d;
+	render_target *level_targets[SPU_D3D_MIP_LEVELS];
+	swizzle_level copies[SPU_D3D_MIP_LEVELS];
+	mip_composite *composite = NULL;
+	uint32_t copyable, rendered, level, index, count = 0;
+
+	texture_describe(texture->format, texture->size, &d);
+	if (d.linear || d.cube_map || d.compressed || d.depth != 1 || d.levels < 2 || d.width > 1024 || d.height > 1024 ||
+		(d.format != D3DFMT_A8R8G8B8 && d.format != D3DFMT_X8R8G8B8))
+		return NULL;
+	copyable = mip_composite_levels(&d);
+	for (rendered = 0; rendered < copyable; rendered++)
+	{
+		render_target *level_target = rendered ? render_target_find(texture->data + level_offset(&d, rendered)) :
+			target;
+
+		if (!level_target || level_target->width != d.width >> rendered ||
+			level_target->height != d.height >> rendered || !f_eq(level_target->scale[0], 1.0f) ||
+			!f_eq(level_target->scale[1], 1.0f))
+			break;
+		level_targets[rendered] = level_target;
+	}
+	if (rendered < 2)
+		return NULL;
+	for (index = 0; index < composite_count; index++)
+	{
+		if (composites[index].data == texture->data && composites[index].width == d.width &&
+			composites[index].height == d.height && composites[index].levels == d.levels)
+		{
+			composite = &composites[index];
+			break;
+		}
+	}
+	if (!composite)
+	{
+		spu_d3d_response *answer;
+
+		if (composite_count == SPU_D3D_MIP_COMPOSITES)
+			return NULL;
+		request_block.words[0] = level_offset(&d, copyable);
+		answer = request(_spu_d3d_request_mip_composite, 1);
+		if (!answer->status)
+			return NULL;
+		composite = &composites[composite_count++];
+		memset(composite, 0, sizeof(*composite));
+		composite->data = texture->data;
+		composite->width = d.width;
+		composite->height = d.height;
+		composite->levels = d.levels;
+		composite->offset = answer->words[0];
+	}
+	for (level = 0; level < rendered; level++)
+	{
+		render_target *level_target = level_targets[level];
+
+		level_target->copied = 1;
+		if (rendered == composite->rendered && composite->written[level] == level_target->written)
+			continue;
+		copies[count].source_offset = level_target->offset;
+		copies[count].source_pitch = level_target->pitch;
+		copies[count].offset = composite->offset + level_offset(&d, level);
+		copies[count].width = (uint16_t)level_target->width;
+		copies[count].height = (uint16_t)level_target->height;
+		composite->written[level] = level_target->written;
+		count++;
+	}
+	composite->rendered = rendered;
+	gpu_swizzle_levels(copies, count);
+	return composite;
 }
 
 /* d3d8_rsx.c's particles (the Direct3D thread's part) */
@@ -2484,6 +2715,12 @@ bind:
 	if (color->last_rendered != device.frame + 1)
 	{
 		color->last_rendered = device.frame + 1;
+		texture_epoch++;
+	}
+	color->written++;
+	if (color->copied)
+	{
+		color->copied = 0;
 		texture_epoch++;
 	}
 	targets_bound.color = color;
@@ -2772,7 +3009,7 @@ static int placeholder_check(uint32_t data, uint32_t *gpu)
 static spu_d3d_texture *texture_check(uint32_t index, spu_d3d_texture *entry, BOOL fresh, uint32_t palette,
 	uint32_t palette_hash)
 {
-	int style = button_style;
+	int style = hires_key;
 	BOOL cached, changed;
 	uint32_t span;
 
@@ -2827,14 +3064,16 @@ static spu_d3d_texture *texture_check(uint32_t index, spu_d3d_texture *entry, BO
 static spu_d3d_texture *texture_get(spu_d3d_stage_texture *texture, uint32_t palette, uint32_t palette_hash)
 {
 	uint32_t data = texture->data, format_word = texture->format, size_word = texture->size;
-	uint32_t hash = texture_key_hash(data, format_word, size_word, palette_hash), index, placeholder, hires;
+	/* the bucket without the palette (texture_entries_invalidate finds every palette's), the tag with it */
+	uint32_t bucket = texture_key_hash(data, format_word, size_word, 0) % TEXTURE_BUCKETS, index, placeholder, hires;
+	uint16_t tag = (uint16_t)(texture_key_hash(data, format_word, size_word, palette_hash) >> 10);
 	uint32_t hires_gpu[10];
 	BOOL fresh = texture->fresh != 0;
 	spu_d3d_texture *entry = NULL, *result;
 
-	for (index = texture_buckets[hash % TEXTURE_BUCKETS]; index != NO_ENTRY; index = texture_next[index])
+	for (index = texture_buckets[bucket]; index != NO_ENTRY; index = texture_next[index])
 	{
-		if (texture_tags[index] != (uint16_t)(hash >> 10))
+		if (texture_tags[index] != tag)
 			continue;
 		entry = texture_entry(index);
 		if (entry->data == data && entry->format_word == format_word && entry->size_word == size_word &&
@@ -2851,9 +3090,9 @@ static spu_d3d_texture *texture_get(spu_d3d_stage_texture *texture, uint32_t pal
 			return NULL;
 		index = texture_free;
 		texture_free = texture_next[index];
-		texture_next[index] = texture_buckets[hash % TEXTURE_BUCKETS];
-		texture_buckets[hash % TEXTURE_BUCKETS] = (uint16_t)index;
-		texture_tags[index] = (uint16_t)(hash >> 10);
+		texture_next[index] = texture_buckets[bucket];
+		texture_buckets[bucket] = (uint16_t)index;
+		texture_tags[index] = tag;
 		textures_in_use++;
 		entry = texture_entry(index);
 		memset(entry, 0, sizeof(*entry));
@@ -2888,6 +3127,26 @@ static spu_d3d_texture *texture_get(spu_d3d_stage_texture *texture, uint32_t pal
 	if (entry->placeholder != placeholder || entry->hires != hires || memcmp(entry->hires_gpu, hires_gpu, 40))
 		texture_epoch++;
 	return result;
+}
+
+/* d3d8_rsx.c's: a fresh header's texels, every palette's entry, checked again at their next texture_get */
+static void texture_entries_invalidate(uint32_t data, uint32_t format_word, uint32_t size_word)
+{
+	uint32_t index;
+
+	for (index = texture_buckets[texture_key_hash(data, format_word, size_word, 0) % TEXTURE_BUCKETS];
+		index != NO_ENTRY; index = texture_next[index])
+	{
+		spu_d3d_texture *entry = texture_entry(index);
+
+		if (entry->data == data && entry->format_word == format_word && entry->size_word == size_word)
+		{
+			entry->checked = 0;
+			entry->checked_frame = texture_frame - 1;
+			texture_entry_dirty(index);
+			texture_epoch++;
+		}
+	}
 }
 
 /* the textures not used for a while go: their RSX memory freed by the PPE */
@@ -3094,6 +3353,7 @@ static void stage_bind(int stage)
 	uint32_t mode = stage_texture_mode(stage);
 	gpu_texture *bound = &stage_binds[stage].bound;
 	render_target *target;
+	mip_composite *composite;
 	BOOL hires = FALSE;
 
 	stage_binds[stage].on = FALSE;
@@ -3108,7 +3368,21 @@ static void stage_bind(int stage)
 	}
 	memset(bound, 0, sizeof(*bound));
 	target = render_target_find(texture->data);
-	if (target)
+	composite = target && !(scaled.on && scaled.width && target == scaled.color) ? mip_composite_get(texture, target) :
+		NULL;
+	if (composite)
+	{
+		/* d3d8_rsx.c's: its levels drawn so far, set before sampler_fill */
+		bound->offset = composite->offset;
+		bound->pitch = composite->width * 4;
+		bound->width = (uint16_t)composite->width;
+		bound->height = (uint16_t)composite->height;
+		bound->depth = 1;
+		bound->format = GCM_TEXTURE_FORMAT_A8R8G8B8;
+		bound->levels = (uint8_t)composite->rendered;
+		bound->dimension = GCM_TEXTURE_DIMS_2D;
+	}
+	else if (target)
 	{
 		texture_description d;
 		BOOL smaller = scaled.on && scaled.width && target == scaled.color;
@@ -3168,7 +3442,7 @@ static void stage_bind(int stage)
 static void bind_textures(texture_samplers *samplers)
 {
 	uint32_t changes = draw_state_changes, gpu_epoch = caches_epoch;
-	int style = button_style, stage;
+	int style = hires_key, stage;
 
 	if (gpu_epoch != binds_gpu_epoch || style != binds_style)
 	{
@@ -5179,7 +5453,7 @@ static void blit_draw(uint32_t display_width, uint32_t display_height, uint32_t 
 	blit.output_mask = 0x4000;
 	blit.register_count = 1;
 	gpu_set_vertex_program(&blit);
-	rsx_fragment_program_location(setup.blit_fragment_offset, 0x40, 2, 1, 1);
+	rsx_fragment_program_location(present_program, 0x40, 2, 1, 1);
 	fragment.program = 0;
 	memset(&texture, 0, sizeof(texture));
 	texture.offset = offset;
@@ -5472,6 +5746,8 @@ static void present_run(const spu_d3d_record_present *present)
 		placeholders[index].data = answer->words[5 + 2 * index];
 		placeholders[index].asset = (int32_t)answer->words[6 + 2 * index];
 	}
+	hires_key = (int)answer->words[21];
+	present_program = answer->words[22];
 	stamps.count = 0;
 	stamps.eighths = 0;
 	caches_invalidate();
@@ -5526,6 +5802,10 @@ static void record_execute(const spu_d3d_record *record, uint64_t position)
 	case _spu_d3d_record_texture:
 		if (record->a < TEXTURE_STAGES)
 		{
+			const spu_d3d_stage_texture *texture = payload;
+
+			if (texture->fresh && texture->bound && texture->data)
+				texture_entries_invalidate(texture->data, texture->format, texture->size);
 			memcpy(&device.stages[record->a], payload, sizeof(spu_d3d_stage_texture));
 			draw_state_changes |= CHANGED_TEXTURE(record->a);
 		}
@@ -5587,10 +5867,12 @@ static void record_execute(const spu_d3d_record *record, uint64_t position)
 		screen_scale[0] = screen->scale[0];
 		screen_scale[1] = screen->scale[1];
 		target_count = 0;
+		composite_count = 0;
 		render_target_generation++;
 		texture_epoch++;
 		zcull_bound = 0;
 		zcull_offset = 0;
+		zcull_on = 0;
 		surface_valid = 0;
 		scaled.on = FALSE;
 		break;
@@ -5639,6 +5921,18 @@ static void record_execute(const spu_d3d_record *record, uint64_t position)
 			scale_begin(payload);
 		else
 			scale_end();
+		break;
+	case _spu_d3d_record_visibility:
+		/* ps3_gpu_visibility's words (rsxSetClearReport, rsxSetZPixelCountEnable, rsxSetReport) */
+		if (record->a)
+		{
+			rsx_method1(NV40TCL_QUERY_RESET, REPORT_ZPASS_PIXEL_COUNT);
+			rsx_method1(NV40TCL_QUERY_ENABLE, 1);
+			break;
+		}
+		if (record->b < VISIBILITY_TESTS)
+			rsx_report(REPORT_ZPASS_PIXEL_COUNT, VISIBILITY_REPORT_BASE + record->b);
+		rsx_method1(NV40TCL_QUERY_ENABLE, 0);
 		break;
 	default:
 		break;
@@ -5753,6 +6047,8 @@ static void initial_state(void)
 		placeholders[index].data = initial->placeholders[index][0];
 		placeholders[index].asset = (int32_t)initial->placeholders[index][1];
 	}
+	hires_key = initial->hires_key;
+	present_program = setup.blit_fragment_offset;
 	frame_index = setup.frame_index;
 	frame_starts[frame_index % SPU_D3D_FRAMES] = 0;
 	caches_invalidate();

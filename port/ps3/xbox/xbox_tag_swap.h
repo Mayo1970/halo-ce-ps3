@@ -76,6 +76,13 @@ struct tag_swap_statistics
 /* tag_swap_coverage marks each byte the swap reads or skips (the PC check); NULL on the PS3 */
 typedef void (*tag_swap_coverage_proc)(uint32_t address, uint32_t size);
 
+#ifdef TAG_SWAP_LABELS
+/* the PC comparison's (tools/ps3_tag_swap_compare.c): each field the walk meets, by its struct and offset, or a data
+field's bytes (struct TAG_SWAP_LABEL_DATA, offset its kind) */
+#define TAG_SWAP_LABEL_DATA 0xFFFF
+void tag_swap_label(uint32_t address, uint32_t size, uint16_t struct_index, uint32_t offset, int operation);
+#endif
+
 /* A map header (0x800 bytes), from a map or a cache file: swapped if it is in the Xbox byte order.
 Returns 1 if it swapped. A header that is already swapped stays as it is. */
 int tag_swap_cache_file_header(void *header);
@@ -88,5 +95,11 @@ int tag_swap_tag_data(void *bytes, uint32_t address, uint32_t size, struct tag_s
 /* a structure BSP that cache_files.c read to its address after the tag data */
 int tag_swap_structure_bsp(void *bytes, uint32_t address, uint32_t size, struct tag_swap_statistics *statistics,
 	tag_swap_coverage_proc coverage);
+
+/* The same data after the game's swap (port/console/game/tag_byte_swap.c), which leaves the model and BSP
+vertices as the Xbox's: those swapped, for d3d8_rsx.c. Returns 0 if the data is not in the PS3's order. */
+int tag_swap_tag_vertices(void *bytes, uint32_t address, uint32_t size, struct tag_swap_statistics *statistics);
+int tag_swap_structure_bsp_vertices(void *bytes, uint32_t address, uint32_t size,
+	struct tag_swap_statistics *statistics);
 
 #endif

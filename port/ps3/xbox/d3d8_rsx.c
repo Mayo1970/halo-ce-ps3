@@ -217,7 +217,10 @@ static struct
 	DWORD immediate_changed;
 	float immediate_before[VERTEX_ATTRIBUTE_COUNT][4];
 	D3DMATRIX transforms[D3DTS_MAX];
-	BOOL visibility_test_active;
+	/* the dynamic resolution's view scale (1 to 7 eighths) while the view is drawn smaller, else 0 (scale_begin's) */
+	uint32_t view_eighths;
+	/* each visibility test's bound target pixels in a unit of the game's, at its last end */
+	float visibility_areas[SPU_D3D_VISIBILITY_TESTS];
 	unsigned long next_vertex_shader_id;
 	unsigned long frame;
 	long ui_offset;
@@ -262,7 +265,9 @@ enum
 	_record_light_bounds,
 	_record_scale,
 	/* the Direct3D SPU's only (spu_direct3d.h) */
-	_record_copy
+	_record_copy,
+	/* (both's) */
+	_record_visibility
 };
 
 /* the timer build's records by type (_ps3_timer_record_wrap on) */
@@ -414,6 +419,7 @@ static unsigned long screen_read_at = (unsigned long)-1;
 static long ui_offset;
 
 static void render_targets_evict(void);
+static void mip_composites_free(void);
 static BOOL particles_targets(void);
 static void particles_targets_free(void);
 static BOOL scaled_target(void);
@@ -469,6 +475,19 @@ void halo_screen_ui_offset(unsigned char centered)
 void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
 void hud_hires_style_commit(void);
 
+/* DISPLAY's BRIGHTNESS (display.brightness), read on the game thread as the width is; the presents use it */
+static volatile int brightness = PS3_GPU_BRIGHTNESS_NEUTRAL;
+
+static void brightness_commit(void)
+{
+	static unsigned long read_at = (unsigned long)-1;
+
+	if (read_at == config_changes())
+		return;
+	read_at = config_changes();
+	brightness = (int)config_integer("display.brightness");
+}
+
 /* EXTRA OPTIONS' WIDESCREEN (display.screen_width), between frames: the game's layout and the targets must agree
 for a whole frame (rasterizer_xbox.c). Returns the width the game draws. */
 long halo_screen_commit(void)
@@ -478,6 +497,7 @@ long halo_screen_commit(void)
 
 	/* (BUTTON ICONS' style, read on the game thread as the width is) */
 	hud_hires_style_commit();
+	brightness_commit();
 	if (!screen_width)
 		return halo_screen_width();
 	if (screen_read_at == config_changes())
@@ -767,6 +787,9 @@ struct render_target
 	uint32_t pitch;
 	uint32_t bytes;
 	unsigned long last_rendered;
+	/* moves at each bind to draw or clear (a mip composite's copy of it is stale); copied: a composite took it since */
+	unsigned long written;
+	BOOL copied;
 };
 
 #define RENDER_TARGET_BUCKET_COUNT 256
@@ -873,6 +896,8 @@ static void render_targets_evict(void)
 {
 	unsigned long index;
 
+	/* (the scale ends with the targets on both threads) */
+	front.view_eighths = 0;
 	if (spu.on)
 	{
 		spu_d3d_record_screen *screen;
@@ -882,6 +907,7 @@ static void render_targets_evict(void)
 		for (index = 0; index < spu.target_count; index++)
 			ps3_gpu_target_free(spu.targets[index].memory, spu.targets[index].bytes);
 		spu.target_count = 0;
+		mip_composites_free();
 		particles_targets_free();
 		scaled_target_free();
 		ps3_host_lock_leave(spu.gpu_lock);
@@ -908,6 +934,7 @@ static void render_targets_evict(void)
 			free(target);
 		}
 	}
+	mip_composites_free();
 	particles_targets_free();
 	scaled_target_free();
 	render_target_generation++;
@@ -925,6 +952,141 @@ static struct render_target *render_target_find(DWORD data)
 			best = target;
 	}
 	return best;
+}
+
+/* the levels drawn, each into its own target, of a swizzled texture copied into one RSX texture with all of them, laid
+out as texture_upload's (d3d8_gl.c's mip_composite_get: the water's ripple map) */
+struct mip_composite
+{
+	struct mip_composite *next;
+	DWORD data;
+	unsigned long width, height, levels;
+	void *memory;
+	uint32_t offset;
+	uint32_t bytes;
+	/* the levels copied, each one's target's written then */
+	unsigned long rendered;
+	unsigned long written[SPU_D3D_MIP_LEVELS];
+};
+
+/* the Direct3D thread's (the SPU keeps its own; their memory is in spu.targets) */
+static struct mip_composite *mip_composites;
+
+/* the memory, freed with the targets (ps3_gpu_target_free) */
+static void *mip_composite_allocate(uint32_t bytes, uint32_t *offset)
+{
+	static BOOL logged;
+	void *memory = ps3_gpu_memory_allocate(bytes, 128, _ps3_gpu_memory_target, offset);
+
+	/* (once: a failed composite is asked for again at each bind, and the stage draws its level 0) */
+	if (!memory && !logged)
+	{
+		logged = TRUE;
+		platform_log("Direct3D: no RSX memory for a mip composite of %lu bytes", (unsigned long)bytes);
+	}
+	return memory;
+}
+
+static void mip_composites_free(void)
+{
+	while (mip_composites)
+	{
+		struct mip_composite *composite = mip_composites;
+
+		mip_composites = composite->next;
+		ps3_gpu_target_free(composite->memory, composite->bytes);
+		free(composite);
+	}
+}
+
+/* the levels the 2D engine can copy: from 4x2, 64-aligned (rsxSetConvertSwizzleFormat's swizzled surfaces) */
+static unsigned long mip_composite_levels(const struct xgpu_texture_description *description)
+{
+	unsigned long level;
+
+	for (level = 0; level < description->levels && level < SPU_D3D_MIP_LEVELS; level++)
+	{
+		if ((description->width >> level) < 4 || (description->height >> level) < 2 ||
+			(xgpu_texture_level_offset(description, level) & 63))
+			break;
+	}
+	return level;
+}
+
+/* target: the texture's level 0. The composite with the levels drawn so far, copied again where their targets were
+written since; NULL under two levels (the target is bound alone) */
+static struct mip_composite *mip_composite_get(const struct stage_texture *texture, struct render_target *target)
+{
+	struct xgpu_texture_description description;
+	struct render_target *level_targets[SPU_D3D_MIP_LEVELS];
+	struct ps3_gpu_swizzle_level copies[SPU_D3D_MIP_LEVELS];
+	struct mip_composite *composite;
+	unsigned long copyable, rendered, level;
+	uint32_t count = 0;
+
+	xgpu_texture_describe(texture->format, texture->size, &description);
+	if (description.linear || description.cube_map || description.compressed || description.depth != 1 ||
+		description.levels < 2 || description.width > 1024 || description.height > 1024 ||
+		(description.format != D3DFMT_A8R8G8B8 && description.format != D3DFMT_X8R8G8B8))
+		return NULL;
+	copyable = mip_composite_levels(&description);
+	/* each level's target as GetSurfaceLevel's Data names it, at its size; the count stops at the first missing */
+	for (rendered = 0; rendered < copyable; rendered++)
+	{
+		struct render_target *level_target = rendered ?
+			render_target_find(texture->data + (DWORD)xgpu_texture_level_offset(&description, rendered)) : target;
+
+		if (!level_target || level_target->width != description.width >> rendered ||
+			level_target->height != description.height >> rendered || level_target->scale[0] != 1.0f ||
+			level_target->scale[1] != 1.0f)
+			break;
+		level_targets[rendered] = level_target;
+	}
+	if (rendered < 2)
+		return NULL;
+	for (composite = mip_composites; composite; composite = composite->next)
+	{
+		if (composite->data == texture->data && composite->width == description.width &&
+			composite->height == description.height && composite->levels == description.levels)
+			break;
+	}
+	if (!composite)
+	{
+		composite = calloc(1, sizeof(*composite));
+		if (!composite)
+			return NULL;
+		composite->bytes = (uint32_t)xgpu_texture_level_offset(&description, copyable);
+		composite->memory = mip_composite_allocate(composite->bytes, &composite->offset);
+		if (!composite->memory)
+		{
+			free(composite);
+			return NULL;
+		}
+		composite->data = texture->data;
+		composite->width = description.width;
+		composite->height = description.height;
+		composite->levels = description.levels;
+		composite->next = mip_composites;
+		mip_composites = composite;
+	}
+	for (level = 0; level < rendered; level++)
+	{
+		struct render_target *level_target = level_targets[level];
+
+		level_target->copied = TRUE;
+		if (rendered == composite->rendered && composite->written[level] == level_target->written)
+			continue;
+		copies[count].source_offset = level_target->offset;
+		copies[count].source_pitch = level_target->pitch;
+		copies[count].offset = composite->offset + (uint32_t)xgpu_texture_level_offset(&description, level);
+		copies[count].width = (uint16_t)level_target->width;
+		copies[count].height = (uint16_t)level_target->height;
+		composite->written[level] = level_target->written;
+		count++;
+	}
+	composite->rendered = rendered;
+	ps3_gpu_swizzle_levels(copies, count);
+	return composite;
 }
 
 /* the half resolution particles (display.half_resolution_particles; rasterizer_transparent_geometry.c's): the effects
@@ -1047,6 +1209,13 @@ bind:
 	if (color->last_rendered != device.frame + 1)
 	{
 		color->last_rendered = device.frame + 1;
+		texture_epoch++;
+	}
+	/* (a composite of it is copied again at the stage's next bind) */
+	color->written++;
+	if (color->copied)
+	{
+		color->copied = FALSE;
 		texture_epoch++;
 	}
 	targets_bound.color = color;
@@ -1239,6 +1408,7 @@ int d3d8_dynamic_resolution(int on)
 	{
 		record_begin(_record_scale, 0, 0, 0);
 		record_commit();
+		front.view_eighths = 0;
 		return TRUE;
 	}
 	if (!device.gpu_ready || !config_boolean("display.dynamic_resolution"))
@@ -1255,6 +1425,8 @@ int d3d8_dynamic_resolution(int on)
 	payload->data = device.back_buffer.Data;
 	payload->eighths = eighths;
 	record_commit();
+	if (!front.view_eighths && eighths >= 1 && eighths <= 7)
+		front.view_eighths = eighths;
 	return eighths < 8;
 }
 
@@ -1494,6 +1666,19 @@ int hud_hires_rsx_override(const unsigned char *texels, unsigned long width, uns
 int hud_hires_rsx_placeholder(DWORD data, struct ps3_gpu_texture *gpu);
 int hud_hires_rsx_asset_texture(long asset, int style, struct ps3_gpu_texture *gpu);
 void hud_hires_rsx_placeholders(unsigned int words[8][2]);
+unsigned int menu_art_rsx_frame(void);
+int menu_art_rsx_texture(DWORD data, struct ps3_gpu_texture *gpu);
+
+/* the button style and the menus' pictures' epoch, taken once a frame: a texture looks its stand-in up again when it
+changes (the SPU's entries keep it in a byte) */
+static int hires_key = 3;
+
+static void hires_key_update(void)
+{
+	int style = hud_hires_rsx_style();
+
+	hires_key = (style < 0 ? 3 : style) | (int)(menu_art_rsx_frame() & 31) << 2;
+}
 
 static struct texture_entry *texture_buckets[TEXTURE_BUCKET_COUNT];
 static unsigned long texture_frame = 1;
@@ -1643,7 +1828,7 @@ static struct texture_entry *texture_check(struct texture_entry *entry, BOOL fre
 	__uint64 hash;
 	uint64_t span;
 	BOOL cached, changed;
-	int style = hud_hires_rsx_style();
+	int style = hires_key;
 
 	/* once a frame: the game writes texels with the CPU (the text cache) */
 	entry->checked_frame = texture_frame;
@@ -1685,9 +1870,10 @@ static struct texture_entry *texture_check(struct texture_entry *entry, BOOL fre
 		const struct xgpu_texture_description *description = &entry->description;
 
 		entry->hires_style = style;
-		entry->hires = !palette && !description->linear && !description->cube_map && description->depth == 1 &&
+		entry->hires = menu_art_rsx_texture(data, &entry->hires_gpu) ||
+			(!palette && !description->linear && !description->cube_map && description->depth == 1 &&
 			hud_hires_rsx_override(source, description->width, description->height, description->levels > 1 ?
-			xgpu_texture_level_offset(description, 1) : xgpu_texture_face_size(description), &entry->hires_gpu);
+			xgpu_texture_level_offset(description, 1) : xgpu_texture_face_size(description), &entry->hires_gpu));
 	}
 	entry->checked = cached && entry->memory;
 	return entry->memory ? entry : NULL;
@@ -1732,6 +1918,23 @@ static struct texture_entry *texture_get(struct stage_texture *texture, const DW
 	if (entry->placeholder != placeholder || entry->hires != hires || !gpu_texture_same(&entry->hires_gpu, &hires_gpu))
 		texture_epoch++;
 	return result;
+}
+
+/* a fresh header's texels, every palette's entry: checked again at their next texture_get, whichever stage or draw
+(a fresh bind can be skipped); kept binds of them are made again */
+static void texture_entries_invalidate(DWORD data, DWORD format_word, DWORD size_word)
+{
+	struct texture_entry *entry;
+
+	for (entry = texture_buckets[texture_bucket_index(data, format_word, size_word)]; entry; entry = entry->next)
+	{
+		if (entry->data == data && entry->format_word == format_word && entry->size_word == size_word)
+		{
+			entry->checked = FALSE;
+			entry->checked_frame = texture_frame - 1;
+			texture_epoch++;
+		}
+	}
 }
 
 /* drops the textures not used for a while */
@@ -1920,6 +2123,7 @@ static void stage_bind(int stage)
 	unsigned long mode = stage_texture_mode(stage);
 	struct ps3_gpu_texture *bound = &stage_binds[stage].bound;
 	struct render_target *target;
+	struct mip_composite *composite;
 	BOOL hires = FALSE;
 
 	stage_binds[stage].on = FALSE;
@@ -1934,7 +2138,22 @@ static void stage_bind(int stage)
 	}
 	memset(&stage_binds[stage].bound, 0, sizeof(stage_binds[stage].bound));
 	target = render_target_find(texture->data);
-	if (target)
+	/* (the screen's colour drawn smaller so far is the view's target at its scale, never a composite's level) */
+	composite = target && !(scaled.on && scaled.width && target == scaled.color) ? mip_composite_get(texture, target) :
+		NULL;
+	if (composite)
+	{
+		/* its levels drawn so far (at most the Format's count), whose filter, bias and clamps sampler_fill sets */
+		bound->offset = composite->offset;
+		bound->pitch = (uint32_t)composite->width * 4;
+		bound->width = (uint16_t)composite->width;
+		bound->height = (uint16_t)composite->height;
+		bound->depth = 1;
+		bound->format = GCM_TEXTURE_FORMAT_A8R8G8B8;
+		bound->levels = (uint8_t)composite->rendered;
+		bound->dimension = GCM_TEXTURE_DIMS_2D;
+	}
+	else if (target)
 	{
 		struct xgpu_texture_description description;
 		/* (the screen's colour drawn smaller so far: the view's target at its scale) */
@@ -1999,7 +2218,7 @@ static void stage_bind(int stage)
 static void bind_textures(struct texture_samplers *samplers)
 {
 	uint32_t changes = draw_state_changes, gpu_epoch = ps3_gpu_state_epoch();
-	int style = hud_hires_rsx_style(), stage;
+	int style = hires_key, stage;
 
 	if (gpu_epoch != binds_gpu_epoch || style != binds_style)
 	{
@@ -4728,9 +4947,15 @@ static void record_execute(const struct record *record)
 		attributes_apply(record->a, payload);
 		break;
 	case _record_texture:
-		device.stages[record->a] = *(const struct stage_texture *)payload;
+	{
+		const struct stage_texture *texture = payload;
+
+		if (texture->fresh && texture->bound && texture->data)
+			texture_entries_invalidate(texture->data, texture->format, texture->size);
+		device.stages[record->a] = *texture;
 		draw_state_changes |= CHANGED_TEXTURE(record->a);
 		break;
+	}
 	case _record_vertex_shader:
 		vertex_shader_apply(record->a, (struct vertex_shader_object *)*(const uint64_t *)payload, record->b);
 		break;
@@ -4792,6 +5017,9 @@ static void record_execute(const struct record *record)
 			scale_begin(payload);
 		else
 			scale_end();
+		break;
+	case _record_visibility:
+		ps3_gpu_visibility((int)record->a, record->b);
 		break;
 	default:
 		break;
@@ -5222,6 +5450,7 @@ typedef char spu_records_check[(int)_record_present == (int)_spu_d3d_record_pres
 	(int)_record_label == (int)_spu_d3d_record_label && (int)_record_particles == (int)_spu_d3d_record_particles &&
 	(int)_record_light_bounds == (int)_spu_d3d_record_light_bounds &&
 	(int)_record_scale == (int)_spu_d3d_record_scale && (int)_record_copy == (int)_spu_d3d_record_copy &&
+	(int)_record_visibility == (int)_spu_d3d_record_visibility &&
 	sizeof(struct record) == sizeof(spu_d3d_record) && sizeof(struct record_draw) == sizeof(spu_d3d_record_draw) &&
 	sizeof(struct record_elements) == sizeof(spu_d3d_record_elements) &&
 	sizeof(struct stage_texture) == sizeof(spu_d3d_stage_texture) &&
@@ -5347,9 +5576,10 @@ static void spu_texture_request(const uint32_t *words, spu_d3d_response *answer)
 
 		memcpy(&hires_gpu, spu_entry->hires_gpu, sizeof(hires_gpu));
 		spu_entry->hires_style = (int8_t)style;
-		spu_entry->hires = !palette_data && spu_entry->hires_candidate && source &&
+		spu_entry->hires = menu_art_rsx_texture(spu_entry->data, &hires_gpu) ||
+			(!palette_data && spu_entry->hires_candidate && source &&
 			hud_hires_rsx_override(source, description->width, description->height, description->levels > 1 ?
-			xgpu_texture_level_offset(description, 1) : xgpu_texture_face_size(description), &hires_gpu);
+			xgpu_texture_level_offset(description, 1) : xgpu_texture_face_size(description), &hires_gpu));
 		memcpy(spu_entry->hires_gpu, &hires_gpu, sizeof(hires_gpu));
 	}
 	/* (an upload moved texture_epoch; texels written, as ps3_gpu.c's texture cache flag) */
@@ -5384,6 +5614,26 @@ static void spu_target_request(const uint32_t *words, spu_d3d_response *answer)
 	memcpy(&answer->words[3], zcull_after, sizeof(zcull_after));
 	/* (a new ZCull surface's data is not good until its first full clear) */
 	answer->words[7] = zcull_after[0] && (!zcull_before[0] || zcull_after[1] != zcull_before[1]);
+}
+
+/* (room for every target the SPU keeps and its composites, all freed by render_targets_evict) */
+typedef char spu_targets_check[sizeof(spu.targets) / sizeof(spu.targets[0]) >=
+	SPU_D3D_TARGETS + SPU_D3D_MIP_COMPOSITES ? 1 : -1];
+
+/* the SPU's mip_composite_get's allocation */
+static void spu_mip_composite_request(const uint32_t *words, spu_d3d_response *answer)
+{
+	uint32_t offset;
+	void *memory;
+
+	if (spu.target_count == sizeof(spu.targets) / sizeof(spu.targets[0]) ||
+		!(memory = mip_composite_allocate(words[0], &offset)))
+		return;
+	spu.targets[spu.target_count].memory = memory;
+	spu.targets[spu.target_count++].bytes = words[0];
+	answer->status = 1;
+	answer->words[0] = offset;
+	answer->words[1] = (uint32_t)(uintptr_t)memory;
 }
 
 /* fragment_program_get's lookup and translation of a cleaned key: the SPU table's index, -1 none */
@@ -5452,6 +5702,9 @@ static void spu_present_end(const uint32_t *words, spu_d3d_response *answer)
 		answer->words[5 + 2 * index] = placeholders[index][0];
 		answer->words[6 + 2 * index] = placeholders[index][1];
 	}
+	hires_key_update();
+	answer->words[21] = (uint32_t)hires_key;
+	answer->words[22] = ps3_gpu_brightness(brightness);
 	answer->status = 1;
 }
 
@@ -5555,6 +5808,9 @@ static void spu_request_answer(const spu_d3d_request *request, spu_d3d_response 
 	case _spu_d3d_request_log:
 		spu_log();
 		answer->status = 1;
+		break;
+	case _spu_d3d_request_mip_composite:
+		spu_mip_composite_request(words, answer);
 		break;
 	default:
 		break;
@@ -5705,6 +5961,7 @@ static BOOL spu_direct3d_start(void)
 	spu_initial.static_end = (uint32_t)(uintptr_t)static_vertices_end;
 	spu_initial.button_style = hud_hires_rsx_style();
 	hud_hires_rsx_placeholders((unsigned int (*)[2])spu_initial.placeholders);
+	spu_initial.hires_key = hires_key;
 	memcpy(spu_initial.constants, device.constants, sizeof(spu_initial.constants));
 	memcpy(spu_initial.attributes, device.attributes, sizeof(spu_initial.attributes));
 	__sync_synchronize();
@@ -6115,25 +6372,61 @@ void WINAPI D3DDevice_InsertCallback(D3DCALLBACKTYPE type, D3DCALLBACK callback,
 		callback(context);
 }
 
-/* ---------- visibility tests: not counted yet, so nothing is visible */
+/* ---------- visibility tests: the RSX's Z-pass pixel count of the draws between, in a report a test (ps3_gpu.c);
+the result is the last count the RSX wrote, a frame or two late as on the PC (d3d8_gl.c) */
+
+/* the game's thread: the RSX's pixels in a unit of the game's, squared, for the colour target bind_targets binds
+(render_target_lookup's scale, times the view's under the dynamic resolution: target_surface's) */
+static float visibility_area(void)
+{
+	const D3DSurface *color = front.render_target;
+	struct xgpu_texture_description description;
+	float area, factor;
+
+	if (!color)
+		return 1.0f;
+	xgpu_texture_describe(color->Format, color->Size, &description);
+	if (!(description.width == (unsigned long)halo_screen_width() && description.height == SCREEN_HEIGHT) &&
+		!(description.width == SECONDARY_TARGET_WIDTH && description.height == SECONDARY_TARGET_HEIGHT))
+	{
+		return 1.0f;
+	}
+	area = screen_scale[0] * screen_scale[1];
+	if (front.view_eighths && color->Data == device.back_buffer.Data)
+	{
+		factor = front.view_eighths / 8.0f;
+		area *= factor * factor;
+	}
+	return area;
+}
 
 void WINAPI D3DDevice_BeginVisibilityTest(void)
 {
-	front.visibility_test_active = TRUE;
+	record_begin(_record_visibility, 0, 1, 0);
+	record_commit();
 }
 
 HRESULT WINAPI D3DDevice_EndVisibilityTest(DWORD index)
 {
-	(void)index;
-	front.visibility_test_active = FALSE;
+	uint32_t slot = (uint32_t)index & (SPU_D3D_VISIBILITY_TESTS - 1);
+
+	record_begin(_record_visibility, 0, 0, slot);
+	record_commit();
+	front.visibility_areas[slot] = visibility_area();
 	return S_OK;
 }
 
+/* never D3DERR_TESTINCOMPLETE: the game waits for the test in a loop */
 HRESULT WINAPI D3DDevice_GetVisibilityTestResult(DWORD index, UINT *result, ULONGLONG *time_stamp)
 {
-	(void)index;
+	uint32_t slot = (uint32_t)index & (SPU_D3D_VISIBILITY_TESTS - 1);
+	uint32_t count = device.gpu_ready ? ps3_gpu_visibility_count(slot) : 0;
+	float area = front.visibility_areas[slot], pixels;
+
+	/* (back to the game's units, rounded) */
+	pixels = area > 0.0f ? count / area + 0.5f : (float)count;
 	if (result)
-		*result = 0;
+		*result = pixels < 2147483647.0f ? (UINT)pixels : 0x7fffffffu;
 	if (time_stamp)
 		*time_stamp = 0;
 	return S_OK;
@@ -6294,6 +6587,7 @@ static void present_run(void)
 		scale_end();
 		surface_words_read(&device.back_buffer, &words);
 		back_buffer = render_target_get(&words, FALSE);
+		ps3_gpu_brightness(brightness);
 		if (back_buffer)
 			ps3_gpu_present(back_buffer->offset, back_buffer->pitch, (uint32_t)back_buffer->width,
 				(uint32_t)back_buffer->height);
@@ -6302,6 +6596,7 @@ static void present_run(void)
 		/* a new frame: its programs and constants are sent again */
 		constants_mark(0, _rsx_vp_constant_count - 1);
 	}
+	hires_key_update();
 	textures_begin_frame();
 	device.frame++;
 	if (device.frame == 1 || device.frame % STATISTICS_FRAMES == 0)

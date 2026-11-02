@@ -2,6 +2,8 @@
 disconnects; all pad calls run on the game's thread, which polls once a frame in XGetDeviceChanges. */
 
 #include "ps3_input.h"
+#include "ps3_osk.h"
+#include "halo_keyboard.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +11,17 @@ disconnects; all pad calls run on the game's thread, which polls once a frame in
 #define PORT_COUNT 4
 /* a DS3's small motor only turns on or off: on from half of the right motor's speed */
 #define SMALL_MOTOR_THRESHOLD 0x8000
+/* a chat line from the system keyboard: at most OpenCE's 63 characters, a few keys a tick to the game's 64
+buffered keystrokes, and chat's line given this long to open */
+#define OSK_CHAT_CHARACTERS 63
+#define OSK_KEYS_PER_TICK 16
+#define OSK_CHAT_OPEN_TIMEOUT 1000
+
+/* (the game's game.h: a network game under way, client or host) */
+unsigned char game_in_progress(void);
+short game_connection(void);
+#define GAME_CONNECTION_NETWORK_CLIENT 1
+#define GAME_CONNECTION_NETWORK_SERVER 2
 
 XPP_DEVICE_TYPE XDEVICE_TYPE_GAMEPAD_TABLE;
 XPP_DEVICE_TYPE XDEVICE_TYPE_MEMORY_UNIT_TABLE;
@@ -26,6 +39,9 @@ struct controller
 	/* the actuator values last sent to the pad */
 	int large_motor;
 	int small_motor;
+	/* the PS3 pad's buttons at the last read, and those hidden from the game until let go (the chat combo's) */
+	unsigned pad_buttons;
+	unsigned hidden;
 };
 
 static struct controller controllers[PORT_COUNT];
@@ -76,18 +92,19 @@ static SHORT stick(unsigned char value, BOOL flip)
 	return (SHORT)(flip ? -result - 1 : result);
 }
 
-static void pad_state(const struct ps3_pad *pad, XINPUT_GAMEPAD *gamepad)
+static void pad_state(const struct ps3_pad *pad, unsigned hidden, XINPUT_GAMEPAD *gamepad)
 {
+	unsigned buttons = pad->buttons & ~hidden;
 	int index;
 
 	for (index = 0; index < (int)(sizeof(digital_buttons) / sizeof(digital_buttons[0])); index++)
 	{
-		if (pad->buttons & digital_buttons[index].pad)
+		if (buttons & digital_buttons[index].pad)
 			gamepad->wButtons |= digital_buttons[index].mask;
 	}
 	for (index = 0; index < (int)(sizeof(analog_buttons) / sizeof(analog_buttons[0])); index++)
 	{
-		if (pad->buttons & analog_buttons[index].pad)
+		if (buttons & analog_buttons[index].pad)
 			gamepad->bAnalogButtons[analog_buttons[index].index] = 0xff;
 	}
 	gamepad->sThumbLX = stick(pad->stick[PS3_PAD_STICK_LEFT_X], FALSE);
@@ -229,6 +246,11 @@ BOOL WINAPI XGetDeviceChanges(PXPP_DEVICE_TYPE device_type, PDWORD insertions, P
 		*insertions = connected & (~reported_gamepads | lost);
 		reported_gamepads = connected;
 	}
+	/* (the keyboard is never reported: the game reads keystrokes without one open, input_xbox.c) */
+	else if (device_type == XDEVICE_TYPE_DEBUG_KEYBOARD && initialized)
+	{
+		ps3_input_keyboard_poll();
+	}
 	return *insertions || *removals;
 }
 
@@ -272,7 +294,29 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	if (!controller)
 		return ERROR_DEVICE_NOT_CONNECTED;
 	if (controller->pad >= 0)
-		pad_state(ps3_input_pad(controller->pad), gamepad);
+	{
+		const struct ps3_pad *pad = ps3_input_pad(controller->pad);
+		unsigned pressed = pad->buttons & ~controller->pad_buttons;
+		short connection;
+
+		controller->pad_buttons = pad->buttons;
+		controller->hidden &= pad->buttons;
+		/* SELECT and CROSS in a network game: chat's line on the system keyboard, the two kept from the game */
+		if ((pad->buttons & PS3_PAD_SELECT) && (pressed & PS3_PAD_CROSS) && !ps3_osk_active() && game_in_progress())
+		{
+			connection = game_connection();
+			if (connection == GAME_CONNECTION_NETWORK_CLIENT || connection == GAME_CONNECTION_NETWORK_SERVER)
+			{
+				ps3_osk_open("Chat", OSK_CHAT_CHARACTERS);
+				controller->hidden = pad->buttons;
+			}
+		}
+		/* (while the keyboard is up, nothing; the buttons held as it closes are kept from the game until let go) */
+		if (ps3_osk_active())
+			controller->hidden = pad->buttons;
+		else
+			pad_state(pad, controller->hidden, gamepad);
+	}
 	if (memcmp(gamepad, &controller->previous, sizeof(*gamepad)))
 	{
 		if (gamepad->wButtons != controller->previous.wButtons ||
@@ -307,18 +351,146 @@ DWORD WINAPI XInputDebugInitKeyboardQueue(PXINPUT_DEBUG_KEYQUEUE_PARAMETERS para
 	return ERROR_SUCCESS;
 }
 
+/* text chat's line or log is up (chat.c), and escape pressed meanwhile */
+static BOOL chat_typing, chat_escape_pressed;
+
+/* the system keyboard's chat line: chat's line opened as T opens it, then typed key by key and said with Enter */
+static struct
+{
+	BOOL pending;
+	char text[OSK_CHAT_CHARACTERS + 1];
+	/* the next key event: two a character (down, up), then Enter's two */
+	int event;
+	DWORD asked;
+	int keys_this_tick;
+} osk_line;
+
+/* a character's virtual key on the US layout, and whether it takes shift; 0 for none */
+static unsigned char character_key(char character, BOOL *shift)
+{
+	static const char plain[] = "-=[]\\;'`,./", shifted[] = "_+{}|:\"~<>?", digits[] = ")!@#$%^&*(";
+	static const unsigned char punctuation[] = { 0xBD, 0xBB, 0xDB, 0xDD, 0xDC, 0xBA, 0xDE, 0xC0, 0xBC, 0xBE, 0xBF };
+	const char *found;
+
+	*shift = FALSE;
+	if (character >= 'a' && character <= 'z')
+		return (unsigned char)(character - 'a' + 'A');
+	if ((character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == ' ')
+	{
+		*shift = character >= 'A' && character <= 'Z';
+		return (unsigned char)character;
+	}
+	if (character && (found = strchr(digits, character)) != NULL)
+	{
+		*shift = TRUE;
+		return (unsigned char)('0' + (found - digits));
+	}
+	if (character && (found = strchr(plain, character)) != NULL)
+		return punctuation[found - plain];
+	if (character && (found = strchr(shifted, character)) != NULL)
+	{
+		*shift = TRUE;
+		return punctuation[found - shifted];
+	}
+	return 0;
+}
+
+/* the line's next key, once chat's line is open; FALSE when this tick has had its keys or the line is said */
+static BOOL osk_line_key(PXINPUT_DEBUG_KEYSTROKE keystroke)
+{
+	int length = (int)strlen(osk_line.text);
+	BOOL shift = FALSE;
+	int character = osk_line.event / 2;
+
+	if (!osk_line.pending || !chat_typing || osk_line.keys_this_tick >= OSK_KEYS_PER_TICK)
+		return FALSE;
+	/* (a character the game has no key for is passed over) */
+	while (character < length && !character_key(osk_line.text[character], &shift))
+		osk_line.event = 2 * ++character;
+	keystroke->VirtualKey = character < length ? character_key(osk_line.text[character], &shift) : 0x0D;
+	keystroke->Flags = shift ? XINPUT_DEBUG_KEYSTROKE_FLAG_SHIFT : 0;
+	if (osk_line.event & 1)
+		keystroke->Flags |= XINPUT_DEBUG_KEYSTROKE_FLAG_KEYUP;
+	else
+		keystroke->Ascii = character < length ? osk_line.text[character] : '\r';
+	osk_line.event++;
+	osk_line.keys_this_tick++;
+	/* (Enter's release given: the line is done before chat closes it) */
+	if (osk_line.event >= 2 * (length + 1))
+		osk_line.pending = FALSE;
+	return TRUE;
+}
+
+/* the USB keyboard's: key ups always (no key left latched), key downs only to text chat, as xinput_sdl.c */
 DWORD WINAPI XInputDebugGetKeystroke(PXINPUT_DEBUG_KEYSTROKE keystroke)
 {
+	struct ps3_keystroke next;
+
 	memset(keystroke, 0, sizeof(*keystroke));
+	if (osk_line_key(keystroke))
+		return ERROR_SUCCESS;
+	osk_line.keys_this_tick = 0;
+	while (ps3_input_keystroke(&next))
+	{
+		BOOL key_up = (next.flags & XINPUT_DEBUG_KEYSTROKE_FLAG_KEYUP) != 0;
+
+		if (chat_typing && !key_up && next.virtual_key == 0x1B)
+			chat_escape_pressed = TRUE;
+		if (key_up || chat_typing)
+		{
+			keystroke->VirtualKey = next.virtual_key;
+			keystroke->Ascii = next.ascii;
+			keystroke->Flags = next.flags;
+			return ERROR_SUCCESS;
+		}
+	}
 	return ERROR_HANDLE_EOF;
 }
 
-/* ---------- the desktop's keyboard and mouse (xinput_sdl.c): none on the PS3 */
+void platform_chat_typing(int typing)
+{
+	chat_typing = typing != 0;
+	chat_escape_pressed = FALSE;
+}
+
+int platform_chat_escape(void)
+{
+	BOOL pressed = chat_escape_pressed;
+
+	chat_escape_pressed = FALSE;
+	return pressed;
+}
+
+/* ---------- the desktop's keyboard and mouse (xinput_sdl.c): the keyboard's chat keys alone, T, Y and H as the
+desktop's defaults, for the first player; none while chat types */
 
 unsigned long halo_keyboard_actions(short controller_index)
 {
-	(void)controller_index;
-	return 0;
+	unsigned long actions = 0;
+
+	if (controller_index != 0 || chat_typing)
+		return 0;
+	/* a system keyboard's line: chat's line asked open as T asks it, till it opens (a host without chat: given up) */
+	if (!osk_line.pending && ps3_osk_take_text(osk_line.text, sizeof(osk_line.text)))
+	{
+		osk_line.pending = TRUE;
+		osk_line.event = 0;
+		osk_line.keys_this_tick = 0;
+		osk_line.asked = GetTickCount();
+	}
+	if (osk_line.pending)
+	{
+		if (GetTickCount() - osk_line.asked < OSK_CHAT_OPEN_TIMEOUT)
+			return 1UL << HALO_KEYBOARD_CHAT_ALL;
+		osk_line.pending = FALSE;
+	}
+	if (ps3_input_key_held('T'))
+		actions |= 1UL << HALO_KEYBOARD_CHAT_ALL;
+	if (ps3_input_key_held('Y'))
+		actions |= 1UL << HALO_KEYBOARD_CHAT_TEAM;
+	if (ps3_input_key_held('H'))
+		actions |= 1UL << HALO_KEYBOARD_CHAT_LOG;
+	return actions;
 }
 
 int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)

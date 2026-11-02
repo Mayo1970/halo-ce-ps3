@@ -1,6 +1,7 @@
 /* posix.h's sockets and the process calls of internet play (p2p.c), on ps3_net.h: Winsock's sockaddr_in as p2p.c
 fills it, and the error as the thread's last error. Not xnet_ps3.c's Winsock: that one routes the game's traffic. */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "posix.h"
@@ -354,4 +355,28 @@ int posix_discord_read(int handle, void *buffer, int length)
 void posix_discord_close(int handle)
 {
 	(void)handle;
+}
+
+/* ---------- crash backtraces (the game's stack_walk_windows.c, HALO_64BIT) */
+
+/* the return addresses up the stack; PPC64 ELFv1: the back chain at 0, the caller's LR save at 16 */
+int backtrace(void **frames, int count)
+{
+	__uint64 frame = (__uint64)__builtin_frame_address(0);
+	int found = 0;
+
+	while (found < count && frame && frame < 0x100000000ULL)
+	{
+		frame = *(__uint64 *)frame;
+		if (!frame)
+			break;
+		frames[found++] = (void *)*(__uint64 *)(frame + 16);
+	}
+	return found;
+}
+
+/* no symbols on the PS3: the address, for ./build.sh symbols */
+void posix_describe_address(void *address, char *buffer, posix_ulong size)
+{
+	snprintf(buffer, (size_t)size, "%08x", (unsigned int)(__uint64)address);
 }

@@ -102,7 +102,8 @@ not rebuild for a changed flag.
 
 `DEBUG=0` makes the retail build: `./build.sh clean` and then
 `./build.sh pkg DEBUG=0`. It has no UDP log: it opens no socket, and
-formats and sends nothing. The default is `DEBUG=1`, with the log.
+formats and sends nothing. The default is `DEBUG=1`, with the log, and
+with every campaign level open on every difficulty in every profile.
 
 ## Install
 
@@ -164,21 +165,34 @@ go to the log (`-Wl,--wrap`), and so do the lines of the game's
 
 ## Extra options (G8)
 
-SETTINGS in the main menu opens a screen of two items (`menu_tags.c`,
-`xbox_settings_wire`): PLAYER PROFILES, the Xbox's profile screens, and
-EXTRA OPTIONS. EXTRA OPTIONS has six rows, at the places of ADVANCED
-CONTROLS' five and one row below them. A or START keeps the changes in
-`config.toml`, and they apply from the next frame; B goes back without
-them.
+The PS3 shows the Chupathingy menus as a console (`HALO_CONSOLE_MENU_PLATFORM`
+`"ps3"`): the rows marked `console` or `ps3` (`tools/port_settings.py`). Seven
+rows are the PS3's own: WIDESCREEN, PRESET, FRAME RATE, DYNAMIC RESOLUTION
+and BRIGHTNESS in DISPLAY, BUTTON ICONS in DISPLAY's INTERFACE, TOGGLE
+CROUCH in CONTROLS. DISPLAY's FRAME RATE (`display.max_fps`), ADVANCED's
+SHADOW RESOLUTION, PER-PIXEL LIGHTING and ANISOTROPIC FILTERING, and AUDIO's
+HEADPHONE 3D, REVERB and DOPPLER are left out: the PS3 has none of them.
+ADVANCED's FULL MODEL DETAIL and FAR CLIP are left out too, as too costly
+for the RSX, so DISPLAY has no ADVANCED row. Accept keeps the changes in
+`config.toml`, and they apply from the next frame.
+
+The menus' XML is built in; their pictures are drawn at their size in the
+640x480 menu (1x), not from the PNGs: `tools/ps3_menu_art.py build` shrinks
+the PNGs into `port/assets/menus/ps3` (Pillow), and the Makefile embeds them
+(`embed`). Run `build` again when the game's menus change; `embed` stops the
+build if a picture is new or changed. `xbox/menu_art_rsx.c` makes each
+picture's RSX texture when it is first drawn, and lets them go with the
+menus (a map's change).
 
 | Row | Values | Setting |
 | --- | --- | --- |
 | WIDESCREEN | ON (the default): 852x480 of the game, drawn at 1280x720 over the whole display. OFF: the Xbox's 640x480, drawn at 960x720 in the middle | `display.screen_width`: 0 for the display's shape, 640 for 4:3 |
 | BUTTON ICONS | XBOX: the maps' own buttons. STYLE A (the default): the PS3's, colored circles with white symbols. STYLE B: black circles with colored symbols | `display.button_icons`: `"xbox"`, `"style_a"` or `"style_b"` |
 | TOGGLE CROUCH | ON: a press of the crouch button crouches, the next press stands up; a new life starts standing (`player_control.c`). OFF (the default): crouch while the button is held, as on the Xbox | `input.toggle_crouch`: true or false |
-| PRESET | CUSTOM: FRAME RATE and DYNAMIC RESOLUTION as set. QUALITY: 30 and OFF. PERFORMANCE (the default): 60 and ON. Choosing QUALITY or PERFORMANCE sets those two rows and hides them; CUSTOM shows them, and a change of one of them sets CUSTOM (`menu_functions.c`, "xbox extra options update") | `display.preset`: `"custom"`, `"quality"` or `"performance"` |
+| PRESET | CUSTOM: FRAME RATE and DYNAMIC RESOLUTION as set. QUALITY: 30 and OFF. PERFORMANCE (the default): 60 and ON. Choosing QUALITY or PERFORMANCE sets those two rows and hides them; CUSTOM shows them, and a change of one of them sets CUSTOM (`menu_functions.c`, `preset_rows_show`) | `display.preset`: `"custom"`, `"quality"` or `"performance"` |
 | FRAME RATE | 60 (the default): a frame at each refresh, blended between the game's 30 ticks a second (`port/linux/game/render_interpolation.c`). 30: a frame a tick, as on the Xbox | `display.interpolation`: true or false |
 | DYNAMIC RESOLUTION | ON (the default): in heavy scenes the 3D view is drawn smaller, then scaled up under the HUD (below). OFF: always whole | `display.dynamic_resolution`: true or false |
+| BRIGHTNESS | 5 (the default): the game's own picture. Higher lifts the dark and middle tones, lower darkens them; black and white stay. The present's blit applies it to the whole frame, the HUD and the menus with it (`src/ps3_gpu.c`, `brightness_programs_build`) | `display.brightness`: 0 to 10 |
 
 Split screen (two or more players on the PS3) always plays at 30 frames per
 second, without the dynamic resolution, whatever FRAME RATE, DYNAMIC
@@ -188,7 +202,7 @@ The button icons (`xbox/hud_hires_rsx.c`) stand for the menus' button
 bitmaps (`a_butn`, `b_butn`, `x_butn`, `y_butn` and the small A and B) and
 for the A, B, X and Y sprites of the message icons (`hud_msg_icons_sm`, the
 "Press A" icons of the menus' text; `combined\hud_msg_icons`, the HUD's
-prompts, which `hud_hires_button_draw` leaves to them on the PS3): CROSS for A, CIRCLE for
+prompts): CROSS for A, CIRCLE for
 B, SQUARE for X, TRIANGLE for Y. The menus' message icons are each style's
 buttons in their own colours, drawn with the text's alpha only
 (`ui_widget.c`). The HUD's are stencils, white with the symbol cut out,
@@ -275,74 +289,85 @@ profile (the active profile, else the last used, else the first): the
 
 ## Internet play (G7)
 
-Internet play is the PC builds' (`port/linux/src/p2p*.c`; see
-`port/linux/README.md`, "Internet play"). In the multiplayer menu, INTERNET
-PLAY is after LAN PLAY. It opens a copy of the System Link game list, which
-shows the public games of the server browser, 9 rows at a time (the rows
-scroll at their ends). A on a game joins it: the PS3 reaches the host, then
-the pregame screen opens. Player 1's profile plays, as in LAN PLAY.
+Internet play is ChupathingyCE's (`chupathingyce/port/linux/src/p2p*.c`; see
+`chupathingyce/port/linux/README.md`, "Internet play"): machines that share
+an invite play system link over the internet, and find each other through
+the public MQTT brokers of `brokers.txt`. The PS3 has no clipboard, so where
+the PC menus copy or paste an invite link, the PS3 shows or types the
+invite's code: 8 digits ("Invite codes", below).
 
-- `network.online = false` turns internet play off, and
-  `network.public_lobby = false` the game list.
+- JOIN GAME > DIRECT LINK: ENTER CODE, in the place of the PC's PASTE LINK,
+  opens the system keyboard. Type the code and select Done. The line under
+  the list tells how it goes ("Looking up the invite code...", "Connecting to
+  the invite code's game...", or why it failed); B stops a lookup. The
+  host's game then comes into the list, as a pasted link's does, and A joins
+  it.
+- ONLINE GAMES (the game list, `game/ps3_browser_screen.c`): A joins a game
+  of the list, START joins by a code as ENTER CODE does.
+- `network.online = false` turns internet play off.
 - The game asks the router to forward the tunnel's port (UPnP,
   `network.allow_upnp`).
-- Players in a browser connect through WebRTC (DTLS with Mbed TLS).
-- The list refuses games with a password (no screen types it) and closed
-  games.
 - Discord does not operate: the PS3 has no Discord client.
 
 ### Host online
 
-HOST ONLINE, after INTERNET PLAY in the multiplayer menu, opens a screen of
-two items (`menu_tags.c`, `xbox_host_wire`; `menu_functions.c`, "xbox
-host ..."). Player 1 hosts, with player 1's profile. LAN PLAY's CREATE GAME
-opens the same screen, titled CREATE GAME, and hosts for the LAN only
-(`p2p_set_hosting_allowed(FALSE)`: no code, not in the server browser).
+CREATE GAME > INTERNET hosts a game that the internet can join (> LAN: the
+LAN alone, with no code). Player 1 hosts. After the map and the gametype,
+SERVER SETUP has the game's rows, START GAME opens the lobby.
 
-- MULTIPLAYER: the map select, the gametypes, then the pregame screen. The
-  game is in the server browser while `network.host_public` is true (the
-  default).
-- CO-OP CAMPAIGN: the campaign's level list (the levels player 1's profile
-  has reached) and difficulty list, then the pregame screen. The game is
-  co-op (`ui_widget_port_cooperative_level_choose`), with
-  `network.coop_friendly_fire`, `network.coop_player_collisions` and
-  `network.coop_ally_friendly_fire`. It is in the server browser only while
-  `network.coop_public` is true (false by default).
-- The pregame screen shows the game's slots and invite code ("Slots: 16
-  Code: 1234 5678"; the code below). The invite link is in the log too
-  (`Internet play: hosting.`).
-- The gametype lists show OpenCE's gametypes (SWAT, Infection, Gun Game and
-  the four Hardcore ones) with descriptions of their own: `menu_tags.c` adds
-  them after the 36 of `ui\shell\strings\game_variant_descriptions`, where
-  a default gametype's is (its index + 10).
-- Slots: a game hosted takes 16 players at first. In the pregame screen the
-  host's Y (Y = SLOTS, left of the key bar) goes to the next of 2, 4, 8, 12
-  and 16, none under the players already in; the lobby is told at once, and
-  the next games hosted keep it.
+- INVITE CODE, in the place of the PC's INVITE LINK: the game's code ("1234
+  5678"), or MAKING A CODE... until a broker has it. Its help says how
+  others use it: a PS3 types it in DIRECT LINK, and a PC turns it into the
+  link with the converter page ("Code to link"). A does nothing: there is no
+  clipboard. The lobby shows the code too ("Invite code: 1234 5678").
+- LISTING: PUBLIC also lists the game in the server browser; PRIVATE keeps
+  it to the players who have its code.
+- The code stays on the brokers while the PS3 hosts (published again every
+  10 minutes; each publish lasts 30 minutes). It is cleared when the PS3
+  stops hosting. A new invite has a new code: a game made PRIVATE after it
+  was listed, or a PASSWORD set. The code stands for the invite's token, so
+  a player with the code joins a game with a password without typing it.
+- The game does not run its `atexit` functions when it stops: a hosted
+  game's listing and code stay at the brokers until they expire, and a UPnP
+  forward until its hour ends.
 
 ### Invite codes
 
-An invite code is 8 digits that stand for an invite link. The PS3 cannot
-paste a link, so it uses codes. A code is kept on the MQTT brokers of
-internet play for 30 minutes. The brokers do not see the link: it is
-encrypted with a key that comes from the code (`p2p_code_*` in
-`port/linux/src/p2p_crypto.c`).
+An invite code is 8 digits that stand for a ChupathingyCE invite link
+(`halo://join/` and 64 hexadecimal digits). The link is kept on the public
+MQTT brokers, encrypted with a key that comes from the code, so the brokers
+do not see it.
 
-- To join a game with a code: in INTERNET PLAY, press Y (ENTER CODE), type
-  the 8 digits on the keyboard, and select Done. The PS3 finds the link on
-  the brokers and joins the game, as for a game in the list.
-- When the PS3 hosts a game, the pregame screen shows its code ("Code: 1234
-  5678", right of "Choose teams using D-pad"). The code stays on the brokers
-  while the PS3 hosts. The log has it too (`Internet play: this game's invite
-  code is`).
-- The converter page, `port/ps3/invite/index.html`, makes a code from a PC's
-  link. It is one file with no other
-  files: publish it with GitHub Pages, or open it from the disk.
+- A PC hosts: copy the game's invite link, paste it in the converter page,
+  `port/ps3/invite/index.html`, and select Make code ("Link to code"). The
+  page keeps the code for 30 minutes. On the PS3, type the code in DIRECT
+  LINK (ENTER CODE) or ONLINE GAMES (START).
+- A PS3 hosts: SERVER SETUP and the lobby show its code. Another PS3 types
+  it in DIRECT LINK. On a PC, type it in the page's "Code to link" and select
+  Find link: the page shows the link, with Copy link and Open in the game
+  (or select PASTE LINK in Join Game > Direct Link).
+- The page uses EMQX, HiveMQ and Eclipse Mosquitto (WebSocket), which are in
+  the game's `brokers.txt` too. It is one file with no other files: publish
+  it with GitHub Pages, or open it from the disk.
+- "No game has that code": no broker had it in 20 seconds (a wrong code, or
+  an expired one). "Could not look up the code": no broker answered.
+- The link of a game with a password (`halo://join/p...`) makes no code on
+  the page: the PS3 cannot type the password. A PS3 host's code has the
+  token itself (above).
+- The key is PBKDF2-HMAC-SHA256 of the digits (salt `hceu invite code 1`,
+  100,000 rounds; about half a second on the PPE). The internet play thread
+  works it out, for a code made and for a code looked up, so the menus do
+  not stop. The topic is `hceu/3/code/` and an HMAC of the key. The code is
+  in ChupathingyCE's `p2p.c`, `p2p_signal.c` and `p2p_crypto.c`
+  (`p2p_invite_code`, `p2p_look_up_code`, `p2p_code_*`, in `HALO_PS3`
+  blocks), the screens in `menu_functions.c` (`HALO_PS3`) and
+  `game/ps3_browser_screen.c`.
+- `tools/ps3_invite_code_test.py` checks both ways: the PS3's key, topic,
+  seal and opening against Python's and the page's (with node), and the
+  page's Link to code and Code to link through a broker in memory.
 
-Anyone who has a code can join the game while the code lasts.
-- The game does not run its `atexit` functions when it stops: a hosted
-  game's listing stays at the brokers until it expires, and a UPnP forward
-  until its hour ends.
+Anyone who has a code can join the game while the code lasts. The log shows
+only the first 2 digits of a code and the first 8 of a link.
 
 ## Bring-up test
 

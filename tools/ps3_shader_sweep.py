@@ -1,11 +1,12 @@
-"""The shader sweep (shader.md, step 3): the Windows build of the game, with sweep_d3d.c in front of its Direct3D
-draws and sweep_game.c's set-ups, runs each map without a window and writes the PS3 pixel shader keys it made;
-the keys of all maps go into port/ps3/shader_keys.txt.
+"""The shader sweep (shader.md, step 3): the game's Windows build (chupathingyce/), with sweep_d3d.c in front of its
+Direct3D draws and sweep_game.c's set-ups, runs each map without a window and writes the PS3 pixel shader keys it
+made; the keys of all maps go into port/ps3/shader_keys.txt.
 
     python tools/ps3_shader_sweep.py --maps <folder of the Xbox maps> [--only a10,b40] [--no-merge | --merge-only]
 
-It needs the Windows build's objects (python configure.py, then ninja windows) and a native ninja (NINJA, or the
-one of Visual Studio). Run it with Windows' Python.
+It needs the game's Windows build's objects (in chupathingyce/: python configure.py --pgo=off --lto=off
+--no-game-browser --without-ffmpeg, then ninja windows) and a native ninja (NINJA, or Visual Studio's). Run it with
+Windows' Python.
 """
 
 import argparse
@@ -17,7 +18,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SWEEP = ROOT / "build" / "windows" / "sweep"
+# the game (a submodule), whose Windows build the sweep links against
+GAME = ROOT / "chupathingyce"
+SWEEP = GAME / "build" / "windows" / "sweep"
 KEYS = ROOT / "port" / "ps3" / "shader_keys.txt"
 SOURCES = ROOT / "tools" / "ps3_shader_sweep"
 VISUAL_STUDIO_NINJA = Path(r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions"
@@ -43,11 +46,11 @@ def ninja() -> str:
 
 def run(command, **options):
     print(" ".join(command) if isinstance(command, list) else command, flush=True)
-    subprocess.run(command, check=True, cwd=ROOT, **options)
+    subprocess.run(command, check=True, cwd=GAME, **options)
 
 
 def commands() -> list:
-    output = subprocess.run([ninja(), "-t", "commands", r"build\windows\halo.exe"], check=True, cwd=ROOT,
+    output = subprocess.run([ninja(), "-t", "commands", r"build\windows\halo.exe"], check=True, cwd=GAME,
                             capture_output=True, text=True).stdout
     return output.splitlines()
 
@@ -61,7 +64,7 @@ def compile_like(template: str, source: str, output: Path, extra: str = "") -> N
 
 
 def link_inputs() -> list:
-    output = subprocess.run([ninja(), "-t", "query", r"build\windows\halo.exe"], check=True, cwd=ROOT,
+    output = subprocess.run([ninja(), "-t", "query", r"build\windows\halo.exe"], check=True, cwd=GAME,
                             capture_output=True, text=True).stdout
     inputs, reading = [], False
     for line in output.splitlines():
@@ -108,7 +111,7 @@ def build() -> Path:
     link = re.sub(r"-o \S+", lambda match: f"-o {executable}", link, count=1)
     link = re.sub(r"@\S+\.rsp", lambda match: f"@{response}", link)
     run(link)
-    shutil.copy2(ROOT / "build" / "windows" / "SDL3.dll", SWEEP / "SDL3.dll")
+    shutil.copy2(GAME / "build" / "windows" / "SDL3.dll", SWEEP / "SDL3.dll")
     return executable
 
 

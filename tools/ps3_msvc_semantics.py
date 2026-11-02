@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""tools/linux_msvc_semantics.py for GCC, which rejects `#pragma weak` on a static function: the
-PS3 header leaves out the inline functions that some unit declares static (ui_widget.c has some)."""
+"""The game's tools/linux_msvc_semantics.py for GCC, which rejects `#pragma weak` on a static function:
+the PS3 header leaves out the inline functions that some unit declares static (ui_widget.c has some)."""
 
 import argparse
 import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "chupathingyce" / "tools"))
 import linux_msvc_semantics as semantics  # noqa: E402
 
 STATIC_INLINE = re.compile(

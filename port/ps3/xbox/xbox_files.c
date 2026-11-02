@@ -7,6 +7,7 @@ folders of the save root on the HDD (z:\ the map cache); names match in any case
 #include <stdlib.h>
 #include <string.h>
 
+#include "port_folders.h"
 #include "ps3_timers.h"
 
 #define SAVE_ROOT "/dev_hdd0/data/HaloCE"
@@ -63,6 +64,25 @@ const char *platform_save_root(void)
 		made = TRUE;
 	}
 	return SAVE_ROOT;
+}
+
+/* the game's own folders in their roots (the game's port_folders.c), made at the first ask */
+const char *platform_folder(enum port_folder folder)
+{
+	static char paths[k_port_folder_count][HOST_PATH_SIZE];
+
+	if ((unsigned)folder >= k_port_folder_count)
+		return "";
+	if (!paths[folder][0])
+	{
+		if (!port_folder_path(folder, NULL, platform_data_root(), platform_save_root(), paths[folder],
+			sizeof(paths[folder])))
+		{
+			return "";
+		}
+		ps3_host_path_make_directory(paths[folder]);
+	}
+	return paths[folder];
 }
 
 void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size)

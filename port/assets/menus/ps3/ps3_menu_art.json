@@ -1,0 +1,1268 @@
+{
+ "pictures": [
+  {
+   "name": "ce/port/blank__0.png",
+   "width": 4,
+   "height": 4,
+   "offset": 0,
+   "size": 12,
+   "source": 3046024315
+  },
+  {
+   "name": "ce/port/chupathingy/delta_profile/header_delta_profile.png",
+   "width": 512,
+   "height": 64,
+   "offset": 12,
+   "size": 18766,
+   "source": 22358444
+  },
+  {
+   "name": "ce/port/chupathingy/delta_profile/header_privacy.png",
+   "width": 512,
+   "height": 64,
+   "offset": 18778,
+   "size": 15159,
+   "source": 997334999
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/coop/header_player_2.png",
+   "width": 512,
+   "height": 64,
+   "offset": 33937,
+   "size": 20773,
+   "source": 420384225
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/host_setup/header_edit_game_type.png",
+   "width": 512,
+   "height": 64,
+   "offset": 54710,
+   "size": 19077,
+   "source": 679163976
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/host_setup/header_game_setup.png",
+   "width": 512,
+   "height": 64,
+   "offset": 73787,
+   "size": 18178,
+   "source": 3983892142
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/join_game/header_direct_link.png",
+   "width": 512,
+   "height": 64,
+   "offset": 91965,
+   "size": 16842,
+   "source": 1366230466
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/join_game/header_password.png",
+   "width": 512,
+   "height": 64,
+   "offset": 108807,
+   "size": 17413,
+   "source": 3648850972
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/join_game/header_server_browser.png",
+   "width": 512,
+   "height": 64,
+   "offset": 126220,
+   "size": 20678,
+   "source": 3023218812
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/lobby/header_add_player.png",
+   "width": 512,
+   "height": 64,
+   "offset": 146898,
+   "size": 17397,
+   "source": 4253445410
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/lobby/header_lobby.png",
+   "width": 512,
+   "height": 64,
+   "offset": 164295,
+   "size": 18541,
+   "source": 90251778
+  },
+  {
+   "name": "ce/port/main_menu/multiplayer_type_select/server_settings/header_host_options.png",
+   "width": 512,
+   "height": 64,
+   "offset": 182836,
+   "size": 18380,
+   "source": 2343846903
+  },
+  {
+   "name": "ce/shell/bitmaps/alert_bkd__0.png",
+   "width": 256,
+   "height": 256,
+   "offset": 201216,
+   "size": 3032,
+   "source": 605405410
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_down__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 204248,
+   "size": 189,
+   "source": 2718533829
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_down__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 204437,
+   "size": 150,
+   "source": 2058942478
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_left__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 204587,
+   "size": 226,
+   "source": 3991715713
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_left__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 204813,
+   "size": 166,
+   "source": 61486625
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_left__2.png",
+   "width": 16,
+   "height": 16,
+   "offset": 204979,
+   "size": 152,
+   "source": 1013177808
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_left__3.png",
+   "width": 16,
+   "height": 16,
+   "offset": 205131,
+   "size": 163,
+   "source": 1221530213
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_right__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 205294,
+   "size": 197,
+   "source": 433279547
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_right__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 205491,
+   "size": 142,
+   "source": 3483094900
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_right__2.png",
+   "width": 16,
+   "height": 16,
+   "offset": 205633,
+   "size": 128,
+   "source": 1311612481
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_right__3.png",
+   "width": 16,
+   "height": 16,
+   "offset": 205761,
+   "size": 147,
+   "source": 4249150798
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_up__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 205908,
+   "size": 218,
+   "source": 4032234944
+  },
+  {
+   "name": "ce/shell/bitmaps/arrow_sm_up__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 206126,
+   "size": 168,
+   "source": 593987701
+  },
+  {
+   "name": "ce/shell/bitmaps/black__0.png",
+   "width": 4,
+   "height": 4,
+   "offset": 206294,
+   "size": 15,
+   "source": 3975773703
+  },
+  {
+   "name": "ce/shell/bitmaps/blue__0.png",
+   "width": 4,
+   "height": 4,
+   "offset": 206309,
+   "size": 15,
+   "source": 732571260
+  },
+  {
+   "name": "ce/shell/bitmaps/controller_border__0.png",
+   "width": 1024,
+   "height": 512,
+   "offset": 206324,
+   "size": 4235,
+   "source": 3109744575
+  },
+  {
+   "name": "ce/shell/bitmaps/device_border__0.png",
+   "width": 1024,
+   "height": 512,
+   "offset": 210559,
+   "size": 6103,
+   "source": 3377836802
+  },
+  {
+   "name": "ce/shell/bitmaps/game_type_grafix__0.png",
+   "width": 256,
+   "height": 128,
+   "offset": 216662,
+   "size": 10002,
+   "source": 3244341103
+  },
+  {
+   "name": "ce/shell/bitmaps/game_type_grafix__1.png",
+   "width": 256,
+   "height": 128,
+   "offset": 226664,
+   "size": 9317,
+   "source": 4052697356
+  },
+  {
+   "name": "ce/shell/bitmaps/game_type_grafix__2.png",
+   "width": 256,
+   "height": 128,
+   "offset": 235981,
+   "size": 9077,
+   "source": 95266439
+  },
+  {
+   "name": "ce/shell/bitmaps/game_type_grafix__3.png",
+   "width": 256,
+   "height": 128,
+   "offset": 245058,
+   "size": 9650,
+   "source": 1717700646
+  },
+  {
+   "name": "ce/shell/bitmaps/game_type_grafix__4.png",
+   "width": 256,
+   "height": 128,
+   "offset": 254708,
+   "size": 8622,
+   "source": 3825037157
+  },
+  {
+   "name": "ce/shell/bitmaps/game_type_grafix__5.png",
+   "width": 256,
+   "height": 128,
+   "offset": 263330,
+   "size": 5289,
+   "source": 2154311116
+  },
+  {
+   "name": "ce/shell/bitmaps/gradient__0.png",
+   "width": 4,
+   "height": 512,
+   "offset": 268619,
+   "size": 314,
+   "source": 1813774484
+  },
+  {
+   "name": "ce/shell/bitmaps/gradient_big__0.png",
+   "width": 4,
+   "height": 512,
+   "offset": 268933,
+   "size": 330,
+   "source": 2341973827
+  },
+  {
+   "name": "ce/shell/bitmaps/join_game_border__0.png",
+   "width": 1024,
+   "height": 512,
+   "offset": 269263,
+   "size": 7633,
+   "source": 1350545862
+  },
+  {
+   "name": "ce/shell/bitmaps/list_field__0.png",
+   "width": 512,
+   "height": 512,
+   "offset": 276896,
+   "size": 3425,
+   "source": 3529511665
+  },
+  {
+   "name": "ce/shell/bitmaps/list_item_bkd__0.png",
+   "width": 256,
+   "height": 32,
+   "offset": 280321,
+   "size": 52,
+   "source": 4230752506
+  },
+  {
+   "name": "ce/shell/bitmaps/list_item_bkd__1.png",
+   "width": 256,
+   "height": 32,
+   "offset": 280373,
+   "size": 652,
+   "source": 313531379
+  },
+  {
+   "name": "ce/shell/bitmaps/list_item_bkd_top__0.png",
+   "width": 256,
+   "height": 32,
+   "offset": 281025,
+   "size": 52,
+   "source": 4230752506
+  },
+  {
+   "name": "ce/shell/bitmaps/list_item_bkd_top__1.png",
+   "width": 256,
+   "height": 32,
+   "offset": 281077,
+   "size": 694,
+   "source": 2734738250
+  },
+  {
+   "name": "ce/shell/bitmaps/locked_gametype__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 281771,
+   "size": 346,
+   "source": 2914668049
+  },
+  {
+   "name": "ce/shell/bitmaps/locked_gametype__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 282117,
+   "size": 17,
+   "source": 4133999784
+  },
+  {
+   "name": "ce/shell/bitmaps/option_bkds__0.png",
+   "width": 512,
+   "height": 32,
+   "offset": 282134,
+   "size": 668,
+   "source": 1996283243
+  },
+  {
+   "name": "ce/shell/bitmaps/option_bkds__1.png",
+   "width": 512,
+   "height": 32,
+   "offset": 282802,
+   "size": 1090,
+   "source": 2435161683
+  },
+  {
+   "name": "ce/shell/bitmaps/option_bkds_sm2__0.png",
+   "width": 128,
+   "height": 32,
+   "offset": 283892,
+   "size": 504,
+   "source": 3036746899
+  },
+  {
+   "name": "ce/shell/bitmaps/option_bkds_sm2__1.png",
+   "width": 128,
+   "height": 32,
+   "offset": 284396,
+   "size": 876,
+   "source": 2267778852
+  },
+  {
+   "name": "ce/shell/bitmaps/option_bkds_sm__0.png",
+   "width": 256,
+   "height": 32,
+   "offset": 285272,
+   "size": 557,
+   "source": 2504184011
+  },
+  {
+   "name": "ce/shell/bitmaps/option_bkds_sm__1.png",
+   "width": 256,
+   "height": 32,
+   "offset": 285829,
+   "size": 940,
+   "source": 214714775
+  },
+  {
+   "name": "ce/shell/bitmaps/sel_list_desc_bkd__0.png",
+   "width": 256,
+   "height": 512,
+   "offset": 286769,
+   "size": 2519,
+   "source": 1047995878
+  },
+  {
+   "name": "ce/shell/bitmaps/sel_list_item_bkd__0.png",
+   "width": 256,
+   "height": 32,
+   "offset": 289288,
+   "size": 52,
+   "source": 4230752506
+  },
+  {
+   "name": "ce/shell/bitmaps/sel_list_item_bkd__1.png",
+   "width": 512,
+   "height": 32,
+   "offset": 289340,
+   "size": 944,
+   "source": 1118913479
+  },
+  {
+   "name": "ce/shell/bitmaps/sel_list_item_bkd__2.png",
+   "width": 512,
+   "height": 32,
+   "offset": 290284,
+   "size": 1215,
+   "source": 3012310444
+  },
+  {
+   "name": "ce/shell/bitmaps/sel_list_item_bkd_top__0.png",
+   "width": 256,
+   "height": 32,
+   "offset": 291499,
+   "size": 52,
+   "source": 4230752506
+  },
+  {
+   "name": "ce/shell/bitmaps/sel_list_item_bkd_top__1.png",
+   "width": 512,
+   "height": 32,
+   "offset": 291551,
+   "size": 957,
+   "source": 2304306008
+  },
+  {
+   "name": "ce/shell/bitmaps/sel_list_item_bkd_top__2.png",
+   "width": 512,
+   "height": 32,
+   "offset": 292508,
+   "size": 1215,
+   "source": 3012310444
+  },
+  {
+   "name": "ce/shell/bitmaps/semi_transparent_grey__0.png",
+   "width": 4,
+   "height": 4,
+   "offset": 293723,
+   "size": 15,
+   "source": 3250927681
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_0__0.png",
+   "width": 16,
+   "height": 32,
+   "offset": 293738,
+   "size": 219,
+   "source": 1598720684
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_0__1.png",
+   "width": 16,
+   "height": 32,
+   "offset": 293957,
+   "size": 234,
+   "source": 3670092646
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_1__0.png",
+   "width": 32,
+   "height": 32,
+   "offset": 294191,
+   "size": 228,
+   "source": 4000269849
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_1__1.png",
+   "width": 32,
+   "height": 32,
+   "offset": 294419,
+   "size": 242,
+   "source": 1852648851
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_2__0.png",
+   "width": 64,
+   "height": 32,
+   "offset": 294661,
+   "size": 240,
+   "source": 4267060470
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_2__1.png",
+   "width": 64,
+   "height": 32,
+   "offset": 294901,
+   "size": 252,
+   "source": 1574357475
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_3__0.png",
+   "width": 128,
+   "height": 32,
+   "offset": 295153,
+   "size": 277,
+   "source": 316007621
+  },
+  {
+   "name": "ce/shell/bitmaps/server_header_background_3__1.png",
+   "width": 128,
+   "height": 32,
+   "offset": 295430,
+   "size": 284,
+   "source": 3492238518
+  },
+  {
+   "name": "ce/shell/bitmaps/server_item_bkds__0.png",
+   "width": 512,
+   "height": 32,
+   "offset": 295714,
+   "size": 445,
+   "source": 3987781503
+  },
+  {
+   "name": "ce/shell/bitmaps/server_item_bkds__1.png",
+   "width": 512,
+   "height": 32,
+   "offset": 296159,
+   "size": 833,
+   "source": 264210381
+  },
+  {
+   "name": "ce/shell/bitmaps/server_item_bkds__2.png",
+   "width": 512,
+   "height": 32,
+   "offset": 296992,
+   "size": 997,
+   "source": 338785580
+  },
+  {
+   "name": "ce/shell/bitmaps/spinner_list_3_wide_item_background__0.png",
+   "width": 256,
+   "height": 512,
+   "offset": 297989,
+   "size": 1988,
+   "source": 3438132592
+  },
+  {
+   "name": "ce/shell/bitmaps/spinner_list_3_wide_item_background__1.png",
+   "width": 256,
+   "height": 512,
+   "offset": 299977,
+   "size": 2744,
+   "source": 2164729535
+  },
+  {
+   "name": "ce/shell/bitmaps/text_button_background__0.png",
+   "width": 128,
+   "height": 32,
+   "offset": 302721,
+   "size": 610,
+   "source": 3862383487
+  },
+  {
+   "name": "ce/shell/bitmaps/text_button_background__1.png",
+   "width": 128,
+   "height": 32,
+   "offset": 303331,
+   "size": 1051,
+   "source": 2824278012
+  },
+  {
+   "name": "ce/shell/bitmaps/white__0.png",
+   "width": 4,
+   "height": 4,
+   "offset": 304382,
+   "size": 12,
+   "source": 1248347636
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/header_load_game__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 304394,
+   "size": 15607,
+   "source": 3243062164
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_back__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 320001,
+   "size": 2206,
+   "source": 2597260404
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_back__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 322207,
+   "size": 6036,
+   "source": 1572183621
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_continue__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 328243,
+   "size": 3147,
+   "source": 729557024
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_continue__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 331390,
+   "size": 9285,
+   "source": 1200580377
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_load_game__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 340675,
+   "size": 3879,
+   "source": 675054472
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_load_game__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 344554,
+   "size": 11163,
+   "source": 525963757
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_new_campaign__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 355717,
+   "size": 3988,
+   "source": 1396796088
+  },
+  {
+   "name": "ce/shell/main_menu/campaign_select/item_new_campaign__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 359705,
+   "size": 10430,
+   "source": 1591939282
+  },
+  {
+   "name": "ce/shell/main_menu/difficulty_select/header_choose_difficulty__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 370135,
+   "size": 19147,
+   "source": 2743508650
+  },
+  {
+   "name": "ce/shell/main_menu/gametype_select/header_select_gametype__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 389282,
+   "size": 19765,
+   "source": 3388423013
+  },
+  {
+   "name": "ce/shell/main_menu/menu_load_campaign__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 409047,
+   "size": 3621,
+   "source": 3032629065
+  },
+  {
+   "name": "ce/shell/main_menu/menu_load_campaign__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 412668,
+   "size": 9716,
+   "source": 3679672785
+  },
+  {
+   "name": "ce/shell/main_menu/menu_multiplayer__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 422384,
+   "size": 3970,
+   "source": 195545722
+  },
+  {
+   "name": "ce/shell/main_menu/menu_multiplayer__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 426354,
+   "size": 11482,
+   "source": 3156138591
+  },
+  {
+   "name": "ce/shell/main_menu/menu_profile__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 437836,
+   "size": 3205,
+   "source": 155861367
+  },
+  {
+   "name": "ce/shell/main_menu/menu_profile__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 441041,
+   "size": 9032,
+   "source": 2760326062
+  },
+  {
+   "name": "ce/shell/main_menu/menu_quit__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 450073,
+   "size": 1620,
+   "source": 2385390984
+  },
+  {
+   "name": "ce/shell/main_menu/menu_quit__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 451693,
+   "size": 5286,
+   "source": 1615216004
+  },
+  {
+   "name": "ce/shell/main_menu/menu_settings__0.png",
+   "width": 256,
+   "height": 64,
+   "offset": 456979,
+   "size": 2954,
+   "source": 2879876912
+  },
+  {
+   "name": "ce/shell/main_menu/menu_settings__1.png",
+   "width": 256,
+   "height": 64,
+   "offset": 459933,
+   "size": 8303,
+   "source": 3151989474
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/direct_ip/header_direct_ip__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 468236,
+   "size": 13612,
+   "source": 3889464973
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/header_multiplayer__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 481848,
+   "size": 17022,
+   "source": 1560458170
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/classic_icon__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 498870,
+   "size": 17,
+   "source": 4133999784
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/classic_icon__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 498887,
+   "size": 377,
+   "source": 3164751192
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/classic_icon__2.png",
+   "width": 16,
+   "height": 16,
+   "offset": 499264,
+   "size": 351,
+   "source": 2140669061
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/classic_icon__3.png",
+   "width": 16,
+   "height": 16,
+   "offset": 499615,
+   "size": 401,
+   "source": 1784994279
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/dedicated_icon__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 500016,
+   "size": 17,
+   "source": 4133999784
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/dedicated_icon__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 500033,
+   "size": 365,
+   "source": 2527880890
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/dedicated_icon__2.png",
+   "width": 16,
+   "height": 16,
+   "offset": 500398,
+   "size": 317,
+   "source": 3936137963
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/dedicated_icon__3.png",
+   "width": 16,
+   "height": 16,
+   "offset": 500715,
+   "size": 391,
+   "source": 813317353
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/filters/header_filters__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 501106,
+   "size": 13839,
+   "source": 3112729489
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/header_internet__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 514945,
+   "size": 18609,
+   "source": 3482980246
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/header_lan__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 533554,
+   "size": 15690,
+   "source": 14695595
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/locked_icon__0.png",
+   "width": 16,
+   "height": 16,
+   "offset": 549244,
+   "size": 17,
+   "source": 4133999784
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/locked_icon__1.png",
+   "width": 16,
+   "height": 16,
+   "offset": 549261,
+   "size": 367,
+   "source": 3411015301
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/locked_icon__2.png",
+   "width": 16,
+   "height": 16,
+   "offset": 549628,
+   "size": 341,
+   "source": 670166942
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/join_game/locked_icon__3.png",
+   "width": 16,
+   "height": 16,
+   "offset": 549969,
+   "size": 383,
+   "source": 2066394837
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/mp_map_select/header_select_map__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 550352,
+   "size": 16471,
+   "source": 4085814311
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/mp_options__0.png",
+   "width": 512,
+   "height": 256,
+   "offset": 566823,
+   "size": 9076,
+   "source": 3827971259
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/mp_options__1.png",
+   "width": 512,
+   "height": 256,
+   "offset": 575899,
+   "size": 8725,
+   "source": 4058593139
+  },
+  {
+   "name": "ce/shell/main_menu/multiplayer_type_select/server_settings/header_server_settings__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 584624,
+   "size": 17767,
+   "source": 30295249
+  },
+  {
+   "name": "ce/shell/main_menu/player_profiles_select/header_select_profile__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 602391,
+   "size": 18091,
+   "source": 199191627
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/indicator_options_edit/header_indicator_options__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 620482,
+   "size": 20529,
+   "source": 3080270082
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/item_options_edit/header_item_options__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 641011,
+   "size": 17548,
+   "source": 226837526
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/name_edit/header_gametype_name__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 658559,
+   "size": 19750,
+   "source": 941312136
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/player_options_edit/header_player_options__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 678309,
+   "size": 19017,
+   "source": 1807213873
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/header_rules__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 697326,
+   "size": 20111,
+   "source": 1049258679
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/rules_options__0.png",
+   "width": 256,
+   "height": 256,
+   "offset": 717437,
+   "size": 23688,
+   "source": 2493750539
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/rules_options__1.png",
+   "width": 256,
+   "height": 256,
+   "offset": 741125,
+   "size": 25408,
+   "source": 1521466192
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/rules_options__2.png",
+   "width": 256,
+   "height": 256,
+   "offset": 766533,
+   "size": 26293,
+   "source": 1463485465
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/rules_options__3.png",
+   "width": 256,
+   "height": 256,
+   "offset": 792826,
+   "size": 30125,
+   "source": 3153160932
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/rules_options__4.png",
+   "width": 256,
+   "height": 256,
+   "offset": 822951,
+   "size": 22065,
+   "source": 2027469914
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/game_type_select/rules_options__5.png",
+   "width": 256,
+   "height": 256,
+   "offset": 845016,
+   "size": 27906,
+   "source": 564488150
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/gametype_options__0.png",
+   "width": 512,
+   "height": 256,
+   "offset": 872922,
+   "size": 8467,
+   "source": 3150388786
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/gametype_options__1.png",
+   "width": 512,
+   "height": 256,
+   "offset": 881389,
+   "size": 22842,
+   "source": 3893444017
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/gametype_options__3.png",
+   "width": 512,
+   "height": 256,
+   "offset": 904231,
+   "size": 5634,
+   "source": 1469147891
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/gametype_options__4.png",
+   "width": 512,
+   "height": 256,
+   "offset": 909865,
+   "size": 7802,
+   "source": 3542597043
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/gametype_options__6.png",
+   "width": 512,
+   "height": 256,
+   "offset": 917667,
+   "size": 9536,
+   "source": 2905196611
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/gametype_options__7.png",
+   "width": 512,
+   "height": 256,
+   "offset": 927203,
+   "size": 6105,
+   "source": 1290219390
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/header_edit_multiplayer_gametype__0.png",
+   "width": 1024,
+   "height": 64,
+   "offset": 933308,
+   "size": 27442,
+   "source": 3130648
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_edit/header_set_options__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 960750,
+   "size": 22213,
+   "source": 1300172659
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/playlist_select/header_select_gametype_to_edit__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 982963,
+   "size": 22756,
+   "source": 4203656636
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/teamplay_options_edit/header_teamplay_options__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1005719,
+   "size": 20472,
+   "source": 2356256702
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/multiplayer_setup/vehicle_options_edit/header_vehicle_options__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1026191,
+   "size": 19220,
+   "source": 2100361868
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/audio_settings/header_profile_audio_settings__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1045411,
+   "size": 17249,
+   "source": 4148483962
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/color_edit/header_profile_color__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1062660,
+   "size": 20504,
+   "source": 271367686
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/controller_edit/header_profile_controller_setting__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1083164,
+   "size": 20380,
+   "source": 2656441976
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/controls_setup/header_profile_controls_settings__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1103544,
+   "size": 19650,
+   "source": 2241852675
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/header_edit_profile_settings__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1123194,
+   "size": 21724,
+   "source": 675591986
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/mouse_settings/header_profile_mouse_settings__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1144918,
+   "size": 17741,
+   "source": 57774307
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/name_edit/header_profile_name__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1162659,
+   "size": 18341,
+   "source": 982283173
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/network_setup/header_profile_network_settings__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1181000,
+   "size": 19700,
+   "source": 2647227544
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/profile_options__4.png",
+   "width": 512,
+   "height": 256,
+   "offset": 1200700,
+   "size": 7147,
+   "source": 1601852042
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/profile_options__5.png",
+   "width": 512,
+   "height": 256,
+   "offset": 1207847,
+   "size": 8725,
+   "source": 4058593139
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/profile_options__6.png",
+   "width": 512,
+   "height": 256,
+   "offset": 1216572,
+   "size": 9406,
+   "source": 1416777072
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/profile_options__8.png",
+   "width": 512,
+   "height": 256,
+   "offset": 1225978,
+   "size": 6242,
+   "source": 2241538679
+  },
+  {
+   "name": "ce/shell/main_menu/settings_select/player_setup/player_profile_edit/video_settings/header_profile_video_settings__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1232220,
+   "size": 16896,
+   "source": 4120176913
+  },
+  {
+   "name": "ce/shell/main_menu/solo_level_select/header_load_level__0.png",
+   "width": 512,
+   "height": 64,
+   "offset": 1249116,
+   "size": 15426,
+   "source": 1069876275
+  },
+  {
+   "name": "chupathingy/host/tab_off.png",
+   "width": 100,
+   "height": 22,
+   "offset": 1264542,
+   "size": 324,
+   "source": 860587224
+  },
+  {
+   "name": "chupathingy/host/tab_on.png",
+   "width": 100,
+   "height": 22,
+   "offset": 1264866,
+   "size": 376,
+   "source": 3694361619
+  },
+  {
+   "name": "chupathingy/settings/list_item_bkd_bottom__0.png",
+   "width": 256,
+   "height": 32,
+   "offset": 1265242,
+   "size": 52,
+   "source": 4230752506
+  },
+  {
+   "name": "chupathingy/settings/list_item_bkd_bottom__1.png",
+   "width": 256,
+   "height": 32,
+   "offset": 1265294,
+   "size": 694,
+   "source": 4280461429
+  }
+ ]
+}

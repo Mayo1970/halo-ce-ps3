@@ -3,6 +3,7 @@ Xbox layer's thread state (GetLastError, the heartbeat's waits) as the game's th
 
 #include <errno.h>
 #include <pthread.h>
+#include <time.h>
 
 #define PTHREAD_STACK_SIZE 0x80000
 
@@ -36,6 +37,47 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 	if (!mutex->lock)
 		return EPERM;
 	ps3_host_lock_leave(mutex->lock);
+	return 0;
+}
+
+int pthread_once(pthread_once_t *once, void (*routine)(void))
+{
+	if (__sync_bool_compare_and_swap(&once->state, 0, 1))
+	{
+		routine();
+		__sync_synchronize();
+		once->state = 2;
+		return 0;
+	}
+	while (once->state != 2)
+		ps3_host_thread_yield();
+	__sync_synchronize();
+	return 0;
+}
+
+int pthread_cond_timedwait(pthread_cond_t *condition, pthread_mutex_t *mutex, const struct timespec *deadline)
+{
+	struct timespec now;
+	__int64 microseconds;
+
+	if (!condition->condition)
+	{
+		condition->condition = ps3_host_condition_create(mutex->lock);
+		if (!condition->condition)
+			return ENOMEM;
+	}
+	clock_gettime(CLOCK_REALTIME, &now);
+	microseconds = (__int64)(deadline->tv_sec - now.tv_sec) * 1000000 + (deadline->tv_nsec - now.tv_nsec) / 1000;
+	if (microseconds <= 0)
+		return ETIMEDOUT;
+	return ps3_host_condition_wait(condition->condition, (uint64_t)microseconds) ? ETIMEDOUT : 0;
+}
+
+int pthread_cond_broadcast(pthread_cond_t *condition)
+{
+	/* (none made: nothing has waited yet) */
+	if (condition->condition)
+		ps3_host_condition_broadcast(condition->condition);
 	return 0;
 }
 

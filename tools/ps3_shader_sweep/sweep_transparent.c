@@ -3,6 +3,11 @@ is set, each kind of group a frame draws is drawn again with every shader tag of
 type, the generic and chicago family, and on a model's or a BSP's geometry the glass, meter, plasma and water that
 come on it), with and without the sky's and the no-fog flags. */
 
+/* (the release builds' assertions, as sweep_structures.c: a shader drawn with another group's set-up can give a
+constant color past 1, which the checked build stops at: a30's) */
+#ifndef HALO_RELEASE
+#define HALO_RELEASE
+#endif
 #define rasterizer_transparent_geometry_group_draw rasterizer_transparent_geometry_group_draw_original
 #include "rasterizer/xbox/rasterizer_xbox_transparent_geometry.c"
 #undef rasterizer_transparent_geometry_group_draw

@@ -7,8 +7,13 @@ whose guards it sets, so their pthread and OpenGL declarations never load. */
 #define __HALO_LINUX_PLATFORM_H
 #define __HALO_LINUX_XGPU_H
 
-/* as platform.h does: the reused units rely on it (_MAX_PATH, malloc) */
+/* as platform.h does: the reused units rely on it (_MAX_PATH, malloc, the locks) */
 #include <stdlib.h>
+#include <time.h>
+#include <pthread.h>
+
+/* (port/ps3/src/ps3_host.c's: newlib declares it only with _POSIX_TIMERS) */
+int clock_gettime(clockid_t clock, struct timespec *time);
 
 /* as cseries_windows.h does, so xtl.h also declares the debug keyboard */
 #define DEBUG_KEYBOARD
@@ -85,6 +90,9 @@ long platform_run_apcs(void);
 void platform_translate_path(const char *xbox_path, char *host_path, unsigned long host_path_size);
 const char *platform_data_root(void);
 const char *platform_save_root(void);
+/* one of the game's own folders, made if need be */
+#include "port_folders.h"
+const char *platform_folder(enum port_folder folder);
 
 /* ---------- contiguous ("physical") memory: the Xbox window at 0x80000000 (xbox_memory.c) */
 
@@ -96,9 +104,16 @@ void *platform_contiguous_alloc(unsigned long size, unsigned long alignment,
 	unsigned long physical_address, DWORD protect);
 void platform_contiguous_free(void *address);
 BOOL platform_is_contiguous(const void *address);
+/* the length of the block that starts at address, or 0 (d3d8_resources.c's renamed vertex buffers) */
+unsigned long platform_contiguous_block_size(const void *address);
 /* (unsigned long is 32-bit here: the results zero-extend) */
 #define PLATFORM_PHYSICAL_TO_VIRTUAL(physical) ((void *)((unsigned long)(physical) | PLATFORM_CONTIGUOUS_BASE))
 #define PLATFORM_VIRTUAL_TO_PHYSICAL(address) ((unsigned long)(__uint64)(address) & ~PLATFORM_CONTIGUOUS_BASE)
+
+/* ---------- the game's heap: every PS3 address is below 4 GB, an Xbox address (xbox_memory.c) */
+
+void *xbox_heap_allocate(size_t size, BOOL zero);
+void xbox_heap_free(void *pointer);
 
 /* ---------- time */
 
