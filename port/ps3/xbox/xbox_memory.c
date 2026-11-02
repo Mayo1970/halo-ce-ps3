@@ -199,6 +199,38 @@ void platform_contiguous_free(void *address)
 	ps3_host_lock_leave(arena_lock);
 }
 
+unsigned long platform_contiguous_block_size(const void *address)
+{
+	unsigned long count = 0;
+
+	if (platform_is_contiguous(address))
+	{
+		ps3_host_lock_enter(arena_lock);
+		count = block_page_count[((unsigned long)(__uint64)address - PLATFORM_CONTIGUOUS_BASE) / PAGE_SIZE_BYTES];
+		ps3_host_lock_leave(arena_lock);
+	}
+	return count * PAGE_SIZE_BYTES;
+}
+
+/* (xbox_address.h's XBOX_ADDRESS: lv2 keeps every address below 4 GB, so only a broken pointer gets here) */
+void xbox_address_out_of_range(void const *pointer)
+{
+	platform_log("pointer %p is outside the Xbox address space and cannot be stored in 32 bits", pointer);
+	abort();
+}
+
+/* ---------- the game's heap (the game's xbox_heap.c on the desktops): newlib's */
+
+void *xbox_heap_allocate(size_t size, BOOL zero)
+{
+	return zero ? calloc(1, size) : malloc(size);
+}
+
+void xbox_heap_free(void *pointer)
+{
+	free(pointer);
+}
+
 /* ---------- XAPI */
 
 LPVOID WINAPI XPhysicalAlloc(SIZE_T size, ULONG_PTR physical_address, ULONG_PTR alignment, DWORD protect)

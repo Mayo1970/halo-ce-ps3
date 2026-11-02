@@ -877,3 +877,27 @@ VOID WINAPI OutputDebugStringA(LPCSTR string)
 	if (string)
 		ps3_host_log_text(string, (uint32_t)strlen(string));
 }
+
+/* ---------- halts (the game's main.c, HALO_CONSOLE_HALT_TO_LAUNCHER) */
+
+/* the return addresses (posix_ps3.c's backtrace), for ./build.sh symbols */
+void console_log_backtrace(const char *why)
+{
+	int backtrace(void **frames, int count);
+	void *frames[24];
+	char text[24 * 9 + 1];
+	int count = backtrace(frames, 24), index, length = 0;
+
+	text[0] = 0;
+	for (index = 0; index < count; index++)
+		length += snprintf(text + length, sizeof(text) - length, " %08x", (unsigned int)(__uint64)frames[index]);
+	platform_log("[halt] %s; calls:%s", why, text);
+}
+
+/* the red screen until the XMB's Quit Game (port/ps3/src/ps3_main.c) */
+void console_exit_to_launcher(void)
+{
+	extern void ps3_host_game_halted(void);
+
+	ps3_host_game_halted();
+}

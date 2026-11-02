@@ -1,12 +1,10 @@
-/* The Linux build's services the PS3 has not yet (menu_files.c, hud_hires.c, text_hires.c, sdl_platform.c, voice_audio.c,
-xbox_textures.c's Custom Edition texels, memory_watch.c, port_mods.c, d3d8_gl.c's extras): each reports "none". */
+/* The Linux build's services the PS3 has not yet (hud_hires.c, text_hires.c, sdl_platform.c, voice_audio.c, xbox_textures.c's
+Custom Edition texels, memory_watch.c, port_mods.c, d3d8_gl.c's extras): each reports "none". */
 
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "halo_menus.h"
-#include "master_list.h"
 #include "port_config.h"
 
 /* ---------- voice chat (voice_audio.c): no microphone, and the others' voices are not played */
@@ -56,43 +54,6 @@ void voice_audio_forget_all(void)
 void voice_audio_set_volume(float volume)
 {
 	(void)volume;
-}
-
-/* ---------- the PC menus: none, so the game keeps the Xbox's */
-
-struct halo_menus const *halo_menus_load(void)
-{
-	return NULL;
-}
-
-long halo_menus_utf16(char const *utf8, unsigned short *out, long capacity)
-{
-	long count = 0;
-
-	/* ASCII only: the Xbox menus' INTERNET PLAY strings (menu_tags.c) */
-	while (count + 1 < capacity && utf8[count])
-	{
-		out[count] = (unsigned char)utf8[count];
-		count++;
-	}
-	if (capacity > 0)
-		out[count++] = 0;
-	return count;
-}
-
-void halo_menus_log(char const *file, long line, char const *message, char const *detail)
-{
-	platform_log("menus: %s:%ld: %s %s", file ? file : "", (long)line, message ? message : "", detail ? detail : "");
-}
-
-void halo_menus_art_register(void const *texture, char const *png)
-{
-	(void)texture;
-	(void)png;
-}
-
-void halo_menus_art_forget(void)
-{
 }
 
 /* ---------- the high-res HUD and text: none, so the maps' own bitmaps and fonts draw (the button icons:
@@ -343,6 +304,28 @@ void halo_screen_tone_map(short x0, short y0, short x1, short y1)
 	(void)x0; (void)y0; (void)x1; (void)y1;
 }
 
+/* the map load hooks (HALO_CONSOLE_MAP_LOAD_HOOKS: game.c, scenario.c): the shader pack is built in, nothing to wait for */
+void d3d8_gl_map_loaded(const char *name)
+{
+	(void)name;
+}
+
+void d3d8_gl_map_loading(const char *name)
+{
+	(void)name;
+}
+
+/* (below 0: the loading screen shows the map's copy alone) */
+float d3d8_gl_map_progress(void)
+{
+	return -1.0f;
+}
+
+int d3d8_gl_map_waiting(void)
+{
+	return 0;
+}
+
 /* ---------- input's extras (xinput_sdl.c): no text chat keyboard, and bindings named as written */
 
 unsigned long halo_chat_pad_buttons(void)
@@ -507,35 +490,84 @@ int port_mods_list(char *text, unsigned long size)
 	return 0;
 }
 
-/* ---------- the server browser's master servers (master_list.c): none asked, the brokers' games only */
+/* ---------- ChupathingyCE's desktop services the PS3 has not: the game browser's list (browser.c), the menus'
+pictures and window (d3d8_gl.c, sdl_platform.c), the keyboard's prompts (xinput_sdl.c), map packs (ui_map_list.c) */
 
-int master_list_read(const char *setting, char (*urls)[MASTER_LIST_URL_SIZE],
-	unsigned char (*keys)[MASTER_LIST_KEY_SIZE], int maximum)
+int browser_version_state(int version)
 {
-	(void)setting;
-	(void)urls;
-	(void)keys;
-	(void)maximum;
+	(void)version;
 	return 0;
 }
 
-void master_list_browse(int on)
+/* the lists' filter (All, Multiplayer, Co-op), kept for the session: browser.c's, which ONLINE GAMES' Y turns */
+static int list_filter;
+
+int browser_list_filter(void)
 {
-	(void)on;
+	return list_filter;
 }
 
-void master_list_refresh(void)
+void browser_list_filter_cycle(void)
 {
+	list_filter = (list_filter + 1) % 3;
 }
 
-int master_list_policy(void)
+const char *browser_list_filter_name(void)
 {
-	return _master_listings_brokers;
+	static const char *const names[3] = { "ALL", "MULTIPLAYER", "CO-OP" };
+
+	return names[list_filter];
 }
 
-void master_list_counts(int *count, int *answered, int *asked)
+int browser_list_filter_allows(const char *map)
 {
-	*count = 0;
-	*answered = 0;
-	*asked = 0;
+	(void)map;
+	return 1;
+}
+
+void halo_draw_picture(const unsigned char *rgba, long width, long height)
+{
+	(void)rgba; (void)width; (void)height;
+}
+
+void platform_menus_set_active(BOOL active)
+{
+	(void)active;
+}
+
+int halo_keyboard_prompts(void)
+{
+	return 0;
+}
+
+int halo_keyboard_action_shown(int action, char *shown, unsigned long size)
+{
+	(void)action;
+	if (size)
+		shown[0] = 0;
+	return 0;
+}
+
+int platform_audio_device_names(char const **names, int maximum)
+{
+	(void)names; (void)maximum;
+	return 0;
+}
+
+void ui_map_list_map_name(char const *map, wchar_t *name, long size)
+{
+	long index;
+
+	for (index = 0; index + 1 < size && map[index]; index++)
+		name[index] = (wchar_t)(unsigned char)map[index];
+	if (size > 0)
+		name[index] = 0;
+}
+
+void ui_map_list_map_tag(char const *map, char *tag, long tag_size, char *title, long title_size)
+{
+	if (tag_size > 0)
+		snprintf(tag, (size_t)tag_size, "%s", map);
+	if (title_size > 0)
+		snprintf(title, (size_t)title_size, "%s", map);
 }

@@ -62,6 +62,8 @@ enum
 	_spu_d3d_record_scale,
 	/* the SPU's only: RSX memory copied into main memory (bsp_keep.c's BSPs) */
 	_spu_d3d_record_copy,
+	/* a visibility test: its Z-pass count cleared and on (a 1), then reported into test b's slot and off (a 0) */
+	_spu_d3d_record_visibility,
 	_spu_d3d_record_count
 };
 
@@ -390,6 +392,9 @@ typedef struct
 /* ps3_gpu.c's timestamps of a frame (its stamps[3]), and its stamped draws */
 #define SPU_D3D_TIMESTAMP_PARTS 64
 #define SPU_D3D_DRAW_STAMPS 480
+/* the visibility tests' Z-pass counts: a report each, after the draw stamps' (the RSX's local reports are 0 to 2047) */
+#define SPU_D3D_VISIBILITY_REPORT_BASE 1024
+#define SPU_D3D_VISIBILITY_TESTS 1024
 
 typedef struct
 {
@@ -513,8 +518,14 @@ enum
 	_spu_d3d_request_arena,
 	/* present_run's statistics lines (the statistics put before) */
 	_spu_d3d_request_log,
+	/* a mip composite's RSX memory (mip_composite_get), a bytes, freed with the targets; answer: its offset, address */
+	_spu_d3d_request_mip_composite,
 	_spu_d3d_request_count
 };
+
+/* the mip composites the SPU keeps, and their levels at most (a swizzled 1024x1024 down to 4x2) */
+#define SPU_D3D_MIP_COMPOSITES 4
+#define SPU_D3D_MIP_LEVELS 11
 
 #define SPU_D3D_REQUEST_WORDS 62
 
@@ -546,10 +557,11 @@ typedef struct
 	/* the tag cache's span */
 	uint32_t static_begin;
 	uint32_t static_end;
-	/* the button icons' style and placeholders (data, asset) */
+	/* the button icons' style and placeholders (data, asset); the stand-ins' key (d3d8_rsx.c's hires_key) */
 	int32_t button_style;
 	uint32_t placeholders[8][2];
-	uint32_t pad[3];
+	int32_t hires_key;
+	uint32_t pad[2];
 	float constants[198][4];
 	float attributes[16][4];
 } __attribute__((aligned(128))) spu_d3d_initial;

@@ -1,4 +1,4 @@
-/* DualShock 3 and Sixaxis pads on all 7 ports, polled once per frame. */
+/* DualShock 3 and Sixaxis pads on all 7 ports, and a USB keyboard, polled once per frame. */
 
 #ifndef __HALO_PS3_INPUT_H
 #define __HALO_PS3_INPUT_H
@@ -69,5 +69,21 @@ void ps3_input_poll(void);
 const struct ps3_pad *ps3_input_pad(int port);
 /* large 0 to 255; the DS3's small motor is only on or off */
 void ps3_input_rumble(int port, int large, int small);
+
+/* a USB keyboard's key as the Xbox debug keyboard's: a Windows virtual key, its character on a key down (US
+layout), and XINPUT_DEBUG_KEYSTROKE_FLAG_* (0x40 a release) */
+struct ps3_keystroke
+{
+	unsigned char virtual_key;
+	char ascii;
+	unsigned char flags;
+};
+
+/* the first connected keyboard's changes queued as keystrokes (the game's thread, once a frame) */
+void ps3_input_keyboard_poll(void);
+/* the next keystroke: 1 with it, 0 when none is queued */
+int ps3_input_keystroke(struct ps3_keystroke *keystroke);
+/* a virtual key held down */
+int ps3_input_key_held(unsigned char virtual_key);
 
 #endif

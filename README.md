@@ -1,20 +1,21 @@
-Halo: Combat Evolved ported to the PlayStation 3. built with the open-source [PSL1GHT](https://github.com/ps3dev/PSL1GHT) SDK.
+Halo: Combat Evolved ported to the PlayStation 3, built with the open-source [PSL1GHT](https://github.com/ps3dev/PSL1GHT) SDK.
 
 The game's own code, from the decompilation of the Xbox build 2342, is compiled for the PS3.
-The port is based on [OpenCE](https://github.com/OpenCommunityEdition/OpenCE), and an crossplay with the
-OpenCE builds for Windows, Linux, Android and the web.
+The port is based on [ChupathingyCE](https://github.com/ChupathingyCE/chupathingyce), and has crossplay with the
+Chupathingy builds on the other platforms.
 
-OpenCE-PS3 is work in progress. See [Known limits](#known-limits).
+Chupathingy-PS3 is work in progress. See [Known limits](#known-limits).
 
 ## Install and set up
 
-1. Install `halo_ps3.pkg` with the Package Manager on the XMB.
-2. Extract the `maps` folder from your Xbox disc image of Halo: Combat Evolved. An OpenCE build for Windows or Linux
-   extracts it next to the executable at its first start.
-3. Copy the `maps` folder to `/dev_hdd0/data/HaloCE/`, for example with FTP. Do not change the files.
-4. Start Halo: Combat Evolved from the Game column.
+1. Download `halo_ps3.pkg` from the [Releases page](https://github.com/Mayo1970/halo-ce-ps3/releases/latest).
+2. Install it with the Package Manager on the XMB (CFW or PS3HEN).
+3. Extract the `maps` folder from your Xbox disc image of Halo: Combat Evolved. A Chupathingy build for the PC
+   copies the maps out of the disc image at its first start.
+4. Copy the `maps` folder to `/dev_hdd0/data/HaloCE/`, for example with FTP. Do not change the files.
+5. Start Halo: Combat Evolved from the Game column.
 
-**OpenCE-PS3 does not include the game data.** You must provide your own copy of the game.
+**Chupathingy-PS3 does not include the game data.** You must provide your own copy of the game.
 
 If the HDD has no `maps` folder, the game looks for `HaloCE/maps` on the USB drives.
 
@@ -31,7 +32,7 @@ If the HDD has no `maps` folder, the game looks for `HaloCE/maps` on the USB dri
 - **60 frames per second at 720p.** The game draws a frame at each refresh, blended between its 30 ticks a second.
 - **Widescreen.** 852x480 of the game drawn at 1280x720, or the Xbox's 4:3.
 - **PS3 button icons** in the menus and the HUD, in two styles, or the Xbox's.
-- **LAN play** with the OpenCE builds for the PC on the same network.
+- **LAN play** with the Chupathingy builds for the PC on the same network.
 - **Internet play.** Join public games from the game list, or host a multiplayer or co-op campaign game.
 - **Invite codes.** The PS3 cannot paste an invite link, so it uses 8-digit codes. The converter page
   `port/ps3/invite/index.html` changes a link to a code.
@@ -46,6 +47,8 @@ SETTINGS > EXTRA OPTIONS in the main menu has these settings:
 | PRESET | QUALITY (30 fps), PERFORMANCE (60 fps, dynamic resolution) or CUSTOM | PERFORMANCE |
 | FRAME RATE | 60 or 30 frames per second | 60 |
 | DYNAMIC RESOLUTION | In heavy scenes, draws the 3D view smaller and scales it up | ON |
+| BRIGHTNESS | 0 to 10. Higher lifts the dark and middle tones, lower darkens them | 5 |
+| TOGGLE CROUCH | A press crouches, the next press stands up. OFF: crouch while the button is held | OFF |
 
 ### Known limits
 
@@ -53,7 +56,7 @@ SETTINGS > EXTRA OPTIONS in the main menu has these settings:
 
 **Split screen** always plays at 30 frames per second.
 
-**Invite codes** work only on the PS3. The OpenCE builds for the PC, Android and the web take only invite links,
+**Invite codes** work only on the PS3. The Chupathingy builds for the other platforms take only invite links,
 and they refuse a code as a link that is not valid. They cannot join a game that a PS3 hosts by its code.
 
 Some heavy fights drop below 60 frames per second. DYNAMIC RESOLUTION or the QUALITY preset helps.
@@ -61,6 +64,14 @@ Some heavy fights drop below 60 frames per second. DYNAMIC RESOLUTION or the QUA
 ## Compiling
 
 The build makes `build/ps3/halo_ps3.pkg`. The maintainer builds in Docker with `ppu-gcc` 7.2.0.
+
+The game's code is the `chupathingyce` submodule. Clone with it:
+
+```sh
+git clone --recursive https://github.com/Mayo1970/halo-ce-ps3.git
+```
+
+If you already cloned without `--recursive`, run `git submodule update --init` in the repository folder.
 
 ### With Docker (recommended)
 
@@ -147,7 +158,7 @@ Do this only if you cannot use the prebuilt image.
 | Variable | Effect |
 |---|---|
 | `LOG_IP=<PC IP>` | The PC that gets the UDP log, port 18194. Example: `./build.sh pkg LOG_IP=192.168.1.20` |
-| `DEBUG=0` | The retail build, without the UDP log. The default is `DEBUG=1`. |
+| `DEBUG=0` | The retail build, without the UDP log. The release packages use it. The default is `DEBUG=1`. |
 
 To see the log, enter `nc -ul 18194` on the PC.
 
@@ -172,38 +183,35 @@ links them in. A normal build does not need the shader sweep.
 
 ## AI disclosure
 
-OpenCE-PS3 is an AI-assisted project.
+Chupathingy-PS3 is an AI-assisted project.
 
 ## Credits
 
-- [OpenCE](https://github.com/OpenCommunityEdition/OpenCE): the port that OpenCE-PS3 starts from.
+- [ChupathingyCE](https://github.com/ChupathingyCE/chupathingyce): the game that Chupathingy-PS3 starts from.
 - [bnunu/halo-1](https://github.com/bnunu/halo-1) and [punpckhdq/halo](https://github.com/punpckhdq/halo): the
   decompilation.
 - [Invader](https://github.com/SnowyMouse/invader): the tag definitions for the map data's byte swap.
 
 ## License
 
-OpenCE-PS3 is free software, licensed under the
-[GNU Affero General Public License, version 3 or later](https://www.gnu.org/licenses/agpl-3.0.html)
-(AGPL-3.0-or-later). You can use, share and change it under the terms of that license. It comes with no warranty.
-See [LICENSE](LICENSE). If you share a package built from OpenCE-PS3, you must also give its full source code under
-the AGPL-3.0.
+Chupathingy-PS3 is free software, licensed under the
+[GNU General Public License, version 3 or later](https://www.gnu.org/licenses/gpl-3.0.html)
+(GPL-3.0-or-later). You can use, share and change it under the terms of that license. It comes with no warranty.
+See [LICENSE](LICENSE). If you share a package built from Chupathingy-PS3, you must also give its full source code
+under the GPL-3.0.
 
-- **What OpenCE-PS3 builds on.** [OpenCE](https://github.com/OpenCommunityEdition/OpenCE) is under the AGPL-3.0-or-later.
-  Its commits before its change to the AGPL, and the releases built from them, stay under
-  [CC0 1.0](LICENSES/CC0-1.0.txt). The decompilation of [punpckhdq/halo](https://github.com/punpckhdq/halo) is under
-  the AGPL 3.0 from 17 October 2026, and under CC0 1.0 before that date.
-  [bnunu/halo-1](https://github.com/bnunu/halo-1) is under CC0 1.0.
-- **Contributions** are under the AGPL-3.0-or-later. Code taken from a project under the GPL 3.0 keeps that license
-  and its notices. Section 13 of each license lets the two be combined.
-- **Network play.** If you change the game and let other persons play with your version over a network, the AGPL
-  asks you to offer them the source of your version (section 13).
+- **What Chupathingy-PS3 builds on.** [ChupathingyCE](https://github.com/ChupathingyCE/chupathingyce) is under the
+  GPL-3.0-or-later, with a permission for console SDKs. Its releases up to 0.7.5d stay under CC0. The details are in
+  its [docs/license.md](https://github.com/ChupathingyCE/chupathingyce/blob/main/docs/license.md).
+- **Earlier versions.** The versions of this repository before the move to ChupathingyCE stay under the licenses
+  they were published with.
+- **Contributions** are under the GPL-3.0-or-later.
 - **Third-party code and art** keep their own licenses, next to them in `port/third_party/` and `port/assets/`.
-- **Halo is not covered.** The license covers the work of the authors of OpenCE and OpenCE-PS3. It gives no rights
-  in Halo, its maps or anything else that Microsoft owns.
+- **Halo is not covered.** The license covers the work of the authors of ChupathingyCE and Chupathingy-PS3. It gives
+  no rights in Halo, its maps or anything else that Microsoft owns.
 
 ## Disclaimer
 
-OpenCE-PS3 is an unofficial fan project. It is not endorsed by or affiliated with Microsoft, Xbox Game Studios,
+Chupathingy-PS3 is an unofficial fan project. It is not endorsed by or affiliated with Microsoft, Xbox Game Studios,
 Halo Studios, Activision, Bungie or Sony. Halo and Halo: Combat Evolved are trademarks of Microsoft Corporation.
 No game data is included. You must provide your own copy of the game.

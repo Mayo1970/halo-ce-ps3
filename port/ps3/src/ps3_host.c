@@ -328,6 +328,19 @@ void ps3_host_time_of_day(uint64_t *seconds, uint32_t *nanoseconds)
 	*nanoseconds = (uint32_t)nsec;
 }
 
+/* newlib declares it only with _POSIX_TIMERS and PSL1GHT has none: the game's thread_stop.c and
+pthread_cond_timedwait (ps3_pthread.c) take CLOCK_REALTIME, the time of day */
+int clock_gettime(clockid_t clock, struct timespec *time)
+{
+	u64 sec = 0, nsec = 0;
+
+	(void)clock;
+	sysGetCurrentTime(&sec, &nsec);
+	time->tv_sec = (time_t)sec;
+	time->tv_nsec = (long)nsec;
+	return 0;
+}
+
 /* ---------- the Xbox memory window */
 
 /* the flags of PSL1GHT's own heap (librt sbrk.c): 1 MB pages, any access right */

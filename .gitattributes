@@ -3,4 +3,3 @@
 *.sh text eol=lf
 Makefile text eol=lf
 *.py text eol=lf
-port/android/gradlew text eol=lf

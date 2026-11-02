@@ -1,7 +1,7 @@
 /* The part of port/linux/src/posix.h that the reused msvc_crt.c calls, on newlib: its MSVC
 _stat, _fstat, _chsize and _mkdir. */
 
-#include "../../linux/src/posix.h"
+#include "posix.h"
 
 #include <errno.h>
 #include <string.h>

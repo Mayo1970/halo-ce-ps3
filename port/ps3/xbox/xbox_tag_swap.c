@@ -1,5 +1,6 @@
-/* XBOX_TAG_SWAP.C: swaps an Xbox map's header, tag data and structure BSPs to the PS3's byte order in place when
-cache_files.c reads them (GOALS.md, G3), with Invader's layouts (xbox_tag_swap_tables.h) and the map's own pointers. */
+/* XBOX_TAG_SWAP.C: swaps an Xbox map's header, tag data and structure BSPs to the PS3's byte order in place, with
+Invader's layouts (xbox_tag_swap_tables.h) and the map's own pointers. The game swaps all but the vertices now
+(port/console/game/tag_byte_swap.c): cache_files.c asks here for those only, which d3d8_rsx.c reads big-endian. */
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -36,6 +37,8 @@ struct walk
 	uint32_t tag_count;
 	struct tag_swap_statistics *statistics;
 	tag_swap_coverage_proc coverage;
+	/* 0 while the walk reads data already in the PS3's order, and swaps only the vertices it finds */
+	int swap_fields;
 };
 
 static void swap_struct(struct walk *walk, uint32_t address, uint16_t struct_index);
@@ -142,11 +145,16 @@ static void swap_model_part(struct walk *walk, const uint8_t *part)
 		}
 		else
 		{
+			int swap_fields = walk->swap_fields;
+
+			walk->swap_fields = 1;
 			for (index = 0; index < vertex_count; index++)
 				swap_struct(walk, vertices + index * vertex_size, vertex_struct);
+			walk->swap_fields = swap_fields;
 		}
 	}
-	if (triangle_count)
+	/* (the game's swap has the indices) */
+	if (triangle_count && walk->swap_fields)
 	{
 		uint8_t *indices = triangle_count < 0xFFFF ? walk_bytes(walk, triangles, (triangle_count + 2) * 2) : NULL;
 
@@ -410,6 +418,7 @@ static void swap_bsp_vertices(struct walk *walk, const uint8_t *material, uint32
 		TAG_SWAP_STRUCT_SCENARIOSTRUCTUREBSPMATERIALUNCOMPRESSEDLIGHTMAPVERTEX;
 	uint32_t rendered_size = tag_swap_structs[rendered_struct].size;
 	uint32_t lightmap_size = tag_swap_structs[lightmap_struct].size;
+	int swap_fields = walk->swap_fields;
 	uint32_t index;
 
 	if (rendered_count > size / rendered_size || lightmap_count > size / lightmap_size ||
@@ -419,11 +428,13 @@ static void swap_bsp_vertices(struct walk *walk, const uint8_t *material, uint32
 			rendered_count, lightmap_count);
 		return;
 	}
+	walk->swap_fields = 1;
 	for (index = 0; index < rendered_count; index++)
 		swap_struct(walk, address + index * rendered_size, rendered_struct);
 	address += rendered_count * rendered_size;
 	for (index = 0; index < lightmap_count; index++)
 		swap_struct(walk, address + index * lightmap_size, lightmap_struct);
+	walk->swap_fields = swap_fields;
 }
 
 /* data: size, an unused word, the file offset, the address, a definition (tag_groups.h) */
@@ -442,6 +453,9 @@ static void swap_data(struct walk *walk, const uint8_t *owner, const uint8_t *da
 		walk_error(walk, "data %08x: %u bytes at %08x", walk_address(walk, data), size, address);
 		return;
 	}
+#ifdef TAG_SWAP_LABELS
+	tag_swap_label(address, size, TAG_SWAP_LABEL_DATA, kind, _tag_swap_data);
+#endif
 	switch (kind)
 	{
 	case _tag_swap_data_bsp_uncompressed_vertices:
@@ -449,6 +463,8 @@ static void swap_data(struct walk *walk, const uint8_t *owner, const uint8_t *da
 		swap_bsp_vertices(walk, owner, address, size, kind == _tag_swap_data_bsp_compressed_vertices);
 		return;
 	}
+	if (!walk->swap_fields)
+		return;
 	walk_cover(walk, address, size);
 	switch (kind)
 	{
@@ -534,33 +550,51 @@ static void swap_struct(struct walk *walk, uint32_t address, uint16_t struct_ind
 	{
 		const struct tag_swap_op *op = &tag_swap_ops[definition->first_op + op_index];
 
+#ifdef TAG_SWAP_LABELS
+		{
+			static const uint8_t unit[] = { 1, 2, 4, 12, 16, 20 };
+
+			tag_swap_label(address + (uint32_t)(bytes - base), op->operation <= _tag_swap_4 ?
+				unit[op->operation] * op->count : unit[op->operation], struct_index, (uint32_t)(bytes - base),
+				op->operation);
+		}
+#endif
 		switch (op->operation)
 		{
 		case _tag_swap_skip:
 			bytes += op->count;
 			break;
 		case _tag_swap_2:
-			swap2(bytes, op->count);
-			walk->statistics->bytes_swapped += 2 * op->count;
+			if (walk->swap_fields)
+			{
+				swap2(bytes, op->count);
+				walk->statistics->bytes_swapped += 2 * op->count;
+			}
 			bytes += 2 * op->count;
 			break;
 		case _tag_swap_4:
-			swap4(bytes, op->count);
-			walk->statistics->bytes_swapped += 4 * op->count;
+			if (walk->swap_fields)
+			{
+				swap4(bytes, op->count);
+				walk->statistics->bytes_swapped += 4 * op->count;
+			}
 			bytes += 4 * op->count;
 			break;
 		case _tag_swap_block:
-			swap4(bytes, 3);
+			if (walk->swap_fields)
+				swap4(bytes, 3);
 			swap_block(walk, bytes, op->argument);
 			bytes += 12;
 			break;
 		case _tag_swap_reference:
-			swap4(bytes, 4);
+			if (walk->swap_fields)
+				swap4(bytes, 4);
 			check_reference(walk, bytes);
 			bytes += 16;
 			break;
 		case _tag_swap_data:
-			swap4(bytes, 5);
+			if (walk->swap_fields)
+				swap4(bytes, 5);
 			swap_data(walk, base, bytes, op->argument);
 			bytes += 20;
 			break;
@@ -618,6 +652,7 @@ static void walk_begin(struct walk *walk, void *bytes, uint32_t address, uint32_
 	walk->tag_count = 0;
 	walk->statistics = statistics;
 	walk->coverage = coverage;
+	walk->swap_fields = 1;
 }
 
 /* ---------- public code */
@@ -718,6 +753,57 @@ int tag_swap_structure_bsp(void *bytes, uint32_t address, uint32_t size, struct 
 	return 1;
 }
 
+int tag_swap_tag_vertices(void *bytes, uint32_t address, uint32_t size, struct tag_swap_statistics *statistics)
+{
+	struct walk walk;
+	uint8_t *header = bytes;
+	uint32_t tag_count, index;
+
+	if (size < TAG_HEADER_SIZE || memcmp(header + 0x20, "tags", 4))
+		return 0;
+	walk_begin(&walk, bytes, address, size, statistics, NULL);
+	walk.swap_fields = 0;
+	tag_count = read32(header + 12);
+	walk.instances = tag_count < 0x10000 ? walk_bytes(&walk, read32(header), tag_count * TAG_INSTANCE_SIZE) : NULL;
+	if (!walk.instances)
+	{
+		walk_error(&walk, "%u tags at %08x", tag_count, read32(header));
+		return 1;
+	}
+	walk.tag_count = tag_count;
+	/* (only the models have vertices: the Xbox's 'mode', Halo PC's 'mod2') */
+	for (index = 0; index < tag_count; index++)
+	{
+		const uint8_t *instance = walk.instances + index * TAG_INSTANCE_SIZE;
+		uint32_t group_tag = read32(instance);
+		long struct_index;
+
+		if ((group_tag != 0x6D6F6465 && group_tag != 0x6D6F6432) || !read32(instance + 20))
+			continue;
+		struct_index = find_group(group_tag);
+		if (struct_index < 0)
+			continue;
+		statistics->tags++;
+		swap_struct(&walk, read32(instance + 20), (uint16_t)struct_index);
+	}
+	return 1;
+}
+
+int tag_swap_structure_bsp_vertices(void *bytes, uint32_t address, uint32_t size,
+	struct tag_swap_statistics *statistics)
+{
+	struct walk walk;
+	uint8_t *header = bytes;
+
+	if (size < BSP_HEADER_SIZE || memcmp(header + 0x14, "sbsp", 4))
+		return 0;
+	walk_begin(&walk, bytes, address, size, statistics, NULL);
+	walk.swap_fields = 0;
+	statistics->tags++;
+	swap_struct(&walk, read32(header), TAG_SWAP_STRUCT_SCENARIOSTRUCTUREBSP);
+	return 1;
+}
+
 #ifdef HALO_PS3
 /* ---------- the game's calls (cache_files.c) */
 
@@ -730,26 +816,24 @@ static void log_statistics(const char *what, const struct tag_swap_statistics *s
 		statistics->unknown_groups, statistics->errors);
 }
 
-int cache_files_swap_header(void *header)
-{
-	return tag_swap_cache_file_header(header);
-}
-
-void cache_files_swap_tag_data(void *tag_data, long size)
+void cache_files_swap_tag_vertices(void *tag_data, long size)
 {
 	struct tag_swap_statistics statistics;
 	uint64_t start = ps3_host_microseconds();
 
-	if (tag_swap_tag_data(tag_data, (uint32_t)(uintptr_t)tag_data, (uint32_t)size, &statistics, NULL))
-		log_statistics("tag data", &statistics, ps3_host_microseconds() - start);
+	if (tag_swap_tag_vertices(tag_data, (uint32_t)(uintptr_t)tag_data, (uint32_t)size, &statistics))
+		log_statistics("model vertices", &statistics, ps3_host_microseconds() - start);
 }
 
-void cache_files_swap_structure_bsp(void *structure_bsp, long size)
+void cache_files_swap_structure_bsp_vertices(void *structure_bsp, long size)
 {
 	struct tag_swap_statistics statistics;
 	uint64_t start = ps3_host_microseconds();
 
-	if (tag_swap_structure_bsp(structure_bsp, (uint32_t)(uintptr_t)structure_bsp, (uint32_t)size, &statistics, NULL))
-		log_statistics("structure BSP", &statistics, ps3_host_microseconds() - start);
+	if (tag_swap_structure_bsp_vertices(structure_bsp, (uint32_t)(uintptr_t)structure_bsp, (uint32_t)size,
+		&statistics))
+	{
+		log_statistics("structure BSP vertices", &statistics, ps3_host_microseconds() - start);
+	}
 }
 #endif

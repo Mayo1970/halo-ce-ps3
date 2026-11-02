@@ -216,16 +216,35 @@ int hud_hires_rsx_override(const unsigned char *texels, unsigned long width, uns
 	unsigned long level0_size, struct ps3_gpu_texture *gpu)
 {
 	int style = button_style;
+	unsigned int crc = 0;
+	int crc_made = 0;
 	long asset;
 
 	if (style <= 0)
 		return 0;
 	asset = hud_hires_asset_at((unsigned long)(__uint64)texels, (long)width, (long)height);
-	if (asset < 0 || asset >= (long)BUTTON_ASSETS || ps3_buttons[asset].sprites)
+	if (asset >= (long)BUTTON_ASSETS || (asset >= 0 && ps3_buttons[asset].sprites))
 		return 0;
-	if ((unsigned int)z_crc32(0, texels, (uInt)level0_size) != ps3_buttons[asset].crc)
-		return 0;
-	return texture_make(asset, style, gpu);
+	if (asset >= 0)
+	{
+		if ((unsigned int)z_crc32(0, texels, (uInt)level0_size) != ps3_buttons[asset].crc)
+			return 0;
+		return texture_make(asset, style, gpu);
+	}
+	/* (a copy of a map's button in its own texture, as the Chupathingy menus' prompts are: found by size and pixels) */
+	for (asset = 0; asset < (long)BUTTON_ASSETS; asset++)
+	{
+		if (ps3_buttons[asset].sprites || ps3_buttons[asset].width != width || ps3_buttons[asset].height != height)
+			continue;
+		if (!crc_made)
+		{
+			crc = (unsigned int)z_crc32(0, texels, (uInt)level0_size);
+			crc_made = 1;
+		}
+		if (crc == ps3_buttons[asset].crc)
+			return texture_make(asset, style, gpu);
+	}
+	return 0;
 }
 
 /* the texture of the sprites the game draws from the placeholder whose Data this is */

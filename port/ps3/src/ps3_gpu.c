@@ -55,6 +55,9 @@ of a span's first stamp */
 /* each report holds the RSX's time; the Z-pass type as nouveau's NV40 timestamps (rsxSetTimeStamp's type 0x10 and
 misplaced word stopped the RSX on hardware) */
 #define REPORT_TIMESTAMP GCM_ZPASS_PIXEL_CNT
+/* the visibility tests' Z-pass counts (ps3_gpu_visibility): a report each, after the draw stamps' */
+#define VISIBILITY_REPORT_BASE SPU_D3D_VISIBILITY_REPORT_BASE
+#define VISIBILITY_TESTS SPU_D3D_VISIBILITY_TESTS
 
 /* the G8 diagnostic: a command label and a back-end label after each kind of command, so a hung RSX shows the last
 one its front end took and its back end finished */
@@ -83,6 +86,7 @@ enum
 	_checkpoint_draw,
 	_checkpoint_draw_indexed,
 	_checkpoint_timestamp,
+	_checkpoint_visibility,
 	_checkpoint_blit,
 	_checkpoint_frame_label,
 	_checkpoint_flip,
@@ -96,7 +100,7 @@ static const char *const checkpoint_names[_checkpoint_count] =
 	"surface", "surface with ZCull", "clear", "ZCull clear", "ZCull invalidate", "ZCull control", "state",
 	"vertex program upload", "vertex program switch", "vertex constants", "fragment program", "texture",
 	"texture with a remap", "texture off", "vertex attribute", "draw", "indexed draw", "timestamp report",
-	"present blit", "frame label", "flip", "game's first command",
+	"visibility report", "present blit", "frame label", "flip", "game's first command",
 };
 
 static uint32_t checkpoint_serial;
@@ -125,6 +129,8 @@ static int fence_timeouts;
 /* written by the RSX at ps3_gpu_wait_idle's mark */
 static volatile uint32_t *idle_label;
 static uint32_t idle_reference;
+/* the visibility tests' reports, which the RSX writes */
+static volatile gcmReportData *visibility_reports;
 
 static struct
 {
@@ -187,6 +193,8 @@ static uint32_t zcull_width;
 static uint32_t zcull_height;
 static int zcull_bound;
 static int zcull_valid;
+/* the ZCull enable last sent: on only while the data is good (a full clear since the last invalidate) */
+static int zcull_on;
 
 static struct
 {
@@ -207,6 +215,10 @@ static spu_d3d_draw_stamps draw_stamps __attribute__((aligned(128)));
 
 typedef char stamps_check[TIMESTAMP_PARTS == SPU_D3D_TIMESTAMP_PARTS && DRAW_STAMPS == SPU_D3D_DRAW_STAMPS &&
 	TIMESTAMP_REPORT_BASE == 256 && DRAW_STAMP_REPORT_BASE == 512 && FRAME_LABEL == 64 ? 1 : -1];
+/* the report slots apart, in the RSX's 2048 local reports */
+typedef char reports_check[TIMESTAMP_REPORT_BASE + 3 * TIMESTAMP_PARTS <= DRAW_STAMP_REPORT_BASE &&
+	DRAW_STAMP_REPORT_BASE + DRAW_STAMPS <= VISIBILITY_REPORT_BASE && VISIBILITY_REPORT_BASE + VISIBILITY_TESTS <= 2048 &&
+	!(VISIBILITY_TESTS & (VISIBILITY_TESTS - 1)) ? 1 : -1];
 
 /* display.dynamic_resolution's scale in eighths (d3d8_rsx.c), from the RSX's time in the windows of frames drawn at it:
 an eighth less over DYNAMIC_DOWN; an eighth more when that time grown with the pixels stays under DYNAMIC_UP */
@@ -299,6 +311,9 @@ static struct
 	uint32_t fragment_offset;
 	/* the half resolution particles' depth program (particles_depth_build) */
 	uint32_t particles_depth_offset;
+	/* the present's programs by brightness level (brightness_programs_build), and the one it uses */
+	uint32_t brightness_offsets[PS3_GPU_BRIGHTNESS_LEVELS];
+	uint32_t present_offset;
 } blit;
 
 static struct
@@ -484,6 +499,9 @@ void *ps3_gpu_target_allocate(uint32_t width, uint32_t height, int depth, int ti
 					zcull_width = width;
 					zcull_height = height;
 					zcull_valid = 0;
+					/* (the new binding's enable is unknown: the next surface sends it) */
+					zcull_on = 0;
+					surface_valid = 0;
 				}
 				ps3_log_printf("[gpu] target %ux%u%s tiled (region %d, pitch %u)%s\n", (unsigned)width, (unsigned)height,
 					depth ? " depth" : "", tile, (unsigned)tiled_pitch, tiles[tile].zcull ? ", ZCull" : "");
@@ -520,6 +538,7 @@ void ps3_gpu_target_free(void *memory, uint32_t bytes)
 		gcmUnbindZcull(ZCULL_INDEX);
 		zcull_bound = 0;
 		zcull_offset = 0;
+		zcull_on = 0;
 	}
 	gcmUnbindTile((u8)tile);
 	memory_release(memory, tiles[tile].bytes, _ps3_gpu_memory_target);
@@ -608,7 +627,10 @@ void ps3_gpu_set_surface(const struct ps3_gpu_surface *target)
 	rsxSetSurface(context, &description);
 	/* ZCull for the depth it covers only; stencil culling stays off */
 	if (zcull_bound)
-		rsxSetZCullEnable(context, target->depth_offset == zcull_offset ? GCM_TRUE : GCM_FALSE, GCM_FALSE);
+	{
+		zcull_on = target->depth_offset == zcull_offset && zcull_valid;
+		rsxSetZCullEnable(context, zcull_on ? GCM_TRUE : GCM_FALSE, GCM_FALSE);
+	}
 	checkpoint(zcull_bound && target->depth_offset == zcull_offset ? _checkpoint_surface_zcull : _checkpoint_surface);
 	viewport_valid = 0;
 	/* the targets before can be sampled next */
@@ -628,6 +650,11 @@ static void zcull_invalidate(void)
 		rsxSetZCullInvalidate(context);
 		zcull_valid = 0;
 		checkpoint(_checkpoint_zcull_invalidate);
+	}
+	if (zcull_on)
+	{
+		rsxSetZCullEnable(context, GCM_FALSE, GCM_FALSE);
+		zcull_on = 0;
 	}
 }
 
@@ -696,6 +723,11 @@ void ps3_gpu_clear(uint32_t flags, uint32_t argb, uint32_t depth_stencil, uint32
 		if (!x && !y && ((width >= zcull_width && height >= zcull_height) ||
 			(surface.smaller && width >= surface.width && height >= surface.height)))
 		{
+			if (!zcull_on)
+			{
+				rsxSetZCullEnable(context, GCM_TRUE, GCM_FALSE);
+				zcull_on = 1;
+			}
 			rsxSetClearZCullSurface(context, GCM_TRUE, GCM_FALSE);
 			zcull_valid = 1;
 			checkpoint(_checkpoint_zcull_clear);
@@ -1095,6 +1127,48 @@ uint32_t ps3_gpu_textures_written_count(void)
 	return textures_written_count;
 }
 
+/* NV3089 into the NV309E swizzled surface, 1:1 and point sampled; the source's width at least 16 and even, the clip
+the level's (as rsxSetConvertSwizzleFormat) */
+void ps3_gpu_swizzle_levels(const struct ps3_gpu_swizzle_level *levels, uint32_t count)
+{
+	gcmTransferScale scale;
+	gcmTransferSwizzle swizzle;
+	uint32_t index;
+
+	if (!ready || !count)
+		return;
+	/* the 3D engine done writing the sources */
+	rsxSetWaitForIdle(context);
+	rsxSetTransferScaleMode(context, GCM_TRANSFER_LOCAL_TO_LOCAL, GCM_TRANSFER_SWIZZLE);
+	for (index = 0; index < count; index++)
+	{
+		const struct ps3_gpu_swizzle_level *level = &levels[index];
+
+		memset(&scale, 0, sizeof(scale));
+		scale.conversion = GCM_TRANSFER_CONVERSION_TRUNCATE;
+		scale.format = GCM_TRANSFER_SCALE_FORMAT_A8R8G8B8;
+		scale.operation = GCM_TRANSFER_OPERATION_SRCCOPY;
+		scale.clipW = scale.outW = level->width;
+		scale.clipH = scale.outH = level->height;
+		scale.ratioX = scale.ratioY = rsxGetFixedSint32(1.0f);
+		scale.inW = (u16)(level->width < 16 ? 16 : (level->width + 1) & ~1u);
+		scale.inH = level->height;
+		scale.pitch = (u16)level->source_pitch;
+		scale.origin = GCM_TRANSFER_ORIGIN_CORNER;
+		scale.interp = GCM_TRANSFER_INTERPOLATOR_NEAREST;
+		scale.offset = level->source_offset;
+		memset(&swizzle, 0, sizeof(swizzle));
+		swizzle.format = GCM_TRANSFER_SURFACE_FORMAT_A8R8G8B8;
+		swizzle.width = (u8)(31 - __builtin_clz(level->width));
+		swizzle.height = (u8)(31 - __builtin_clz(level->height));
+		swizzle.offset = level->offset;
+		rsxSetTransferScaleSwizzle(context, &scale, &swizzle);
+	}
+	/* the 2D engine done before the 3D engine samples the levels */
+	rsxSetWaitForIdle(context);
+	texture_cache_dirty = 1;
+}
+
 /* ---------- vertices and draws */
 
 void ps3_gpu_set_attribute(uint32_t index, uint32_t offset, uint32_t stride, uint32_t elements)
@@ -1277,6 +1351,61 @@ static int particles_depth_build(void)
 	return fragment_program_store(instructions, 5, &blit.particles_depth_offset);
 }
 
+/* the present's blit at each brightness level: x + k x (1 - x) on each colour, k from -1 to 1 (0 at the neutral level,
+the plain blit). Black and white stay, and the curve keeps rising */
+static int brightness_programs_build(void)
+{
+	struct rsx_instruction instructions[3];
+	int level, index;
+
+	for (level = 0; level < PS3_GPU_BRIGHTNESS_LEVELS; level++)
+	{
+		float k = (float)(level - PS3_GPU_BRIGHTNESS_NEUTRAL) / PS3_GPU_BRIGHTNESS_NEUTRAL;
+
+		if (level == PS3_GPU_BRIGHTNESS_NEUTRAL)
+		{
+			blit.brightness_offsets[level] = blit.fragment_offset;
+			continue;
+		}
+		for (index = 0; index < 3; index++)
+		{
+			blit_instruction_defaults(&instructions[index]);
+			instructions[index].destination_type = _rsx_register_temporary;
+			instructions[index].mask = _rsx_xyzw;
+		}
+		/* TEX R0, f[TEX0]; MAD R1, -R0, R0, R0; MAD R0.xyz, R1, k, R0 */
+		instructions[0].opcode = _rsx_fp_tex;
+		instructions[0].source[0].type = _rsx_register_input;
+		instructions[0].source[0].index = _rsx_fp_input_texture0;
+		instructions[1].opcode = _rsx_fp_mad;
+		instructions[1].destination = 1;
+		for (index = 0; index < 3; index++)
+			instructions[1].source[index].type = _rsx_register_temporary;
+		instructions[1].source[0].negate = 1;
+		instructions[2].opcode = _rsx_fp_mad;
+		instructions[2].mask = _rsx_xyz;
+		instructions[2].source[0].type = _rsx_register_temporary;
+		instructions[2].source[0].index = 1;
+		instructions[2].source[1].type = _rsx_register_constant;
+		instructions[2].source[2].type = _rsx_register_temporary;
+		for (index = 0; index < 4; index++)
+			instructions[2].constant[index] = k;
+		if (fragment_program_store(instructions, 3, &blit.brightness_offsets[level]) != 0)
+			return -1;
+	}
+	blit.present_offset = blit.fragment_offset;
+	return 0;
+}
+
+uint32_t ps3_gpu_brightness(int level)
+{
+	if (!ready)
+		return blit.fragment_offset;
+	level = level < 0 ? 0 : level >= PS3_GPU_BRIGHTNESS_LEVELS ? PS3_GPU_BRIGHTNESS_LEVELS - 1 : level;
+	blit.present_offset = blit.brightness_offsets[level];
+	return blit.present_offset;
+}
+
 /* a quad of the display (pixels from the top left) with texture unit 0 */
 static void blit_quad(unsigned display_width, unsigned display_height, float left, float top, float right, float bottom)
 {
@@ -1352,7 +1481,7 @@ static void blit_draw(uint32_t offset, uint32_t pitch, uint32_t width, uint32_t 
 	}
 
 	ps3_gpu_set_vertex_program(&blit.vertex);
-	fragment_program_load(blit.fragment_offset, 0x40, 2, 1, 1);
+	fragment_program_load(blit.present_offset, 0x40, 2, 1, 1);
 	fragment.program = NULL;
 
 	memset(&texture, 0, sizeof(texture));
@@ -1652,6 +1781,30 @@ int ps3_gpu_draw_stamp(uint16_t stamp)
 	return 1;
 }
 
+void ps3_gpu_visibility(int begin, uint32_t index)
+{
+	if (!ready)
+		return;
+	if (begin)
+	{
+		rsxSetClearReport(context, GCM_ZPASS_PIXEL_CNT);
+		rsxSetZPixelCountEnable(context, GCM_TRUE);
+	}
+	else
+	{
+		if (index < VISIBILITY_TESTS)
+			rsxSetReport(context, GCM_ZPASS_PIXEL_CNT, VISIBILITY_REPORT_BASE + index);
+		rsxSetZPixelCountEnable(context, GCM_FALSE);
+	}
+	checkpoint(_checkpoint_visibility);
+}
+
+uint32_t ps3_gpu_visibility_count(uint32_t index)
+{
+	/* (bit 31 clear, as the game asserts) */
+	return visibility_reports && index < VISIBILITY_TESTS ? visibility_reports[index].value & 0x7fffffffu : 0;
+}
+
 static void (*stop_hook)(void);
 
 void ps3_gpu_set_stop_hook(void (*hook)(void))
@@ -1862,6 +2015,7 @@ int ps3_gpu_initialize(void)
 {
 	gcmConfiguration configuration;
 	gcmContextCallback flush = segment_flush;
+	uint32_t index;
 
 	if (ready)
 		return 0;
@@ -1889,7 +2043,7 @@ int ps3_gpu_initialize(void)
 	ps3_log_printf("[gpu] RSX local memory %u KB, display buffers %u KB\n", (unsigned)(configuration.localSize / 1024),
 		ps3_video_memory_bytes() / 1024);
 	scratch.base = ps3_gpu_memory_allocate(2 * SCRATCH_HALF_SIZE, 128, _ps3_gpu_memory_scratch, &scratch.offset);
-	if (!scratch.base || blit_programs_build() != 0 || particles_depth_build() != 0)
+	if (!scratch.base || blit_programs_build() != 0 || particles_depth_build() != 0 || brightness_programs_build() != 0)
 	{
 		ps3_log_printf("[gpu] out of RSX memory at the start\n");
 		return -1;
@@ -1907,6 +2061,14 @@ int ps3_gpu_initialize(void)
 	*checkpoint_backend_label = 0;
 	checkpoint(_checkpoint_start);
 #endif
+	/* (a test read before its first report counts nothing) */
+	visibility_reports = (volatile gcmReportData *)gcmGetReportDataAddress(VISIBILITY_REPORT_BASE);
+	for (index = 0; index < VISIBILITY_TESTS; index++)
+	{
+		visibility_reports[index].timer = 0;
+		visibility_reports[index].value = 0;
+		visibility_reports[index].zero = 0;
+	}
 	caches_invalidate();
 	ready = 1;
 	ps3_log_printf("[gpu] ready: scratch 2 x %u KB at 0x%08x\n", (unsigned)(SCRATCH_HALF_SIZE / 1024),

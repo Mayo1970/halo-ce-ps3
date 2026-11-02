@@ -3,7 +3,7 @@ posix_upnp.c's way, without miniupnpc, which selects on fd_set (PSL1GHT's descri
 
 #include "ps3_net.h"
 #include "ps3_system.h"
-#include "../../linux/src/posix.h"
+#include "posix.h"
 
 #include <stdio.h>
 #include <stdlib.h>
