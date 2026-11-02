@@ -11,6 +11,9 @@ TARGET     := halo_ps3
 TITLE      := Halo: Combat Evolved
 TITLE_ID   := HALOCE000
 CONTENT_ID := UP0001-$(TITLE_ID)_00-0000000000000000
+# the port's version, and as PARAM.SFO's APP_VER and VERSION (NN.NN)
+PORT_VERSION := 0.2
+SFO_VERSION  := 00.20
 BUILD      ?= build/ps3
 LOG_IP     ?= 192.168.178.99
 DEBUG      ?= 1
@@ -57,7 +60,7 @@ HOST_OBJS := $(patsubst %,$(BUILD)/obj/%.o,$(basename $(HOST_SRCS) $(HOST_ASMS))
 # -O2 only: -O3 broke boot on this toolchain (ioQuake3-PS3). The include folder
 # goes first so that its setjmp.h shadows newlib's.
 CFLAGS := -std=gnu99 -O2 -Wall -mcpu=cell -mhard-float -mno-altivec -fno-strict-aliasing \
-          -D__PS3__ -DPS3_LOG_IP=\"$(LOG_IP)\" \
+          -D__PS3__ -DPS3_LOG_IP=\"$(LOG_IP)\" -DPS3_PORT_VERSION=\"$(PORT_VERSION)\" \
           -I$(PS3_DIR)/include -I$(PS3_DIR)/src -I$(PS3_DIR)/spu -I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include \
           -iquote $(GAME)/port/linux/src
 ifeq ($(DEBUG),1)
@@ -383,7 +386,9 @@ pkg: $(BUILD)/$(TARGET).elf
 	$(SPRXLINK) $<
 	@mkdir -p $(BUILD)/pkg/USRDIR
 	$(MAKE_SELF_NPDRM) $< $(BUILD)/pkg/USRDIR/EBOOT.BIN $(CONTENT_ID)
-	$(SFO) --title "$(TITLE)" --appid "$(TITLE_ID)" -f $(PS3DEV)/bin/sfo.xml $(BUILD)/pkg/PARAM.SFO
+	@sed 's/^\([[:space:]]*\)01\.00[[:space:]]*$$/\1$(SFO_VERSION)/' $(PS3DEV)/bin/sfo.xml > $(BUILD)/pkg/sfo.xml
+	$(SFO) --title "$(TITLE)" --appid "$(TITLE_ID)" -f $(BUILD)/pkg/sfo.xml $(BUILD)/pkg/PARAM.SFO
+	@rm $(BUILD)/pkg/sfo.xml
 	@cp $(ICON0) $(BUILD)/pkg/ICON0.PNG
 	$(PKG) --contentid $(CONTENT_ID) $(BUILD)/pkg/ $(BUILD)/$(TARGET).pkg
 	@echo "Done: $(BUILD)/$(TARGET).pkg"
