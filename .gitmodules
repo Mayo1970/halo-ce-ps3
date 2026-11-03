@@ -1,0 +1,4 @@
+[submodule "chupathingyce"]
+	path = chupathingyce
+	url = https://github.com/Mayo1970/chupathingyce.git
+	branch = ps3

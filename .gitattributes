@@ -1,0 +1,4 @@
+# Files a Linux shell runs directly keep LF line endings in a Windows checkout
+*.sh text eol=lf
+Makefile text eol=lf
+*.py text eol=lf

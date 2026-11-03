@@ -1,0 +1,12 @@
+# Build output
+build/
+__pycache__/
+
+# Proprietary game data and SDK files: never commit
+*.exe
+*.pdb
+xbox/
+!port/ps3/xbox/
+assets/
+!port/assets/
+original/

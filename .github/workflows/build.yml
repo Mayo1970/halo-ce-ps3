@@ -1,0 +1,32 @@
+# Builds the PS3 package in the ps3dev image, as build.sh does locally
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ps3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Get the ps3dev image
+        run: |
+          docker pull mayo2853/ps3dev-latest:latest
+          docker tag mayo2853/ps3dev-latest:latest ps3dev-latest:latest
+      - name: Build the retail package
+        run: ./build.sh -j"$(nproc)" pkg DEBUG=0
+      - name: Link checks
+        run: ./build.sh check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: halo_ps3-pkg
+          path: build/ps3/halo_ps3.pkg
+          if-no-files-found: error
