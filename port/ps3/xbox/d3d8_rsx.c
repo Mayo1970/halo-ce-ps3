@@ -3582,8 +3582,8 @@ void d3d8_tag_cache_loading(void)
 }
 
 /* cache_files.c: a map's tag data or a BSP was loaded into [address, address + size) of the tag cache;
-every copy goes, as they share one block */
-void d3d8_tag_cache_loaded(void const *address, unsigned long size)
+every copy goes, as they share one block. replace: the span is the tag cache itself (a map's, at its own address) */
+static void tag_cache_loaded(void const *address, unsigned long size, BOOL replace)
 {
 	const unsigned char *begin = address, *end = begin + size;
 	unsigned long index;
@@ -3595,16 +3595,17 @@ void d3d8_tag_cache_loaded(void const *address, unsigned long size)
 		spu_d3d_record_tag_cache *span;
 
 		/* (the SPU empties its caches and waits for the RSX before the arena is used again) */
-		if (!static_vertices_end || begin < static_vertices_begin)
+		if (replace || !static_vertices_end || begin < static_vertices_begin)
 			static_vertices_begin = begin;
-		if (end > static_vertices_end)
+		if (replace || end > static_vertices_end)
 			static_vertices_end = end;
 		span = record_begin(_record_tag_cache, sizeof(*span), 0, 0);
 		if (span)
 		{
 			span->begin = (uint32_t)(uintptr_t)begin;
 			span->end = (uint32_t)(uintptr_t)end;
-			span->pad[0] = span->pad[1] = 0;
+			span->pad[0] = replace ? 1 : 0;
+			span->pad[1] = 0;
 			record_commit();
 		}
 		return;
@@ -3636,10 +3637,22 @@ void d3d8_tag_cache_loaded(void const *address, unsigned long size)
 		ps3_gpu_wait_idle();
 		vertex_arena.used = 0;
 	}
-	if (!static_vertices_end || begin < static_vertices_begin)
+	if (replace || !static_vertices_end || begin < static_vertices_begin)
 		static_vertices_begin = begin;
-	if (end > static_vertices_end)
+	if (replace || end > static_vertices_end)
 		static_vertices_end = end;
+}
+
+void d3d8_tag_cache_loaded(void const *address, unsigned long size)
+{
+	tag_cache_loaded(address, size, FALSE);
+}
+
+/* a map's tags loaded: the Xbox tag cache, or a Custom Edition map's (not the two: the window between holds
+the dynamic buffers) */
+void d3d8_tag_cache_replaced(void const *address, unsigned long size)
+{
+	tag_cache_loaded(address, size, TRUE);
 }
 
 /* rasterizer_xbox_draw_primitives.c, before each indexed draw of a map vertex buffer (BSP material, model

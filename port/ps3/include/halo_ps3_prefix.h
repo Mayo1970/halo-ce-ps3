@@ -13,6 +13,9 @@
 #define HALO_PS3_CONSOLE 1
 #define HALO_BIG_ENDIAN 1
 #define HALO_CONSOLE 1
+/* Custom Edition maps' tag cache: lv2 keeps 0x40000000 for the RSX, so it is above the Xbox window, in its area;
+their tags' pointers are moved there as they are swapped (port/ps3/xbox/xbox_tag_swap.c) */
+#define HALO_CE_TAG_CACHE_BASE 0x88440000U
 
 /* ---------- the C library, read first: its own __inline helpers, before the MSVC semantics below. wchar_t is
 16 bits (-fshort-wchar), wint_t with it; <limits.h> is left out (cseries.h has LONG_MAX as an enumerator) */

@@ -70,6 +70,9 @@ int ps3_host_window_reserve(uint32_t address);
 /* maps fresh memory at a page-aligned address; 0 on success */
 int ps3_host_window_map(uint32_t address, uint32_t size, uint32_t *memory);
 void ps3_host_window_unmap(uint32_t address, uint32_t memory);
+/* unmaps without freeing, and maps that memory again at another page-aligned address; 0 on success */
+int ps3_host_window_detach(uint32_t address, uint32_t *memory);
+int ps3_host_window_attach(uint32_t address, uint32_t memory);
 
 /* ---------- files (lv2 file system calls) */
 

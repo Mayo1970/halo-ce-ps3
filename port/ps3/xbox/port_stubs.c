@@ -182,6 +182,14 @@ void halo_custom_edition_texels_forget(void)
 {
 }
 
+/* ---------- Custom Edition maps' downloads (map_download.c): none yet, a missing map is copied by hand */
+
+int map_download_possible(const char *name)
+{
+	(void)name;
+	return 0;
+}
+
 /* ---------- the renderer's write tracking (memory_watch.c): none, the RSX copies go as maps load */
 
 void memory_watch_prepare_write(void *address, unsigned long size)
@@ -491,7 +499,7 @@ int port_mods_list(char *text, unsigned long size)
 }
 
 /* ---------- ChupathingyCE's desktop services the PS3 has not: the game browser's list (browser.c), the menus'
-pictures and window (d3d8_gl.c, sdl_platform.c), the keyboard's prompts (xinput_sdl.c), map packs (ui_map_list.c) */
+pictures and window (d3d8_gl.c, sdl_platform.c), the keyboard's prompts (xinput_sdl.c) */
 
 int browser_version_state(int version)
 {
@@ -552,22 +560,4 @@ int platform_audio_device_names(char const **names, int maximum)
 {
 	(void)names; (void)maximum;
 	return 0;
-}
-
-void ui_map_list_map_name(char const *map, wchar_t *name, long size)
-{
-	long index;
-
-	for (index = 0; index + 1 < size && map[index]; index++)
-		name[index] = (wchar_t)(unsigned char)map[index];
-	if (size > 0)
-		name[index] = 0;
-}
-
-void ui_map_list_map_tag(char const *map, char *tag, long tag_size, char *title, long title_size)
-{
-	if (tag_size > 0)
-		snprintf(tag, (size_t)tag_size, "%s", map);
-	if (title_size > 0)
-		snprintf(title, (size_t)title_size, "%s", map);
 }

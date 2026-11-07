@@ -20,6 +20,20 @@ static uint32_t mapped_chunks, mapped_chunks_peak;
 static BOOL arena_reserved = FALSE;
 static struct ps3_host_lock *arena_lock;
 
+/* the Custom Edition maps' tag cache (cache_files.c's 23 MB at HALO_CE_TAG_CACHE_BASE), in 1 MB chunks of the
+window's 256 MB area, above the window */
+#define CE_CHUNK_BASE (HALO_CE_TAG_CACHE_BASE & ~(PS3_HOST_WINDOW_PAGE - 1))
+#define CE_CHUNK_COUNT 24
+typedef char verify_ce_chunks_above_window[CE_CHUNK_BASE >= PLATFORM_CONTIGUOUS_BASE + PLATFORM_CONTIGUOUS_SIZE &&
+	CE_CHUNK_BASE + CE_CHUNK_COUNT * PS3_HOST_WINDOW_PAGE <= PLATFORM_CONTIGUOUS_BASE + 0x10000000UL ? 1 : -1];
+/* whether the area is reserved (cache_files_windows.c, ui_map_list.c); no room above it on a console */
+int platform_ce_tag_cache_ready;
+unsigned int platform_ce_conversion_room;
+/* each chunk's memory, and the window chunk it was moved from (CHUNK_COUNT: memory of its own) */
+static uint32_t ce_chunk_memory[CE_CHUNK_COUNT];
+static unsigned long ce_chunk_source[CE_CHUNK_COUNT];
+static BOOL ce_chunks_mapped;
+
 /* before the game runs (ps3_main.c) */
 BOOL platform_memory_initialize(void)
 {
@@ -30,6 +44,8 @@ BOOL platform_memory_initialize(void)
 	arena_reserved = arena_lock && result == 0;
 	platform_log("Xbox memory window at 0x%08lx: %s (%d)", PLATFORM_CONTIGUOUS_BASE,
 		arena_reserved ? "reserved" : "NOT available", result);
+	/* the Custom Edition maps' tag cache: in the same area, its memory mapped when a map loads */
+	platform_ce_tag_cache_ready = arena_reserved;
 	return arena_reserved;
 }
 
@@ -112,6 +128,89 @@ static void chunks_release(unsigned long first, unsigned long count)
 			mapped_chunks--;
 		}
 	}
+}
+
+/* ---------- the Custom Edition maps' tag cache (port/ps3/game/ce_ps3.c) */
+
+/* the first count chunks back where they came from */
+static void ce_chunks_give_back(unsigned long count)
+{
+	unsigned long index;
+
+	for (index = 0; index < count; index++)
+	{
+		uint32_t address = CE_CHUNK_BASE + index * PS3_HOST_WINDOW_PAGE;
+		uint32_t memory;
+
+		if (ce_chunk_source[index] < CHUNK_COUNT)
+		{
+			if (ps3_host_window_detach(address, &memory) == 0)
+				ps3_host_window_attach(chunk_address(ce_chunk_source[index]), memory);
+		}
+		else
+		{
+			ps3_host_window_unmap(address, ce_chunk_memory[index]);
+			mapped_chunks--;
+		}
+	}
+}
+
+/* a Custom Edition map loads: the whole chunks of the Xbox tag cache [tag_cache, + size) moved under its tag cache,
+memory of their own for the rest; 0 if lv2 had none */
+int ps3_ce_tag_cache_take(unsigned long tag_cache, unsigned long size)
+{
+	unsigned long first = (tag_cache - PLATFORM_CONTIGUOUS_BASE + PS3_HOST_WINDOW_PAGE - 1) / PS3_HOST_WINDOW_PAGE;
+	unsigned long end = (tag_cache + size - PLATFORM_CONTIGUOUS_BASE) / PS3_HOST_WINDOW_PAGE;
+	unsigned long index, moved = 0;
+
+	if (!platform_ce_tag_cache_ready)
+		return 0;
+	if (ce_chunks_mapped)
+		return 1;
+	ps3_host_lock_enter(arena_lock);
+	for (index = 0; index < CE_CHUNK_COUNT; index++)
+	{
+		uint32_t address = CE_CHUNK_BASE + index * PS3_HOST_WINDOW_PAGE;
+		unsigned long chunk = first + index;
+
+		ce_chunk_source[index] = CHUNK_COUNT;
+		if (chunk < end && chunk_pages[chunk] && ps3_host_window_detach(chunk_address(chunk), &ce_chunk_memory[index]) == 0)
+		{
+			if (ps3_host_window_attach(address, ce_chunk_memory[index]) == 0)
+			{
+				ce_chunk_source[index] = chunk;
+				moved++;
+				continue;
+			}
+			ps3_host_window_attach(chunk_address(chunk), ce_chunk_memory[index]);
+		}
+		if (ps3_host_window_map(address, PS3_HOST_WINDOW_PAGE, &ce_chunk_memory[index]) != 0)
+		{
+			ce_chunks_give_back(index);
+			ps3_host_lock_leave(arena_lock);
+			platform_log("Custom Edition tag cache: no memory for its chunk %lu", index);
+			return 0;
+		}
+		if (++mapped_chunks > mapped_chunks_peak)
+			mapped_chunks_peak = mapped_chunks;
+	}
+	ce_chunks_mapped = TRUE;
+	ps3_host_lock_leave(arena_lock);
+	platform_log("Custom Edition tag cache: %lu MB of the Xbox tag cache moved under it, %lu MB more", moved,
+		CE_CHUNK_COUNT - moved);
+	return 1;
+}
+
+/* an Xbox map loads: its tag cache's chunks back in the window */
+void ps3_ce_tag_cache_give_back(void)
+{
+	if (!ce_chunks_mapped)
+		return;
+	ps3_host_lock_enter(arena_lock);
+	ce_chunks_give_back(CE_CHUNK_COUNT);
+	ce_chunks_mapped = FALSE;
+	ps3_host_lock_leave(arena_lock);
+	platform_log("Custom Edition tag cache: given back");
 }
 
 /* chunks are 1 MB (PS3_HOST_WINDOW_PAGE); read without the lock, as a log line can be a little late */

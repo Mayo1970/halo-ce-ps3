@@ -92,6 +92,9 @@ GAME_ABI = -O2 -mcpu=cell -mhard-float -mno-altivec -fsigned-char -fms-extension
            $(addprefix -fno-builtin-,$(GAME_WIDE))
 # Delta Peer as a client, as the consoles' builds have it (the game's docs/building.md, "Console ports")
 GAME_ABI += -DHALO_CONSOLE_DELTA
+# Custom Edition maps and the map list (the game's CUSTOM_EDITION_DEFINES), with the console hooks their loader
+# uses (halo_port_features.h): port/ps3/game/ce_ps3.c
+GAME_ABI += -DHALO_CUSTOM_EDITION -DHALO_MAP_LIST -DHALO_CONSOLE_CE_BITMAPS -DHALO_CONSOLE_CE_SHARED_TAG_CACHE
 # the conversions that cut a 64-bit pointer are errors, as in the game's 64-bit builds (lp64_game_flags); GCC's -w
 # would hide them too, so the other warnings it has on by default are turned off one by one
 GAME_WARN ?= -Werror=int-to-pointer-cast -Werror=pointer-to-int-cast -Werror=int-conversion \
@@ -107,6 +110,9 @@ GAME_CFLAGS = -std=gnu89 -D__STRICT_ANSI__ $(GAME_WARN) $(GAME_ABI) $(GAME_TOC) 
 
 # the game's main() is called by the PS3's (port/ps3/src/ps3_main.c)
 $(BUILD)/obj/source/shell/shell_xbox.o: GAME_UNIT_FLAGS := -Dmain=halo_xbox_main
+# a Custom Edition map's converted vertices in its tag cache's room, which its checks count (port/ps3/game/ce_ps3.c)
+$(BUILD)/obj/port/linux/game/ce_bsp.o $(BUILD)/obj/port/linux/game/ce_models.o: \
+	GAME_UNIT_FLAGS := -DXPhysicalAlloc=ps3_ce_vertex_alloc -DXPhysicalFree=ps3_ce_vertex_free
 # the units with the most calls a tick in the PPE profile (13 KB of TOC): in the one TOC, their small functions save no
 # r30 (-mminimal-toc's TOC register), whose restore read its own save back at once (a load-hit-store)
 FULL_TOC_UNITS := source/memory/data source/cache/cache_files source/objects/objects source/scenario/scenario \
@@ -151,7 +157,7 @@ XBOX_UNITS := $(wildcard $(PS3_DIR)/xbox/*.c) \
               msvc_wide.c port_config.c xbdm.c xbox_xapi.c p2p.c p2p_copies.c p2p_crypto.c p2p_discord.c \
               p2p_lobby.c p2p_probe.c p2p_signal.c log_address.c thread_stop.c ui_point.c build_identity.c \
               discord_activity.c delta.c delta_compat.c port_folders.c delta_wire.c delta_peer.c delta_chat.c \
-              delta_chat_words.c delta_chat_bridge.c delta_peer_game.c menu_files.c) \
+              delta_chat_words.c delta_chat_bridge.c delta_peer_game.c menu_files.c map_archive.c map_file_hash.c) \
               $(KCP_DIR)/ikcp.c
 XBOX_OBJS := $(patsubst %.c,$(BUILD)/obj/%.o,$(XBOX_UNITS))
 

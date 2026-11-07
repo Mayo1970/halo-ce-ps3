@@ -5892,9 +5892,10 @@ static void record_execute(const spu_d3d_record *record, uint64_t position)
 			request(_spu_d3d_request_wait_idle, 0);
 			arena.used = 0;
 		}
-		if (!static_end || span->begin < static_begin)
+		/* (pad[0]: the span replaced, a map's own tag cache) */
+		if (span->pad[0] || !static_end || span->begin < static_begin)
 			static_begin = span->begin;
-		if (span->end > static_end)
+		if (span->pad[0] || span->end > static_end)
 			static_end = span->end;
 		break;
 	}

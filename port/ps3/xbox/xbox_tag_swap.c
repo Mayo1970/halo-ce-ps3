@@ -5,6 +5,7 @@ Invader's layouts (xbox_tag_swap_tables.h) and the map's own pointers. The game 
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "xbox_tag_swap.h"
@@ -39,6 +40,15 @@ struct walk
 	tag_swap_coverage_proc coverage;
 	/* 0 while the walk reads data already in the PS3's order, and swaps only the vertices it finds */
 	int swap_fields;
+	/* 0: a struct's fields only, not its blocks and data (a Custom Edition sound resource's stale pointers) */
+	int follow;
+	/* a bit per 2 bytes: the bytes swapped already, for data that two tags or blocks share (NULL: none kept) */
+	uint8_t *visited;
+	/* the pointers into [rebase_from, + rebase_size) moved by rebase_delta (a Custom Edition map's: its tag cache
+	elsewhere on the PS3); rebase_size 0: none */
+	uint32_t rebase_from;
+	uint32_t rebase_size;
+	uint32_t rebase_delta;
 };
 
 static void swap_struct(struct walk *walk, uint32_t address, uint16_t struct_index);
@@ -81,6 +91,14 @@ static void swap4(uint8_t *bytes, uint32_t count)
 	}
 }
 
+static void write32(uint8_t *bytes, uint32_t value)
+{
+	bytes[0] = (uint8_t)(value >> 24);
+	bytes[1] = (uint8_t)(value >> 16);
+	bytes[2] = (uint8_t)(value >> 8);
+	bytes[3] = (uint8_t)value;
+}
+
 /* ---------- the walk */
 
 static void walk_error(struct walk *walk, const char *format, ...)
@@ -116,6 +134,34 @@ static void walk_cover(struct walk *walk, uint32_t address, uint32_t size)
 static uint32_t walk_address(struct walk *walk, const uint8_t *bytes)
 {
 	return walk->address + (uint32_t)(bytes - walk->bytes);
+}
+
+/* whether [bytes, + size) is to be swapped: 0 if any of it was (bytes two tags or blocks share), else marked */
+static int walk_claim(struct walk *walk, const uint8_t *bytes, uint32_t size)
+{
+	uint32_t first, last, unit;
+
+	if (!walk->visited || !size || bytes < walk->bytes)
+		return 1;
+	first = (uint32_t)(bytes - walk->bytes) >> 1;
+	last = ((uint32_t)(bytes - walk->bytes) + size - 1) >> 1;
+	for (unit = first; unit <= last; unit++)
+	{
+		if (walk->visited[unit >> 3] & (1u << (unit & 7)))
+			return 0;
+	}
+	for (unit = first; unit <= last; unit++)
+		walk->visited[unit >> 3] |= (uint8_t)(1u << (unit & 7));
+	return 1;
+}
+
+/* a pointer field, already swapped, moved if it points into the rebased range */
+static void walk_rebase(struct walk *walk, uint8_t *field)
+{
+	uint32_t value = read32(field);
+
+	if (walk->rebase_size && value >= walk->rebase_from && value - walk->rebase_from < walk->rebase_size)
+		write32(field, value + walk->rebase_delta);
 }
 
 /* Xbox models keep their vertices behind the part's D3D vertex buffer, and their triangle strip in tag data */
@@ -463,7 +509,7 @@ static void swap_data(struct walk *walk, const uint8_t *owner, const uint8_t *da
 		swap_bsp_vertices(walk, owner, address, size, kind == _tag_swap_data_bsp_compressed_vertices);
 		return;
 	}
-	if (!walk->swap_fields)
+	if (!walk->swap_fields || !walk_claim(walk, bytes, size))
 		return;
 	walk_cover(walk, address, size);
 	switch (kind)
@@ -565,7 +611,7 @@ static void swap_struct(struct walk *walk, uint32_t address, uint16_t struct_ind
 			bytes += op->count;
 			break;
 		case _tag_swap_2:
-			if (walk->swap_fields)
+			if (walk->swap_fields && walk_claim(walk, bytes, 2 * op->count))
 			{
 				swap2(bytes, op->count);
 				walk->statistics->bytes_swapped += 2 * op->count;
@@ -573,7 +619,7 @@ static void swap_struct(struct walk *walk, uint32_t address, uint16_t struct_ind
 			bytes += 2 * op->count;
 			break;
 		case _tag_swap_4:
-			if (walk->swap_fields)
+			if (walk->swap_fields && walk_claim(walk, bytes, 4 * op->count))
 			{
 				swap4(bytes, op->count);
 				walk->statistics->bytes_swapped += 4 * op->count;
@@ -581,26 +627,34 @@ static void swap_struct(struct walk *walk, uint32_t address, uint16_t struct_ind
 			bytes += 4 * op->count;
 			break;
 		case _tag_swap_block:
-			if (walk->swap_fields)
+			if (walk->swap_fields && walk_claim(walk, bytes, 12))
 				swap4(bytes, 3);
-			swap_block(walk, bytes, op->argument);
+			walk_rebase(walk, bytes + 4);
+			if (walk->follow)
+				swap_block(walk, bytes, op->argument);
 			bytes += 12;
 			break;
 		case _tag_swap_reference:
-			if (walk->swap_fields)
+			if (walk->swap_fields && walk_claim(walk, bytes, 16))
 				swap4(bytes, 4);
+			walk_rebase(walk, bytes + 4);
 			check_reference(walk, bytes);
 			bytes += 16;
 			break;
 		case _tag_swap_data:
-			if (walk->swap_fields)
+			if (walk->swap_fields && walk_claim(walk, bytes, 20))
 				swap4(bytes, 5);
-			swap_data(walk, base, bytes, op->argument);
+			walk_rebase(walk, bytes + 12);
+			if (walk->follow)
+				swap_data(walk, base, bytes, op->argument);
 			bytes += 20;
 			break;
 		}
 	}
-	if (definition->hook == _tag_swap_hook_model_part)
+	/* (a scenario's BSP reference: where the BSP loads) */
+	if (struct_index == TAG_SWAP_STRUCT_SCENARIOBSP)
+		walk_rebase(walk, base + TAG_SWAP_SCENARIOBSP_BSP_ADDRESS);
+	if (definition->hook == _tag_swap_hook_model_part && walk->follow)
 		swap_model_part(walk, base);
 	walk->depth--;
 }
@@ -653,6 +707,9 @@ static void walk_begin(struct walk *walk, void *bytes, uint32_t address, uint32_
 	walk->statistics = statistics;
 	walk->coverage = coverage;
 	walk->swap_fields = 1;
+	walk->follow = 1;
+	walk->visited = NULL;
+	walk->rebase_size = 0;
 }
 
 /* ---------- public code */
@@ -835,5 +892,205 @@ void cache_files_swap_structure_bsp_vertices(void *structure_bsp, long size)
 	{
 		log_statistics("structure BSP vertices", &statistics, ps3_host_microseconds() - start);
 	}
+}
+
+/* ---------- Custom Edition maps (Halo PC's, little-endian): swapped once as each part is read */
+
+#define CE_TAG_HEADER_SIZE 0x28
+/* Halo PC's tag cache, which the maps' pointers name */
+#define CE_MAP_TAG_CACHE_BASE 0x40440000u
+#define CE_MAP_TAG_CACHE_SIZE 0x01700000u
+#define CE_INSTANCE_INDEXED 0x18
+#define CE_VERTEX_SIZE 0x44
+#define CE_SOUND_PITCH_RANGES 0x98
+#define CE_PITCH_RANGE_PERMUTATIONS 0x3C
+#define STRUCTURE_BSP_GROUP 0x73627370u
+#define SOUND_GROUP 0x736E6421u
+
+/* the struct of the block at offset in a struct's layout, or -1 */
+static long block_struct_at(uint16_t struct_index, uint32_t offset)
+{
+	static const uint8_t unit[] = { 1, 2, 4, 12, 16, 20 };
+	const struct tag_swap_struct *definition = &tag_swap_structs[struct_index];
+	uint32_t at = 0;
+	uint16_t op_index;
+
+	for (op_index = 0; op_index < definition->op_count; op_index++)
+	{
+		const struct tag_swap_op *op = &tag_swap_ops[definition->first_op + op_index];
+
+		if (op->operation == _tag_swap_block && at == offset)
+			return op->argument;
+		at += op->operation <= _tag_swap_4 ? unit[op->operation] * op->count : unit[op->operation];
+	}
+	return -1;
+}
+
+static void ce_walk_rebase(struct walk *walk, uint32_t address)
+{
+	walk->rebase_from = CE_MAP_TAG_CACHE_BASE;
+	walk->rebase_size = address != CE_MAP_TAG_CACHE_BASE ? CE_MAP_TAG_CACHE_SIZE : 0;
+	walk->rebase_delta = address - CE_MAP_TAG_CACHE_BASE;
+}
+
+/* the tag header (10 words), the index and every tag but the BSPs, their pointers moved to address; an indexed
+tag's data is a resource map's, but an indexed sound keeps its header here, its blocks in sounds.map */
+void ce_byte_swap_tags(void *tag_data, unsigned long address, long size)
+{
+	struct tag_swap_statistics statistics;
+	struct walk walk;
+	uint8_t *header = tag_data;
+	const uint8_t *instances;
+	uint32_t tag_count, index;
+	uint64_t start = ps3_host_microseconds();
+
+	if ((uint32_t)size < CE_TAG_HEADER_SIZE || memcmp(header + 0x24, "sgat", 4))
+		return;
+	walk_begin(&walk, tag_data, (uint32_t)address, (uint32_t)size, &statistics, NULL);
+	ce_walk_rebase(&walk, (uint32_t)address);
+	swap4(header, CE_TAG_HEADER_SIZE / 4);
+	walk_rebase(&walk, header);
+	tag_count = read32(header + 12);
+	instances = tag_count < 0x10000 ? walk_bytes(&walk, read32(header), tag_count * TAG_INSTANCE_SIZE) : NULL;
+	if (!instances)
+	{
+		walk_error(&walk, "%u Custom Edition tags at %08x", tag_count, read32(header));
+		return;
+	}
+	swap4((uint8_t *)instances, tag_count * TAG_INSTANCE_SIZE / 4);
+	for (index = 0; index < tag_count; index++)
+	{
+		/* (its name and data; an indexed tag's resource index is below the range) */
+		walk_rebase(&walk, (uint8_t *)instances + index * TAG_INSTANCE_SIZE + 16);
+		walk_rebase(&walk, (uint8_t *)instances + index * TAG_INSTANCE_SIZE + 20);
+	}
+	walk.instances = instances;
+	walk.tag_count = tag_count;
+	walk.visited = calloc(((uint32_t)size >> 4) + 1, 1);
+	for (index = 0; index < tag_count; index++)
+	{
+		const uint8_t *instance = instances + index * TAG_INSTANCE_SIZE;
+		uint32_t group_tag = read32(instance);
+		uint32_t tag_address = read32(instance + 20);
+		long struct_index;
+
+		if (!tag_address || group_tag == STRUCTURE_BSP_GROUP)
+			continue;
+		if (read32(instance + CE_INSTANCE_INDEXED) &&
+			(group_tag != SOUND_GROUP || !walk_bytes(&walk, tag_address, 4)))
+			continue;
+		struct_index = find_group(group_tag);
+		if (struct_index < 0)
+		{
+			statistics.unknown_groups++;
+			walk_error(&walk, "Custom Edition tag %u: unknown group %08x", index, group_tag);
+			continue;
+		}
+		walk.follow = !read32(instance + CE_INSTANCE_INDEXED);
+		statistics.tags++;
+		swap_struct(&walk, tag_address, (uint16_t)struct_index);
+	}
+	free(walk.visited);
+	log_statistics("Custom Edition tags", &statistics, ps3_host_microseconds() - start);
+}
+
+/* a resource of bitmaps.map, sounds.map or loc.map as read: its blocks at offsets from its start; a sound's
+pointers are stale, its parts in order (header, pitch ranges, then each range's permutations) */
+void ce_byte_swap_resource(unsigned long group_tag, void *bytes, long size)
+{
+	struct tag_swap_statistics statistics;
+	struct walk walk;
+	long struct_index = find_group((uint32_t)group_tag);
+	long range_struct, permutation_struct;
+	uint32_t cursor, range_count, range, ranges;
+
+	if (struct_index < 0 || size <= 0)
+		return;
+	walk_begin(&walk, bytes, 0, (uint32_t)size, &statistics, NULL);
+	if (group_tag != SOUND_GROUP)
+	{
+		swap_struct(&walk, 0, (uint16_t)struct_index);
+		return;
+	}
+	range_struct = block_struct_at((uint16_t)struct_index, CE_SOUND_PITCH_RANGES);
+	permutation_struct = range_struct < 0 ? -1 : block_struct_at((uint16_t)range_struct, CE_PITCH_RANGE_PERMUTATIONS);
+	if (permutation_struct < 0)
+		return;
+	walk.follow = 0;
+	swap_struct(&walk, 0, (uint16_t)struct_index);
+	if (!walk_bytes(&walk, 0, tag_swap_structs[struct_index].size))
+		return;
+	cursor = ranges = tag_swap_structs[struct_index].size;
+	range_count = read32((uint8_t *)bytes + CE_SOUND_PITCH_RANGES);
+	if (range_count > (uint32_t)size / tag_swap_structs[range_struct].size)
+		return;
+	for (range = 0; range < range_count; range++, cursor += tag_swap_structs[range_struct].size)
+		swap_struct(&walk, cursor, (uint16_t)range_struct);
+	for (range = 0; range < range_count; range++)
+	{
+		const uint8_t *at = walk_bytes(&walk, ranges + range * tag_swap_structs[range_struct].size,
+			tag_swap_structs[range_struct].size);
+		uint32_t count = at ? read32(at + CE_PITCH_RANGE_PERMUTATIONS) : 0, permutation;
+
+		if (!at || count > (uint32_t)size / tag_swap_structs[permutation_struct].size)
+			return;
+		for (permutation = 0; permutation < count; permutation++, cursor += tag_swap_structs[permutation_struct].size)
+			swap_struct(&walk, cursor, (uint16_t)permutation_struct);
+	}
+}
+
+/* the model data block: Halo PC's uncompressed vertices (vertex_data_size bytes), then the strips' indices */
+void ce_byte_swap_model_data(void *data, long size, long vertex_data_size)
+{
+	uint8_t *bytes = data;
+	uint32_t index, count;
+
+	if (size <= 0 || vertex_data_size < 0 || vertex_data_size > size)
+		return;
+	count = (uint32_t)vertex_data_size / CE_VERTEX_SIZE;
+	for (index = 0; index < count; index++)
+	{
+		uint8_t *vertex = bytes + index * CE_VERTEX_SIZE;
+
+		/* position, normal, binormal, tangent, texture coordinates; node indices; node weights */
+		swap4(vertex, 14);
+		swap2(vertex + 0x38, 2);
+		swap4(vertex + 0x3C, 2);
+	}
+	swap2(bytes + vertex_data_size, (uint32_t)(size - vertex_data_size) / 2);
+}
+
+/* a structure BSP read to address (bsp is where it is in memory: the checks' copy is elsewhere): its header,
+fields and vertices, its pointers moved there as the tags' were; the header's words 1 and 3 are 0 */
+void ce_byte_swap_structure_bsp(void *bsp, unsigned long address, long size)
+{
+	struct tag_swap_statistics statistics;
+	struct walk walk;
+	uint8_t *header = bsp;
+	uint64_t start = ps3_host_microseconds();
+
+	if ((uint32_t)size < BSP_HEADER_SIZE || memcmp(header + 0x14, "psbs", 4))
+		return;
+	walk_begin(&walk, bsp, (uint32_t)address, (uint32_t)size, &statistics, NULL);
+	ce_walk_rebase(&walk, HALO_CE_TAG_CACHE_BASE);
+	swap4(header, BSP_HEADER_SIZE / 4);
+	walk_rebase(&walk, header);
+	walk_rebase(&walk, header + 8);
+	walk_rebase(&walk, header + 16);
+	statistics.tags++;
+	swap_struct(&walk, read32(header), TAG_SWAP_STRUCT_SCENARIOSTRUCTUREBSP);
+	log_statistics("Custom Edition structure BSP", &statistics, ps3_host_microseconds() - start);
+}
+
+void ce_byte_swap_longs(void *data, long count)
+{
+	if (count > 0)
+		swap4(data, (uint32_t)count);
+}
+
+void ce_byte_swap_shorts(void *data, long count)
+{
+	if (count > 0)
+		swap2(data, (uint32_t)count);
 }
 #endif

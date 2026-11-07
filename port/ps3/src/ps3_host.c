@@ -413,6 +413,30 @@ void ps3_host_window_unmap(uint32_t address, uint32_t memory)
 		sysMMapperFreeMemory(id);
 }
 
+/* the memory at address unmapped but kept, to map again elsewhere (ps3_host_window_attach) */
+int ps3_host_window_detach(uint32_t address, uint32_t *memory)
+{
+	sys_mem_id_t id = 0;
+	s32 result = sysMMapperUnmapMemory(address, &id);
+
+	if (result != 0)
+	{
+		ps3_log_printf("[mem] sysMMapperUnmapMemory at 0x%08x failed 0x%08x\n", (unsigned)address, (unsigned)result);
+		return errno_from_lv2(result);
+	}
+	*memory = id;
+	return 0;
+}
+
+int ps3_host_window_attach(uint32_t address, uint32_t memory)
+{
+	s32 result = sysMMapperMapMemory(address, memory, SYS_MEMORY_PROT_READ_WRITE);
+
+	if (result != 0)
+		ps3_log_printf("[mem] sysMMapperMapMemory at 0x%08x failed 0x%08x\n", (unsigned)address, (unsigned)result);
+	return errno_from_lv2(result);
+}
+
 /* ---------- files */
 
 int ps3_host_file_open(const char *path, int flags, int32_t *descriptor)

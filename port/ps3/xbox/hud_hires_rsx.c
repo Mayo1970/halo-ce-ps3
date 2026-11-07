@@ -113,12 +113,44 @@ unsigned long hud_hires_asset_sprites(long asset)
 	return ps3_buttons[asset].sprites;
 }
 
+/* Halo PC's message icon sheets (Custom Edition's bitmaps.map), their sprites in the Xbox's cells and sheets: their
+CRCs once laid out as the Xbox's (port/ps3/game/ce_ps3.c) */
+static const struct
+{
+	const char *tag;
+	int bitmap;
+	unsigned int crc;
+} halo_pc_sheets[] =
+{
+	{ "ui\\hud\\bitmaps\\combined\\hud_msg_icons", 0, 634647465U },
+	{ "ui\\hud\\bitmaps\\combined\\hud_msg_icons", 1, 2663295025U },
+	{ "ui\\hud\\bitmaps\\combined\\hud_msg_icons", 2, 4013307535U },
+	{ "ui\\hud\\bitmaps\\combined\\hud_msg_icons", 3, 1215291247U },
+};
+
+static int sheet_crc_matches(long asset, unsigned int crc)
+{
+	unsigned int index;
+
+	if (crc == ps3_buttons[asset].crc)
+		return 1;
+	for (index = 0; index < sizeof(halo_pc_sheets) / sizeof(halo_pc_sheets[0]); index++)
+	{
+		if (halo_pc_sheets[index].crc == crc && halo_pc_sheets[index].bitmap == ps3_buttons[asset].bitmap &&
+			!strcmp(halo_pc_sheets[index].tag, ps3_buttons[asset].tag))
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
 /* (the game thread, so the style is read here: the check is kept until the settings change) */
 int hud_hires_sprites_drawable(long asset, unsigned long address, unsigned long level0_size)
 {
 	hud_hires_style_commit();
 	return button_style > 0 && asset >= 0 && asset < (long)BUTTON_ASSETS && ps3_buttons[asset].sprites &&
-		(unsigned int)z_crc32(0, (const Bytef *)(__uint64)address, (uInt)level0_size) == ps3_buttons[asset].crc;
+		sheet_crc_matches(asset, (unsigned int)z_crc32(0, (const Bytef *)(__uint64)address, (uInt)level0_size));
 }
 
 int hud_hires_asset_sprite_place(long asset, short sequence, short frame, float *cell, float *advance)
