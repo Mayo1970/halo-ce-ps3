@@ -22,21 +22,39 @@ SO_NBIO, poll). libnet's own calls: their error is the thread's (net_errno), not
 #define PS3_NET_TCP_NODELAY 1
 /* the descriptors a select polls without an allocation */
 #define SELECT_STACK_ENTRIES 256
+/* lv2's network memory is small and shared: one unread socket must not hold all of it */
+#define SOCKET_BUFFER_LIMIT (128 * 1024)
 
 /* ---------- errors */
 
-/* Winsock's codes are its base plus BSD's numbers, which lv2's net errors are. The first errors but
-would-block go to the log too: the game tells no one of its transport errors */
+/* at most one line a second, with the count of those left out since, for the whole run */
+static void log_error(const char *call, int socket, int error)
+{
+	static unsigned left_out;
+	static double last_time = -1.0;
+	double now = ps3_time_seconds();
+
+	if (last_time >= 0.0 && now - last_time < 1.0)
+	{
+		left_out++;
+		return;
+	}
+	if (socket >= 0)
+		ps3_log_printf("[net] %s: socket %d: lv2 error %d (%u left out since the last)\n", call, socket, error, left_out);
+	else
+		ps3_log_printf("[net] %s: lv2 error %d (%u left out since the last)\n", call, error, left_out);
+	left_out = 0;
+	last_time = now;
+}
+
+/* Winsock's codes are its base plus BSD's numbers, which lv2's net errors are. Errors but would-block
+go to the log too: the game tells no one of its transport errors */
 static int winsock_error(const char *call)
 {
-	static int logged;
 	s32 error = net_errno;
 
-	if (error != NET_EWOULDBLOCK && error != NET_EINPROGRESS && logged < 32)
-	{
-		logged++;
-		ps3_log_printf("[net] %s: lv2 error %d%s\n", call, (int)error, logged == 32 ? " (no more logged)" : "");
-	}
+	if (error != NET_EWOULDBLOCK && error != NET_EINPROGRESS)
+		log_error(call, -1, (int)error);
 	switch (error)
 	{
 	case NET_EINTR:
@@ -183,6 +201,25 @@ int ps3_net_set_nodelay(int socket)
 
 int ps3_net_set_option(int socket, int level, int name, const void *value, uint32_t length)
 {
+	int size;
+
+	if (level == SOL_SOCKET && (name == SO_SNDBUF || name == SO_RCVBUF) && length == sizeof(size))
+	{
+		static int logged;
+
+		memcpy(&size, value, sizeof(size));
+		if (size > SOCKET_BUFFER_LIMIT)
+		{
+			if (logged < 4)
+			{
+				logged++;
+				ps3_log_printf("[net] %s of %d bytes asked: %d set\n", name == SO_SNDBUF ? "SO_SNDBUF" : "SO_RCVBUF",
+					size, SOCKET_BUFFER_LIMIT);
+			}
+			size = SOCKET_BUFFER_LIMIT;
+			value = &size;
+		}
+	}
 	return netSetSockOpt(socket, level, name, value, length) < 0 ? winsock_error(__func__) : 0;
 }
 
@@ -259,6 +296,38 @@ static short socket_events(struct pollfd const *descriptors, int count, int sock
 	return events;
 }
 
+/* lv2's poll fails the whole call with one socket's error (ECONNRESET), which nothing then reads: each
+socket alone, a failed one marked POLLERR with its error. The count of sockets with any event */
+static int poll_each(struct pollfd *descriptors, int *errors, int count)
+{
+	int ready = 0;
+	int index;
+
+	for (index = 0; index < count; index++)
+	{
+		struct pollfd *descriptor = &descriptors[index];
+		int other;
+
+		for (other = 0; other < index && descriptors[other].fd != descriptor->fd; other++)
+			;
+		descriptor->revents = 0;
+		if (other < index && errors[other] > 0)
+		{
+			descriptor->revents = POLLERR;
+			errors[index] = errors[other];
+		}
+		else if (netPoll(descriptor, 1, 0) < 0)
+		{
+			descriptor->revents = POLLERR;
+			errors[index] = net_errno > 0 ? (int)net_errno : NET_ECONNRESET;
+			log_error("ps3_net_select", descriptor->fd, errors[index]);
+		}
+		if (descriptor->revents)
+			ready++;
+	}
+	return ready;
+}
+
 /* poll, not lv2's select (fd_set without PSL1GHT's bit 30). Write: room once connected; error: urgent data
 or a failed connect, as Winsock has it (the game waits on that: connect_endpoint) */
 int ps3_net_select(int *read, int *read_count, int *write, int *write_count, int *error, int *error_count,
@@ -308,6 +377,21 @@ int ps3_net_select(int *read, int *read_count, int *write, int *write_count, int
 		}
 	}
 	result = netPoll(descriptors, (nfds_t)count, timeout_ms < 0 ? -1 : timeout_ms);
+	if (result < 0)
+	{
+		winsock_error(__func__);
+		/* (none failed alone: the error passed, so the wait is done again once) */
+		result = poll_each(descriptors, errors, count);
+		if (!result && timeout_ms != 0)
+		{
+			for (index = 0; index < count; index++)
+			{
+				descriptors[index].revents = 0;
+				errors[index] = -1;
+			}
+			result = netPoll(descriptors, (nfds_t)count, timeout_ms < 0 ? -1 : timeout_ms);
+		}
+	}
 	if (result < 0)
 	{
 		result = winsock_error(__func__);
