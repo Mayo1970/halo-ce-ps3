@@ -700,6 +700,9 @@ void ps3_gpu_clear(uint32_t flags, uint32_t argb, uint32_t depth_stencil, uint32
 		mask |= GCM_CLEAR_S;
 	if (!mask)
 		return;
+	/* the RSX clips a clear to the viewport: after a switch it is the last surface's (the mirror's 480x360) */
+	if (surface_valid)
+		viewport_set(surface.width, surface.height, 0.0f, 1.0f);
 	rsxSetScissor(context, (u16)x, (u16)y, (u16)width, (u16)height);
 	rsxSetColorMask(context, color_mask);
 	rsxSetClearColor(context, argb);

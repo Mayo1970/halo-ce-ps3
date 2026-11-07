@@ -28,6 +28,8 @@ def main() -> None:
     game = config["game"]
     # (the 64-bit builds' exclusions too: libtiff)
     excluded = game.get("exclude", []) + config.get("lp64", {}).get("exclude", [])
+    # the structure's culling: the PS3 walks it on the render SPU (structure_culling.h)
+    excluded += ["port/linux/game/structure_culling.c"]
 
     def listed(paths):
         names = (path.relative_to(args.game).as_posix() for path in paths)

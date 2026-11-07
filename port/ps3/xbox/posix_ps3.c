@@ -4,6 +4,7 @@ fills it, and the error as the thread's last error. Not xnet_ps3.c's Winsock: th
 #include <stdio.h>
 #include <string.h>
 
+#include "discord_register.h"
 #include "posix.h"
 #include "ps3_net.h"
 
@@ -321,6 +322,13 @@ int posix_register_url_scheme(const char *scheme, const char *description)
 	(void)scheme;
 	(void)description;
 	return 0;
+}
+
+/* no Discord on the PS3 */
+int posix_register_discord_launch(const char *application)
+{
+	(void)application;
+	return DISCORD_REGISTER_NONE;
 }
 
 int posix_user_secret(unsigned char *secret, int size)
