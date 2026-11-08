@@ -27,6 +27,14 @@ struct ps3_menu_picture
 #include "ps3_menu_assets.h"
 
 #define PICTURE_COUNT (sizeof(ps3_menu_pictures) / sizeof(ps3_menu_pictures[0]))
+/* a registration's picture for a button icon: BUTTON_PICTURE(asset), below 0 (hud_hires_rsx.c's assets) */
+#define BUTTON_PICTURE(asset) (-2 - (int)(asset))
+
+long hud_hires_asset_count(void);
+char const *hud_hires_asset_tag(long asset);
+unsigned long hud_hires_asset_sprites(long asset);
+int hud_hires_rsx_style(void);
+int hud_hires_rsx_asset_texture(long asset, int style, struct ps3_gpu_texture *gpu);
 
 /* (the game thread's) each placeholder's Data and its picture; the reader rechecks after a change */
 static volatile struct
@@ -66,11 +74,31 @@ static int picture_find(const char *name)
 	return -1;
 }
 
+/* the button icon asset (a whole bitmap, not a sheet) for a ui.map bitmap tag, or -1 */
+static long button_asset(const char *tag)
+{
+	long asset, count = hud_hires_asset_count();
+
+	for (asset = 0; tag && asset < count; asset++)
+	{
+		if (!hud_hires_asset_sprites(asset) && !_stricmp(tag, hud_hires_asset_tag(asset)))
+			return asset;
+	}
+	return -1;
+}
+
+/* (menu_tags.c) whether a game map's menus draw this missing ui.map button as the PS3's icon */
+int menu_art_rsx_button(const char *tag)
+{
+	return button_asset(tag) >= 0;
+}
+
 void menu_art_rsx_register(unsigned long data, const char *png)
 {
-	int picture = picture_find(png), index, count = registered_count;
+	long asset = button_asset(png);
+	int picture = asset >= 0 ? BUTTON_PICTURE(asset) : picture_find(png), index, count = registered_count;
 
-	if (picture < 0)
+	if (picture == -1)
 	{
 		platform_log("menus: %s has no PS3 texture (tools/ps3_menu_art.py build)", png);
 		return;
@@ -184,7 +212,14 @@ int menu_art_rsx_texture(DWORD data, struct ps3_gpu_texture *gpu)
 	for (index = 0; data && index < count; index++)
 	{
 		if (registered[index].data == data)
-			return texture_make(registered[index].picture, gpu);
+		{
+			int picture = registered[index].picture;
+
+			/* (none in the Xbox style: its art is ui.map's own, which a game map has not got) */
+			if (picture < -1)
+				return hud_hires_rsx_asset_texture(-2 - picture, hud_hires_rsx_style(), gpu);
+			return texture_make(picture, gpu);
+		}
 	}
 	return 0;
 }

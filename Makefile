@@ -12,8 +12,8 @@ TITLE      := Halo: Combat Evolved
 TITLE_ID   := HALOCE000
 CONTENT_ID := UP0001-$(TITLE_ID)_00-0000000000000000
 # the port's version, and as PARAM.SFO's APP_VER and VERSION (NN.NN)
-PORT_VERSION := 0.2
-SFO_VERSION  := 00.20
+PORT_VERSION := 0.3
+SFO_VERSION  := 00.30
 BUILD      ?= build/ps3
 LOG_IP     ?= 192.168.178.99
 DEBUG      ?= 1
