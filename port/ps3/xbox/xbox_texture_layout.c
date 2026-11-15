@@ -518,3 +518,181 @@ uint64_t xgpu_texture_hash(const unsigned char *bytes, unsigned long size)
 		lanes[0] = (lanes[0] ^ bytes[index]) * TEXTURE_HASH_PRIME;
 	return texture_hash_finish(lanes, (uint32_t)size);
 }
+
+
+static unsigned long color565(unsigned long value)
+{
+	return argb(255, expand5(value >> 11), expand6((value >> 5) & 0x3f), expand5(value & 0x1f));
+}
+
+static unsigned long mix(unsigned long a, unsigned long b, unsigned long weight_a, unsigned long weight_b,
+	unsigned long divisor)
+{
+	unsigned long result = 0;
+	int shift;
+
+	for (shift = 0; shift < 24; shift += 8)
+	{
+		unsigned long channel = (((a >> shift) & 0xff) * weight_a + ((b >> shift) & 0xff) * weight_b) / divisor;
+
+		result |= channel << shift;
+	}
+	return result | 0xff000000UL;
+}
+
+/* one 4x4 block's colors; dxt1 selects the punch-through alpha mode */
+static void dxt_color_block(const unsigned char *block, BOOL dxt1, unsigned long colors[16])
+{
+	unsigned long c0 = block[0] | (block[1] << 8);
+	unsigned long c1 = block[2] | (block[3] << 8);
+	unsigned long palette[4];
+	unsigned long bits = block[4] | (block[5] << 8) | ((unsigned long)block[6] << 16) | ((unsigned long)block[7] << 24);
+	int index;
+
+	palette[0] = color565(c0);
+	palette[1] = color565(c1);
+	if (c0 > c1 || !dxt1)
+	{
+		palette[2] = mix(palette[0], palette[1], 2, 1, 3);
+		palette[3] = mix(palette[0], palette[1], 1, 2, 3);
+	}
+	else
+	{
+		palette[2] = mix(palette[0], palette[1], 1, 1, 2);
+		palette[3] = 0;
+	}
+	for (index = 0; index < 16; index++)
+		colors[index] = palette[(bits >> (index * 2)) & 3];
+}
+
+static void dxt_decode_level(unsigned char kind, const unsigned char *source, unsigned long width, unsigned long height,
+	unsigned long depth, unsigned long *destination)
+{
+	unsigned long blocks_x = (width + 3) / 4, blocks_y = (height + 3) / 4;
+	unsigned long block_bytes = kind == _texel_dxt1 ? 8 : 16;
+	unsigned long z, bx, by, x, y;
+
+	for (z = 0; z < depth; z++)
+	{
+		for (by = 0; by < blocks_y; by++)
+		{
+			for (bx = 0; bx < blocks_x; bx++)
+			{
+				const unsigned char *block = source + ((z * blocks_y + by) * blocks_x + bx) * block_bytes;
+				unsigned long colors[16];
+				unsigned long alpha[16];
+				int index;
+
+				if (kind == _texel_dxt1)
+				{
+					dxt_color_block(block, TRUE, colors);
+					for (index = 0; index < 16; index++)
+						alpha[index] = colors[index] >> 24;
+				}
+				else
+				{
+					dxt_color_block(block + 8, FALSE, colors);
+					if (kind == _texel_dxt3)
+					{
+						for (index = 0; index < 16; index++)
+							alpha[index] = expand4((block[index / 2] >> ((index & 1) * 4)) & 0xf);
+					}
+					else
+					{
+						unsigned long a0 = block[0], a1 = block[1], values[8];
+						unsigned long long bits = 0;
+						int bit;
+
+						for (bit = 0; bit < 6; bit++)
+							bits |= (unsigned long long)block[2 + bit] << (bit * 8);
+						values[0] = a0;
+						values[1] = a1;
+						if (a0 > a1)
+						{
+							for (index = 2; index < 8; index++)
+								values[index] = ((8 - index) * a0 + (index - 1) * a1) / 7;
+						}
+						else
+						{
+							for (index = 2; index < 6; index++)
+								values[index] = ((6 - index) * a0 + (index - 1) * a1) / 5;
+							values[6] = 0;
+							values[7] = 255;
+						}
+						for (index = 0; index < 16; index++)
+							alpha[index] = values[(bits >> (index * 3)) & 7];
+					}
+				}
+				for (y = 0; y < 4; y++)
+				{
+					for (x = 0; x < 4; x++)
+					{
+						unsigned long px = bx * 4 + x, py = by * 4 + y;
+
+						if (px < width && py < height)
+						{
+							destination[(z * height + py) * width + px] =
+								(colors[y * 4 + x] & 0x00ffffffUL) | (alpha[y * 4 + x] << 24);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+int xgpu_texture_decode_menu(const struct xgpu_texture_description *description, const unsigned char *source,
+	unsigned long bytes, unsigned long row_pitch, DWORD *destination)
+{
+	struct format_information information = format_information(description->format);
+	unsigned long width = description->width, height = description->height;
+	unsigned long x, y, xmask = 0, ymask = 0, bit, output_bit;
+
+	if (!width || !height || width > 2048 || height > 2048 || description->depth != 1 || description->cube_map ||
+		information.kind == _texel_p8 || ((information.kind == _texel_yuy2 || information.kind == _texel_uyvy) && (width & 1)))
+		return 0;
+	if (description->compressed)
+	{
+		unsigned long needed = ((width + 3) / 4) * ((height + 3) / 4) * information.bytes;
+		if (needed > bytes)
+			return 0;
+		dxt_decode_level(information.kind, source, width, height, 1, destination);
+		return 1;
+	}
+	if (description->linear)
+	{
+		unsigned long pitch = description->pitch;
+		if (row_pitch && row_pitch * height == bytes)
+			pitch = row_pitch;
+		if (pitch < width * information.bytes || pitch * height > bytes)
+			return 0;
+		for (y = 0; y < height; y++)
+		{
+			const unsigned char *row = source + y * pitch;
+			for (x = 0; x < width; x++)
+				destination[y * width + x] = convert_texel(information.kind, row + x * information.bytes, NULL, x, row);
+		}
+		return 1;
+	}
+	if (width * height * information.bytes > bytes)
+		return 0;
+	for (bit = 1, output_bit = 1; bit < width || bit < height; bit <<= 1)
+	{
+		if (bit < width) { xmask |= output_bit; output_bit <<= 1; }
+		if (bit < height) { ymask |= output_bit; output_bit <<= 1; }
+	}
+	for (y = 0; y < height; y++)
+	for (x = 0; x < width; x++)
+	{
+		unsigned long sx = 0, sy = 0, xb = x, yb = y, mask;
+		const unsigned char *texel;
+		for (mask = 1; mask && (mask <= xmask || mask <= ymask); mask <<= 1)
+		{
+			if (xmask & mask) { if (xb & 1) sx |= mask; xb >>= 1; }
+			if (ymask & mask) { if (yb & 1) sy |= mask; yb >>= 1; }
+		}
+		texel = source + (sx | sy) * information.bytes;
+		destination[y * width + x] = convert_texel(information.kind, texel, NULL, x, texel);
+	}
+	return 1;
+}
